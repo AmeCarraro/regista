@@ -1,0 +1,9 @@
+__pycache__/
+.venv/
+.pytest_cache/
+
+# the pictures the app looks at are personal: never in the repository
+foto/
+
+web/node_modules/
+web/dist/

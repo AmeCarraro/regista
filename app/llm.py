@@ -1,0 +1,83 @@
+"""The local models, through Ollama: which ones are installed, and how to talk to one.
+
+Ollama is the only thing that knows the models. Nothing here chooses one: that is catalog.py.
+"""
+import json
+import os
+
+import httpx2
+
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
+# 6144 is the largest context that keeps a 3B model entirely inside 4 GB of video memory
+NUM_CTX = int(os.getenv("NUM_CTX", "6144"))
+
+
+async def installed() -> list[dict]:
+    """Every model Ollama has, with what Ollama says it can do and whether it is in memory now."""
+    async with httpx2.AsyncClient(timeout=20) as client:
+        tags = await client.get(f"{OLLAMA_URL}/api/tags")
+        tags.raise_for_status()
+        running = await client.get(f"{OLLAMA_URL}/api/ps")
+        running.raise_for_status()
+        loaded = {model["digest"]: model for model in running.json().get("models", [])}
+
+        # the same model under two names, "llama3.2:3b" and "llama3.2:latest", is listed once, by its exact name
+        unique: dict[str, dict] = {}
+        for tag in tags.json()["models"]:
+            known = unique.get(tag["digest"])
+            if known is None or known["name"].endswith(":latest"):
+                unique[tag["digest"]] = tag
+
+        models = []
+        for digest, tag in unique.items():
+            show = await client.post(f"{OLLAMA_URL}/api/show", json={"model": tag["name"]})
+            show.raise_for_status()
+            details = show.json()
+            in_memory = loaded.get(digest)
+            models.append({
+                "name": tag["name"],
+                "bytes": tag["size"],
+                "parameters": details.get("details", {}).get("parameter_size", ""),
+                "capabilities": details.get("capabilities", []),
+                "loaded": in_memory is not None,
+                # how much of a loaded model sits in video memory: 1 is all of it, 0 is none
+                "gpu_share": round(in_memory["size_vram"] / in_memory["size"], 2) if in_memory and in_memory["size"] else None,
+            })
+    return models
+
+
+async def stream(model: str, messages: list[dict], max_tokens: int = 700, schema: dict | None = None):
+    """One reply of a model, as it is produced.
+
+    Yields ("text", piece) while the model writes, and at the end ("stats", {...}) with how
+    many tokens it wrote and how fast. With `schema`, the reply is JSON that is guaranteed
+    to match it. Leaving the loop early closes the connection, and Ollama stops generating.
+    """
+    payload = {
+        "model": model,
+        "messages": messages,
+        "stream": True,
+        "options": {"temperature": 0, "num_ctx": NUM_CTX, "num_predict": max_tokens},
+    }
+    if schema:
+        payload["format"] = schema
+    async with httpx2.AsyncClient(timeout=300) as client:
+        async with client.stream("POST", f"{OLLAMA_URL}/api/chat", json=payload) as response:
+            if response.status_code != 200:
+                body = (await response.aread()).decode(errors="replace")
+                raise RuntimeError(f"Ollama answered {response.status_code}: {body[:300]}")
+            async for line in response.aiter_lines():
+                if not line:
+                    continue
+                chunk = json.loads(line)
+                message = chunk.get("message", {})
+                if message.get("content"):
+                    yield "text", message["content"]
+                if chunk.get("done"):
+                    seconds = chunk.get("eval_duration", 0) / 1e9
+                    yield "stats", {
+                        "tokens": chunk.get("eval_count", 0),
+                        "tokens_per_second": round(chunk.get("eval_count", 0) / seconds, 1) if seconds else 0,
+                        # a model that was not in memory had to be loaded first: this is how long that took
+                        "load_seconds": round(chunk.get("load_duration", 0) / 1e9, 1),
+                    }

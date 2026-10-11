@@ -1,0 +1,30 @@
+# Regista on one PC: the page and the service in one container, the models in Ollama on the host.
+# Start it with .\run.ps1, which also measures the computer and passes it in.
+services:
+  regista:
+    build: .
+    image: regista
+    ports:
+      # only this PC can reach it: nothing on the network can, until there is a way to say who may
+      - "127.0.0.1:8090:8000"
+    environment:
+      OLLAMA_URL: http://host.docker.internal:11434
+      HOST_GPU_NAME: ${HOST_GPU_NAME:-}
+      HOST_GPU_MB: ${HOST_GPU_MB:-0}
+      HOST_RAM_MB: ${HOST_RAM_MB:-0}
+      HOST_CORES: ${HOST_CORES:-0}
+      # the folder as the user knows it, to show it in the page
+      PHOTOS_LABEL: ${PHOTOS_DIR:-foto}
+    volumes:
+      # the pictures. The app never deletes one: it can move them to its trash, inside this same
+      # folder, and copy them, and both only when the user says yes. Started with
+      # .\run.ps1 -ReadOnly it can only look at them, and it is Docker that enforces it.
+      - type: bind
+        source: ${PHOTOS_DIR:-./foto}
+        target: /photos
+        read_only: ${PHOTOS_READ_ONLY:-false}
+      # fingerprints of the pictures, small copies for the page, results of the model tests
+      - index:/data
+
+volumes:
+  index:

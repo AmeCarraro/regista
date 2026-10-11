@@ -1,0 +1,349 @@
+/* The look of the whole page: colors and sizes as variables, then the frame
+   (background, the two columns) and the pieces every part shares. */
+
+:root {
+  color-scheme: dark;
+  --bg: #0b0910;
+  --card: rgba(26, 21, 35, 0.62);
+  --card-solid: #17131f;
+  --raised: rgba(255, 255, 255, 0.055);
+  --line: rgba(255, 255, 255, 0.09);
+  --line-strong: rgba(255, 255, 255, 0.18);
+  --text: #f6f2f8;
+  --muted: #aaa1b8;
+  --faint: #756c85;
+  --coral: #ff8a5b;
+  --rose: #e052a0;
+  --violet: #7a5cff;
+  --ok: #4ade9a;
+  --warn: #ffc857;
+  --bad: #ff6b81;
+  --accent: linear-gradient(120deg, var(--coral), var(--rose) 55%, var(--violet));
+  --glow: 0 16px 44px -16px rgba(224, 82, 160, 0.75);
+  --shadow: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 30px 70px -40px rgba(0, 0, 0, 0.9);
+  --aurora: 0.4;
+  --radius: 22px;
+  --radius-small: 14px;
+
+  --display: 'Space Grotesk Variable', 'Inter Variable', system-ui, sans-serif;
+  --body: 'Inter Variable', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --mono: 'JetBrains Mono Variable', ui-monospace, 'Cascadia Code', Consolas, monospace;
+
+  font-family: var(--body);
+  font-size: 15.5px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #faf6f3;
+  --card: rgba(255, 255, 255, 0.76);
+  --card-solid: #ffffff;
+  --raised: rgba(40, 20, 50, 0.05);
+  --line: rgba(40, 20, 50, 0.1);
+  --line-strong: rgba(40, 20, 50, 0.2);
+  --text: #1a1420;
+  --muted: #5e556b;
+  --faint: #8d8499;
+  --coral: #f06a36;
+  --rose: #cf3a8b;
+  --violet: #6644ee;
+  --ok: #0f9d68;
+  --warn: #b97800;
+  --bad: #d9304c;
+  --glow: 0 16px 40px -18px rgba(207, 58, 139, 0.55);
+  --shadow: 0 1px 0 rgba(255, 255, 255, 0.9) inset, 0 26px 60px -42px rgba(60, 30, 80, 0.5);
+  --aurora: 0.26;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  overflow: hidden;
+}
+
+h1,
+h2,
+p,
+ul,
+figure {
+  margin: 0;
+}
+
+ul {
+  padding: 0;
+  list-style: none;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--rose);
+  outline-offset: 3px;
+}
+
+::selection {
+  background: rgba(224, 82, 160, 0.4);
+}
+
+/* ---- background: three slow lights ---- */
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.backdrop i {
+  position: absolute;
+  width: 44vmax;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  filter: blur(100px);
+  opacity: var(--aurora);
+  animation: drift 28s ease-in-out infinite alternate;
+}
+
+.backdrop i:nth-child(1) {
+  top: -20vmax;
+  right: -6vmax;
+  background: var(--violet);
+}
+
+.backdrop i:nth-child(2) {
+  bottom: -24vmax;
+  left: 18vw;
+  background: var(--rose);
+  opacity: calc(var(--aurora) * 0.75);
+  animation-duration: 34s;
+  animation-direction: alternate-reverse;
+}
+
+.backdrop i:nth-child(3) {
+  top: 26vh;
+  left: -22vmax;
+  background: var(--coral);
+  opacity: calc(var(--aurora) * 0.5);
+  animation-duration: 40s;
+}
+
+@keyframes drift {
+  to {
+    transform: translate3d(6vmax, 4vmax, 0) scale(1.16);
+  }
+}
+
+/* ---- frame: the panel on the left, the conversation on the right ---- */
+
+.app {
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr);
+  height: 100dvh;
+}
+
+.side {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 16px 24px;
+  overflow-y: auto;
+  border-right: 1px solid var(--line);
+  background: color-mix(in srgb, var(--card-solid) 52%, transparent);
+  backdrop-filter: blur(22px) saturate(160%);
+}
+
+.chat {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100dvh;
+}
+
+.top,
+.scrim {
+  display: none;
+}
+
+/* ---- shared pieces ---- */
+
+.mono {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.grad {
+  background: linear-gradient(100deg, var(--coral), var(--rose), var(--violet), var(--coral));
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: shimmer 10s linear infinite;
+}
+
+@keyframes shimmer {
+  to {
+    background-position: 300% 0;
+  }
+}
+
+.round {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 42px;
+  height: 42px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 1.15rem;
+  cursor: pointer;
+  box-shadow: var(--glow);
+  transition:
+    transform 0.2s,
+    opacity 0.2s;
+}
+
+.round:hover:not(:disabled) {
+  transform: scale(1.08);
+}
+
+.round:disabled {
+  opacity: 0.35;
+  box-shadow: none;
+  cursor: default;
+}
+
+.round.ghost {
+  border: 1px solid var(--line-strong);
+  background: var(--raised);
+  color: var(--text);
+  box-shadow: none;
+}
+
+.round.small {
+  width: 34px;
+  height: 34px;
+  font-size: 1rem;
+}
+
+.dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+
+.dot.live {
+  background: var(--ok);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 70%, transparent);
+  animation: beat 2s ease-out infinite;
+}
+
+@keyframes beat {
+  to {
+    box-shadow: 0 0 0 9px transparent;
+  }
+}
+
+.bar {
+  display: block;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.bar i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 0.6s cubic-bezier(0.2, 0.9, 0.2, 1);
+}
+
+/* things appear by rising a little */
+.rise {
+  animation: rise 0.55s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+}
+
+code,
+pre {
+  font-family: var(--mono);
+  font-size: 0.88em;
+}
+
+/* ---- narrow screens: the panel becomes a drawer ---- */
+
+@media (max-width: 900px) {
+  .app {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .side {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 30;
+    width: min(340px, 88vw);
+    background: var(--card-solid);
+    transform: translateX(-102%);
+    transition: transform 0.35s cubic-bezier(0.2, 0.9, 0.2, 1);
+  }
+
+  .side.open {
+    transform: none;
+  }
+
+  .scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 25;
+    border: 0;
+    background: rgba(5, 4, 8, 0.6);
+  }
+
+  .top {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--line);
+    font-family: var(--display);
+    font-weight: 600;
+  }
+
+  .top svg:not(.round svg) {
+    width: 26px;
+    height: 26px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

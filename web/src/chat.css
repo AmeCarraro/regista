@@ -1,0 +1,850 @@
+/* The conversation: what was asked, what was answered, the pictures found, and where to write. */
+
+.thread {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  /* a column of text 820px wide at most, centered, that still scrolls from edge to edge */
+  padding: 30px max(20px, calc((100% - 820px) / 2)) 16px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+/* ---- before the first request ---- */
+
+.welcome {
+  margin: auto 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  padding: 20px 0;
+  text-align: center;
+}
+
+.mark {
+  width: 72px;
+  height: 72px;
+  filter: drop-shadow(0 16px 34px rgba(224, 82, 160, 0.6));
+  animation: float 6s ease-in-out infinite;
+}
+
+@keyframes float {
+  50% {
+    transform: translateY(-7px);
+  }
+}
+
+.welcome h1 {
+  font-family: var(--display);
+  font-size: clamp(2.3rem, 5vw, 3.8rem);
+  font-weight: 600;
+  letter-spacing: -0.04em;
+  line-height: 1.02;
+}
+
+.lead {
+  max-width: 33rem;
+  color: var(--muted);
+  font-size: 1.05rem;
+}
+
+.ideas {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  width: 100%;
+  margin-top: 10px;
+}
+
+.ideas button {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  height: 100%;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+  backdrop-filter: blur(14px);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    transform 0.25s,
+    border-color 0.25s,
+    box-shadow 0.3s;
+}
+
+.ideas button:hover {
+  transform: translateY(-4px);
+  border-color: var(--rose);
+  box-shadow: var(--glow);
+}
+
+.idea-icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  margin-bottom: 4px;
+  border-radius: 12px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 1.2rem;
+}
+
+.ideas b {
+  font-family: var(--display);
+  font-size: 0.98rem;
+}
+
+.ideas button > span:last-child {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+/* ---- the turns ---- */
+
+.turn.mine {
+  align-self: flex-end;
+  max-width: 78%;
+  padding: 11px 17px;
+  border-radius: 20px 20px 6px 20px;
+  background: var(--accent);
+  color: #fff;
+  box-shadow: var(--glow);
+  overflow-wrap: anywhere;
+}
+
+.turn.reply {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 14px;
+}
+
+.avatar {
+  width: 34px;
+  height: 34px;
+  filter: drop-shadow(0 6px 14px rgba(224, 82, 160, 0.45));
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 5px;
+  min-width: 0;
+}
+
+.words {
+  font-size: 1.03rem;
+  line-height: 1.65;
+}
+
+.words p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.words p + p,
+.words pre + p,
+.words p + pre {
+  margin-top: 10px;
+}
+
+.words pre {
+  margin: 0;
+  padding: 13px 15px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  background: rgba(0, 0, 0, 0.28);
+  overflow-x: auto;
+}
+
+.words p code {
+  padding: 0.12em 0.4em;
+  border-radius: 6px;
+  background: var(--raised);
+}
+
+.step {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  align-self: flex-start;
+  gap: 2px 8px;
+  padding: 5px 13px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--raised);
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.step svg {
+  color: var(--rose);
+}
+
+.step q {
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  quotes: '«' '»';
+}
+
+.meta {
+  color: var(--faint);
+  font-size: 0.76rem;
+}
+
+.notice {
+  color: var(--bad);
+}
+
+.waiting {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.dots {
+  display: inline-flex;
+  gap: 5px;
+}
+
+.dots i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--rose);
+  animation: bounce 1.2s ease-in-out infinite;
+}
+
+.dots i:nth-child(2) {
+  animation-delay: 0.15s;
+  background: var(--coral);
+}
+
+.dots i:nth-child(3) {
+  animation-delay: 0.3s;
+  background: var(--violet);
+}
+
+@keyframes bounce {
+  0%,
+  60%,
+  100% {
+    transform: none;
+    opacity: 0.5;
+  }
+
+  30% {
+    transform: translateY(-6px);
+    opacity: 1;
+  }
+}
+
+/* ---- pictures found ---- */
+
+.results {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(124px, 1fr));
+  gap: 9px;
+  width: 100%;
+}
+
+.photo {
+  aspect-ratio: 1;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--raised);
+  overflow: hidden;
+  cursor: zoom-in;
+  /* the pictures of a result appear one after the other */
+  animation: rise 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  animation-delay: calc(var(--i) * 35ms);
+  transition:
+    transform 0.25s cubic-bezier(0.2, 0.9, 0.2, 1),
+    box-shadow 0.3s,
+    border-color 0.2s;
+}
+
+.photo img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.5s cubic-bezier(0.2, 0.9, 0.2, 1);
+}
+
+.photo:hover {
+  z-index: 1;
+  transform: translateY(-3px);
+  border-color: var(--rose);
+  box-shadow: 0 18px 36px -14px rgba(0, 0, 0, 0.75);
+}
+
+.photo:hover img {
+  transform: scale(1.08);
+}
+
+.photo.unsure {
+  opacity: 0.62;
+}
+
+.photo.unsure:hover {
+  opacity: 1;
+}
+
+/* a small copy that could not be loaded */
+.no-thumb {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  color: var(--faint);
+  font-size: 1.4rem;
+}
+
+/* a picture that went to the trash after it was shown: it keeps its place, faded */
+.photo.gone {
+  position: relative;
+  cursor: default;
+}
+
+.photo.gone .no-thumb svg {
+  display: none;
+}
+
+.photo.gone:hover {
+  transform: none;
+  border-color: var(--line);
+  box-shadow: none;
+}
+
+.photo.gone img {
+  filter: grayscale(1);
+  opacity: 0.22;
+  transform: none;
+}
+
+.mark-gone {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  color: var(--text);
+  font-size: 1.5rem;
+}
+
+.link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--rose);
+  font-size: 0.86rem;
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
+/* ---- a change that waits for a yes ---- */
+
+.proposal {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--card);
+  backdrop-filter: blur(14px);
+  box-shadow: var(--shadow);
+}
+
+.proposal header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.badge {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 13px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 1.25rem;
+  box-shadow: var(--glow);
+}
+
+.proposal header div {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.35;
+}
+
+.proposal header b {
+  font-family: var(--display);
+  font-size: 1.04rem;
+}
+
+.proposal header div span {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.folder-name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-small);
+  background: var(--raised);
+  color: var(--muted);
+  font-size: 0.86rem;
+  transition: border-color 0.2s;
+}
+
+.folder-name:focus-within {
+  border-color: var(--rose);
+}
+
+.folder-name svg {
+  flex: none;
+  color: var(--rose);
+  font-size: 1.05rem;
+}
+
+.folder-name input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.98rem;
+  font-weight: 550;
+}
+
+.folder-name input::placeholder {
+  color: var(--faint);
+  font-weight: 400;
+}
+
+.picks {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  gap: 7px;
+  /* three rows and the top of a fourth, so that it is clear there is more to scroll */
+  max-height: 268px;
+  padding: 2px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.pick {
+  position: relative;
+  display: block;
+  aspect-ratio: 1;
+  border-radius: 12px;
+  background: var(--raised);
+  overflow: hidden;
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+
+.pick:hover {
+  transform: scale(1.04);
+}
+
+/* the real checkbox covers the picture, unseen: the keyboard and screen readers still find it */
+.pick input {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.pick img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition:
+    filter 0.2s,
+    opacity 0.2s;
+}
+
+.pick.off img {
+  filter: grayscale(1);
+  opacity: 0.25;
+}
+
+.tick {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  display: grid;
+  place-items: center;
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.72rem;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+
+.tick svg {
+  stroke-width: 3;
+}
+
+.pick.off .tick {
+  border: 1.5px solid var(--line-strong);
+  background: none;
+  color: transparent;
+  box-shadow: none;
+}
+
+.pick:has(input:focus-visible) {
+  outline: 2px solid var(--rose);
+  outline-offset: 2px;
+}
+
+.proposal footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.proposal footer .fine {
+  margin-left: auto;
+}
+
+.go {
+  padding: 10px 20px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.92rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: var(--glow);
+  transition:
+    transform 0.2s,
+    opacity 0.2s;
+}
+
+.go:hover:not(:disabled) {
+  transform: translateY(-1px) scale(1.02);
+}
+
+.go:disabled {
+  opacity: 0.4;
+  box-shadow: none;
+  cursor: default;
+}
+
+/* how a proposal ended, in one line */
+.outcome {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  align-self: flex-start;
+  gap: 4px 10px;
+  padding: 8px 15px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--raised);
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.outcome svg {
+  flex: none;
+  color: var(--faint);
+}
+
+.outcome.good {
+  border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+  color: var(--text);
+}
+
+.outcome.good svg {
+  color: var(--ok);
+}
+
+/* ---- one picture, large ---- */
+
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  grid-template-columns: 70px minmax(0, 1fr) 70px;
+  align-items: center;
+  justify-items: center;
+  background: rgba(6, 4, 10, 0.86);
+  backdrop-filter: blur(14px);
+  animation: fade 0.25s both;
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}
+
+.lightbox figure {
+  grid-column: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  animation: rise 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.lightbox img {
+  max-width: 100%;
+  max-height: 80dvh;
+  border-radius: 18px;
+  box-shadow: 0 40px 90px -30px #000;
+}
+
+.lightbox figcaption {
+  display: flex;
+  gap: 16px;
+  color: #cfc8da;
+  font-size: 0.84rem;
+}
+
+.lightbox .close {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+}
+
+.lightbox .previous {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.lightbox .next {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+.lightbox .round {
+  color: #fff;
+}
+
+/* ---- where to write ---- */
+
+.composer {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 max(20px, calc((100% - 820px) / 2)) 22px;
+  padding: 12px 12px 10px 18px;
+  border: 1px solid var(--line-strong);
+  border-radius: 26px;
+  background: color-mix(in srgb, var(--card-solid) 78%, transparent);
+  backdrop-filter: blur(18px) saturate(170%);
+  box-shadow: var(--shadow);
+  transition:
+    border-color 0.2s,
+    box-shadow 0.3s;
+}
+
+.composer:focus-within {
+  border-color: var(--rose);
+  box-shadow:
+    var(--shadow),
+    0 0 0 4px rgba(224, 82, 160, 0.16);
+}
+
+.composer textarea {
+  min-height: 2.4rem;
+  max-height: 9rem;
+  padding: 0.35rem 0;
+  border: 0;
+  outline: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 1.02rem;
+  resize: none;
+  field-sizing: content;
+}
+
+.composer textarea::placeholder {
+  color: var(--faint);
+}
+
+.composer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.picker {
+  position: relative;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--raised);
+  color: var(--muted);
+  font-size: 0.84rem;
+  cursor: pointer;
+  transition:
+    border-color 0.2s,
+    color 0.2s;
+}
+
+.pill:hover,
+.pill[aria-expanded='true'] {
+  border-color: var(--rose);
+  color: var(--text);
+}
+
+.pill svg:first-child {
+  color: var(--rose);
+}
+
+.menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 10px);
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: min(380px, 80vw);
+  padding: 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-small);
+  background: var(--card-solid);
+  box-shadow: 0 30px 60px -20px rgba(0, 0, 0, 0.8);
+  animation: rise 0.2s both;
+}
+
+.menu button {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.menu button:hover,
+.menu button[aria-selected='true'] {
+  background: var(--raised);
+}
+
+.menu b {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+}
+
+.menu b svg {
+  color: var(--ok);
+}
+
+.menu span,
+.menu .none {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.menu .none {
+  padding: 9px 12px;
+}
+
+@media (max-width: 700px) {
+  .ideas {
+    grid-template-columns: 1fr;
+  }
+
+  /* three pictures per row on a phone, whatever its width */
+  .grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .photo {
+    border-radius: 12px;
+  }
+
+  .proposal {
+    padding: 13px;
+  }
+
+  .picks {
+    grid-template-columns: repeat(auto-fill, minmax(58px, 1fr));
+    max-height: 222px;
+  }
+
+  .proposal footer .fine {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .turn.reply {
+    grid-template-columns: 28px minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .avatar {
+    width: 28px;
+    height: 28px;
+  }
+
+  .turn.mine {
+    max-width: 90%;
+  }
+
+  .lightbox {
+    grid-template-columns: 48px minmax(0, 1fr) 48px;
+  }
+}

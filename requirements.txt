@@ -1,0 +1,6 @@
+fastapi>=0.115,<1
+uvicorn>=0.30,<1
+httpx2>=2,<3
+numpy>=2,<3
+pillow>=11,<13
+open_clip_torch==3.3.0

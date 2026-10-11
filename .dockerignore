@@ -1,0 +1,9 @@
+.git
+.venv
+**/__pycache__
+.pytest_cache
+tests
+# the pictures are mounted when the app runs, never copied into the image
+foto
+web/node_modules
+web/dist
