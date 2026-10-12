@@ -8,6 +8,7 @@ is given from outside (embedder.py), so that tests can run with a fake one.
 Here the folder is only ever read: what changes it is in actions.py. The fingerprints
 and the small copies for the page are kept somewhere else, in the index folder.
 """
+import datetime
 import hashlib
 import io
 import json
@@ -35,14 +36,39 @@ def photo_id(relative: str) -> str:
     return hashlib.sha1(relative.encode()).hexdigest()[:12]
 
 
-def closest(vectors: np.ndarray, sentence: np.ndarray, entries: list[dict], limit: int) -> dict:
+def day_of(file: Path) -> str:
+    """The day a picture was taken, as "2024-08-15": the one the camera wrote in it, or else the date of the file."""
+    try:
+        with Image.open(file) as image:
+            written = image.getexif()
+            # the day it was taken is the camera's own note; the day it was changed stands in for pictures that only have that
+            when = written.get_ifd(0x8769).get(0x9003) or written.get(0x0132)
+        if when:
+            return datetime.datetime.strptime(str(when)[:10], "%Y:%m:%d").date().isoformat()
+    except (OSError, ValueError):
+        pass
+    return datetime.date.fromtimestamp(file.stat().st_mtime).isoformat()
+
+
+def closest(vectors: np.ndarray, sentence: np.ndarray | None, entries: list[dict], limit: int, period: tuple | None = None) -> dict:
     """The pictures closest to a sentence, best first, split into sure matches and maybes.
 
-    `entries` are the pictures, each with "id" and "name", in the order of their fingerprints.
-    At most `limit` come back; "matching" says how many sure matches there are in all.
+    `entries` are the pictures, each with "id", "name" and "day", in the order of their
+    fingerprints. With a `period` (first day, last day) only the pictures taken then are
+    looked at; without a sentence, all of them match, the newest first. At most `limit`
+    come back; "matching" says how many sure matches there are in all.
     """
+    known = len(entries)
+    if period:
+        since, until = period[0].isoformat(), period[1].isoformat()
+        inside = [position for position, entry in enumerate(entries) if since <= entry.get("day", "") <= until]
+        entries = [entries[position] for position in inside]
+        vectors = vectors[inside] if inside else vectors[:0]
     if not entries:
-        return {"sure": [], "maybe": [], "matching": 0, "indexed": 0}
+        return {"sure": [], "maybe": [], "matching": 0, "indexed": known}
+    if sentence is None:
+        newest = sorted(entries, key=lambda entry: entry.get("day", ""), reverse=True)[:limit]
+        return {"sure": [{"id": entry["id"], "name": entry["name"], "score": 1.0} for entry in newest], "maybe": [], "matching": len(entries), "indexed": known}
     # rounded once, so that what is counted and what is shown agree on which side of a threshold a picture is
     scores = np.round((vectors @ sentence).astype(np.float64), 3)
     order = np.argsort(-scores, kind="stable")[:limit]
@@ -51,7 +77,7 @@ def closest(vectors: np.ndarray, sentence: np.ndarray, entries: list[dict], limi
         "sure": [photo for photo in found if photo["score"] >= SURE],
         "maybe": [photo for photo in found if MAYBE <= photo["score"] < SURE],
         "matching": int((scores >= SURE).sum()),
-        "indexed": len(entries),
+        "indexed": known,
     }
 
 
@@ -123,10 +149,11 @@ class PhotoIndex:
             # a picture is the same as before if its size and its date are: no need to read it again
             stamp = f"{stat.st_size}-{int(stat.st_mtime)}"
             if relative in known and known[relative][0]["stamp"] == stamp:
-                kept.append(known[relative][0])
+                # a picture read before days were kept gets its day now: it is written in the file, the picture is not read again
+                kept.append(known[relative][0] if "day" in known[relative][0] else {**known[relative][0], "day": day_of(file)})
                 vectors.append(known[relative][1])
             else:
-                todo.append((file, {"id": photo_id(relative), "path": relative, "stamp": stamp}))
+                todo.append((file, {"id": photo_id(relative), "path": relative, "stamp": stamp, "day": day_of(file)}))
 
         self.state = {"running": True, "done": len(kept), "total": len(files), "error": ""}
         for first in range(0, len(todo), BATCH):
@@ -156,17 +183,18 @@ class PhotoIndex:
 
     # ---- searching
 
-    def search(self, description: str, limit: int = 60) -> dict:
+    def search(self, description: str, limit: int = 60, period: tuple | None = None) -> dict:
         """The pictures closest to a sentence, best first, split into sure matches and maybes.
 
+        With a `period` only the pictures taken in it; with no description, all of those.
         At most `limit` pictures come back; "matching" says how many sure matches there are in all.
         """
         with self._swap:
             photos, vectors = self.photos, self.vectors
         if not photos:
-            return closest(vectors, np.zeros(0), [], limit)
-        entries = [{"id": photo["id"], "name": Path(photo["path"]).name} for photo in photos]
-        return closest(vectors, self.embedder.text(description), entries, limit)
+            return closest(vectors, None, [], limit)
+        entries = [{"id": photo["id"], "name": Path(photo["path"]).name, "day": photo.get("day", "")} for photo in photos]
+        return closest(vectors, self.embedder.text(description) if description else None, entries, limit, period)
 
     def forget(self, identifiers: list[str]) -> None:
         """Drops pictures from the index at once, without waiting for the folder to be read again."""

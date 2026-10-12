@@ -115,7 +115,7 @@ class Link(
                 val photo = known[id] ?: continue
                 val small = gallery.small(photo.id) ?: continue
                 copies.put(
-                    JSONObject().put("id", id).put("stamp", photo.stamp).put("name", photo.name).put("taken", photo.taken)
+                    JSONObject().put("id", id).put("stamp", photo.stamp).put("name", photo.name).put("day", gallery.day(photo))
                         .put("jpeg", Base64.encodeToString(small, Base64.NO_WRAP))
                 )
             }

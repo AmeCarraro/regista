@@ -21,6 +21,9 @@ import time
 import catalog
 import llm
 from actions import Refused, collection_name
+from period import in_words as period_in_words
+from period import read as read_period
+from period import without_time
 from phone import on_phone
 
 ACTIONS = ("answer", "find_photos", "count_photos", "trash_photos", "copy_photos", "undo")
@@ -55,7 +58,8 @@ DECIDE = (
     "- answer: everything else. Greetings, thanks, questions, requests for advice or explanations, "
     "also when they are about photography, cameras, files, or HOW to delete or copy something.\n"
     "Leave caption and folder empty when they are not needed. "
-    "The caption says what the pictures show, never where they are kept: no 'phone' or 'computer' in it.\n"
+    "The caption says what the pictures show, never where they are kept or when they were taken: "
+    "no 'phone', 'computer', months, years or dates in it. When the message only says a period of time, the caption is empty.\n"
     "Examples:\n"
     'mostrami le foto della montagna -> {"action": "find_photos", "caption": "a mountain", "folder": ""}\n'
     'solo quelle con la neve (after a search for "a mountain") -> {"action": "find_photos", "caption": "a mountain with snow", "folder": ""}\n'
@@ -70,6 +74,8 @@ DECIDE = (
     'salva le foto dei fiori nella cartella Giardino -> {"action": "copy_photos", "caption": "flowers", "folder": "Giardino"}\n'
     'prendi tutte le foto di Parigi e mettimele in una cartella Parigi -> {"action": "copy_photos", "caption": "Paris", "folder": "Parigi"}\n'
     'trovami sul telefono le foto del lago -> {"action": "find_photos", "caption": "a lake", "folder": ""}\n'
+    'trovami le foto dal 20 maggio al 20 luglio -> {"action": "find_photos", "caption": "", "folder": ""}\n'
+    'le foto del mare di agosto 2024 -> {"action": "find_photos", "caption": "the sea", "folder": ""}\n'
     'prendi dal telefono le foto della neve e salvale sul computer nella cartella Neve -> {"action": "copy_photos", "caption": "snow", "folder": "Neve"}\n'
     'ripensandoci, rimettile dove erano -> {"action": "undo", "caption": "", "folder": ""}\n'
     'come si elimina una foto dal telefono? -> {"action": "answer", "caption": "", "folder": ""}'
@@ -113,15 +119,20 @@ def _photos(count: int) -> str:
     return "1 foto" if count == 1 else f"{count} foto"
 
 
-def found_in_words(result: dict, phone: bool = False) -> str:
-    """What a search found, said by the app. The numbers are counted here, never written by a model."""
+def found_in_words(result: dict, phone: bool = False, when: str = "", described: bool = True) -> str:
+    """What a search found, said by the app. The numbers are counted here, never written by a model.
+
+    `when` is the period the request named, in words; `described` says whether it also
+    said what the pictures show, or only when they were taken.
+    """
     sure, maybe = len(result["sure"]), len(result["maybe"])
     every = result.get("matching", sure)
-    where = " sul telefono" if phone else ""
+    where = (" sul telefono" if phone else "") + (f" {when}" if when else "")
     if not result["indexed"]:
         return PHONE_EMPTY if phone else NO_PHOTOS
     if every > sure:
-        text = f"Ho trovato {_photos(every)}{where}: ti mostro le {sure} più vicine a quello che hai chiesto."
+        shown = "più vicine a quello che hai chiesto" if described else "più recenti"
+        text = f"Ho trovato {_photos(every)}{where}: ti mostro le {sure} {shown}."
     elif sure:
         text = f"Ho trovato {_photos(sure)}{where}."
         if maybe:
@@ -129,7 +140,8 @@ def found_in_words(result: dict, phone: bool = False) -> str:
     elif maybe:
         text = f"Non sono sicuro di averne trovate{where}. " + ("Questa è la più vicina." if maybe == 1 else f"Queste {maybe} sono le più vicine.")
     else:
-        text = f"Non ho trovato niente del genere tra le {result['indexed']} foto{' del telefono' if phone else ''} che conosco."
+        nothing = "niente del genere" if described else "foto"
+        text = f"Non ho trovato {nothing}{f' {when}' if when else ''} tra le {result['indexed']} foto{' del telefono' if phone else ''} che conosco."
     if result.get("partial"):
         text += " Sto ancora leggendo le foto, quindi il risultato è parziale."
     return text
@@ -230,15 +242,24 @@ def received_in_words(arrived: int, missing: int, folder: str) -> tuple[str, str
     return text, f'{arrived} photos arrived from the phone into the folder "{folder}".'
 
 
-def propose(decision: dict, photos, actions, selection: list[str], phones=None, phone: bool = False) -> dict:
+def _searched(caption: str, phone: bool, when: tuple | None) -> str:
+    """A search as the model will remember it: in English, with what was looked for, where and of which days."""
+    what = f' for "{caption}"' if caption else ""
+    taken = f" taken from {when[0]} to {when[1]}" if when else ""
+    return f'Searched the photos{" on the phone" if phone else ""}{what}{taken}'
+
+
+def propose(decision: dict, photos, actions, selection: list[str], phones=None, phone: bool = False, when: tuple | None = None) -> dict:
     """What a request to change the pictures becomes: words, and a proposal for the user to confirm.
 
     Nothing is touched here. `selection` is the pictures the user is looking at, by their
     short names: they are what "these" means. `phone` says that the request names the
     phone as the place of the pictures.
     """
+    period = period_in_words(when) if when else ""
+
     def only(text: str, memory: str, searched: str = "") -> dict:
-        return {"text": text, "memory": memory, "proposal": None, "searched": searched}
+        return {"text": text, "memory": memory, "proposal": None, "searched": searched, "period": period if searched or when else ""}
 
     if not actions.writable():
         return only(READ_ONLY, "The photo folder is read-only: nothing can be changed.")
@@ -256,12 +277,12 @@ def propose(decision: dict, photos, actions, selection: list[str], phones=None, 
             "when": last["when"],
         }
         memory = "Proposed to undo the last change. Nothing was done: the user must confirm."
-        return {"text": undo_proposed_in_words(last), "memory": memory, "proposal": proposal, "searched": ""}
+        return {"text": undo_proposed_in_words(last), "memory": memory, "proposal": proposal, "searched": "", "period": ""}
 
     kind = "trash" if decision["action"] == "trash_photos" else "copy"
     caption, folder = decision["caption"], ""
     # the pictures are on the phone if the request says so, or if "these" are pictures of the phone
-    away = phone or (not caption and bool(selection) and all(on_phone(identifier) for identifier in selection))
+    away = phone or (not caption and not when and bool(selection) and all(on_phone(identifier) for identifier in selection))
     if away:
         if phones is None or not phones.devices:
             return only(NO_PHONE, "No phone is connected.")
@@ -275,12 +296,13 @@ def propose(decision: dict, photos, actions, selection: list[str], phones=None, 
             folder = collection_name(decision["folder"])
         except Refused:
             pass  # no usable name: the proposal is made all the same, and the page asks for the name
-    if caption:
-        # the message says which pictures: only the ones the search is sure about are proposed
-        result = (phones if away else photos).search(caption, limit=MOST)
+    if caption or when:
+        # the message says which pictures, by what they show or by when they were taken:
+        # only the ones the search is sure about are proposed
+        result = (phones if away else photos).search(caption, limit=MOST, period=when)
         chosen, every = result["sure"], result["matching"]
         if not chosen:
-            return only(NONE_LIKE_THAT, f'Searched the photos for "{caption}": none found, so nothing was proposed.', caption)
+            return only(NONE_LIKE_THAT, f"{_searched(caption, away, when)}: none found, so nothing was proposed.", caption)
     else:
         if away:
             known = {photo["id"]: photo["name"] for photo in phones.photos}
@@ -294,13 +316,14 @@ def propose(decision: dict, photos, actions, selection: list[str], phones=None, 
     into = f'into the folder "{folder}"' if folder else "into a folder that has no name yet"
     what = {"trash": "move them to the trash", "copy": f"copy them {into}", "fetch": f"copy them from the phone to the computer, {into}"}[kind]
     # with the caption, so that the next request can build on this search too
-    searched = f'Searched the photos{" on the phone" if away else ""} for "{caption}": {every} found. ' if caption else ""
+    searched = f"{_searched(caption, away, when)}: {every} found. " if caption or when else ""
     return {
         "text": proposed_in_words(kind, len(chosen), folder, every),
         # nothing has changed yet, and the model must not think it has
         "memory": f"{searched}Proposed to {what} ({len(chosen)} photos). Nothing was done: the user must confirm.",
         "proposal": {"action": kind, "folder": folder, "photos": [{"id": photo["id"], "name": photo["name"]} for photo in chosen]},
         "searched": caption,
+        "period": period if caption or when else "",
     }
 
 
@@ -354,8 +377,14 @@ async def reply(history: list[dict], wanted: str, models: list[dict], machine, t
     decision = await decide(director, history) if director else {"action": "answer", "caption": "", "folder": ""}
     # the place is not something a picture shows: out of the caption, whatever the model left in it
     decision["caption"] = re.sub(r"\s+", " ", PLACE_WORDS.sub(" ", decision["caption"])).strip()
-    action, caption = decision["action"], decision["caption"]
     asked = next((str(message.get("content", "")) for message in reversed(history) if message.get("role") == "user"), "")
+    # The period a request names is read here, in its words, and not asked to the model (period.py).
+    # And a picture does not show its date: what the model left of it in the caption comes out.
+    when = read_period(asked)
+    if when:
+        decision["caption"] = without_time(decision["caption"])
+    period = period_in_words(when) if when else ""
+    action, caption = decision["action"], decision["caption"]
     # on the phone when the request says so; and when it names no place, where the pictures on screen are
     looking_there = bool(selection) and all(on_phone(identifier) for identifier in selection)
     # "salvale sul computer" names where pictures go, not where they are: only a search is moved by it
@@ -371,33 +400,38 @@ async def reply(history: list[dict], wanted: str, models: list[dict], machine, t
         return
 
     if action == "count_photos":
-        indexed = len(phones.photos if phone else photos.photos)
+        library = phones if phone else photos
+        indexed = library.search("", 1, when)["matching"] if when else len(library.photos)
         yield {"type": "step", "tool": "count_photos", "arguments": {}}
         if phone:
-            yield {"type": "text", "text": f"Conosco {_photos(indexed)} del telefono." if indexed else PHONE_EMPTY}
+            yield {"type": "text", "text": f"Conosco {_photos(indexed)} del telefono{f' {period}' if when else ''}." if indexed or when else PHONE_EMPTY}
+        elif when:
+            yield {"type": "text", "text": f"Conosco {_photos(indexed)} {period}."}
         else:
             yield {"type": "text", "text": counted_in_words(photos.state, indexed)}
-        yield done(director, f"Counted the photos{' on the phone' if phone else ''}: {indexed}.")
+        taken = f" taken from {when[0]} to {when[1]}" if when else ""
+        yield done(director, f"Counted the photos{' on the phone' if phone else ''}{taken}: {indexed}.")
         return
 
     if action == "find_photos":
-        if not caption:
+        if not caption and not when:
             yield {"type": "text", "text": UNCLEAR}
             yield done(director, "The search could not start: no description was given.")
             return
-        yield {"type": "step", "tool": "find_photos", "arguments": {"description": caption, "place": "phone" if phone else "computer"}}
-        result = await asyncio.to_thread((phones if phone else photos).search, caption)
+        place = "phone" if phone else "computer"
+        yield {"type": "step", "tool": "find_photos", "arguments": {"description": caption, "place": place, "period": period}}
+        result = await asyncio.to_thread((phones if phone else photos).search, caption, 60, when)
         result["partial"] = False if phone else photos.state["running"]
-        yield {"type": "photos", "description": caption, "place": "phone" if phone else "computer", **result}
-        yield {"type": "text", "text": found_in_words(result, phone)}
+        yield {"type": "photos", "description": caption, "place": place, **result}
+        yield {"type": "text", "text": found_in_words(result, phone, period, bool(caption))}
         # in English and with the caption, so that "only the black ones" can build on it
-        yield done(director, f'Searched the photos{" on the phone" if phone else ""} for "{caption}": {result["matching"]} found, {len(result["maybe"])} uncertain.')
+        yield done(director, f'{_searched(caption, phone, when)}: {result["matching"]} found, {len(result["maybe"])} uncertain.')
         return
 
     if action in CHANGES and actions is not None:
-        plan = await asyncio.to_thread(propose, decision, photos, actions, selection or [], phones, phone)
-        if plan["searched"]:
-            yield {"type": "step", "tool": "find_photos", "arguments": {"description": plan["searched"], "place": "phone" if phone else "computer"}}
+        plan = await asyncio.to_thread(propose, decision, photos, actions, selection or [], phones, phone, when)
+        if plan["searched"] or plan["period"]:
+            yield {"type": "step", "tool": "find_photos", "arguments": {"description": plan["searched"], "place": "phone" if phone else "computer", "period": plan["period"]}}
         yield {"type": "text", "text": plan["text"]}
         if plan["proposal"]:
             yield {"type": "proposal", **plan["proposal"]}

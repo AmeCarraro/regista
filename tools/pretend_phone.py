@@ -10,6 +10,7 @@ It needs Pillow, and nothing else that is not in Python.
 """
 import argparse
 import base64
+import datetime
 import hashlib
 import http.client
 import io
@@ -70,6 +71,19 @@ def small_copy(path: Path) -> str:
     return base64.b64encode(data.getvalue()).decode()
 
 
+def day_of(path: Path) -> str:
+    """The day a picture was taken: the one written in it, or else the date of the file."""
+    try:
+        with Image.open(path) as picture:
+            written = picture.getexif()
+            when = written.get_ifd(0x8769).get(0x9003) or written.get(0x0132)
+        if when:
+            return datetime.datetime.strptime(str(when)[:10], "%Y:%m:%d").date().isoformat()
+    except (OSError, ValueError):
+        pass
+    return datetime.date.fromtimestamp(path.stat().st_mtime).isoformat()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("link", nargs="?", help="the link the page shows when a phone is to be let in; not needed once it has been let in")
@@ -111,7 +125,7 @@ def main() -> None:
     wanted = computer.ask("POST", "/phone/library", {"photos": listing})["wanted"]
     print(f"{len(files)} pictures in the gallery, the computer wants a small copy of {len(wanted)}")
     for first in range(0, len(wanted), BATCH):
-        batch = [{"id": name, "stamp": stamps[name], "name": files[name].name, "taken": int(files[name].stat().st_mtime * 1000), "jpeg": small_copy(files[name])}
+        batch = [{"id": name, "stamp": stamps[name], "name": files[name].name, "day": day_of(files[name]), "jpeg": small_copy(files[name])}
                  for name in wanted[first:first + BATCH]]
         computer.ask("POST", "/phone/photos", {"photos": batch})
     computer.ask("POST", "/phone/library/done", {})

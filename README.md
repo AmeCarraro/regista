@@ -5,6 +5,7 @@ A personal assistant that runs on your own computer, with local models only. You
 What it does today:
 
 - **Finds your pictures from a sentence.** "Trovami le foto con un cane", then "solo quelli neri". The pictures are read once by a model that understands images and text, and searched by meaning.
+- **Finds them by when they were taken.** "Le foto dal 20 maggio al 20 luglio", "le foto del mare di agosto 2024", "quelle dell'anno scorso". The day is the one the camera wrote in the picture.
 - **Puts them in order, without ever deleting one.** "Eliminale" moves the pictures to a trash folder; "copia le foto delle chiese in una cartella Chiese" copies them; "annulla" takes the last change back. Each of these is first proposed, with the pictures in front of you, and happens only after your yes.
 - **Reaches the pictures on your phone.** An Android app, paired with the computer by pointing the camera at a code, shows the same chat on the phone and lets the computer search the phone's pictures: "trovami sul telefono le foto del mare", "salvale sul computer in una cartella Mare".
 - **Answers questions**, with the local model you choose or with the one the app picks.
@@ -48,11 +49,13 @@ To reach the computer from elsewhere it needs an address that works from there, 
 - **Everything can be taken back.** Each change is one line in `.regista\registro.jsonl`. "Annulla" moves trashed pictures home, and moves unwanted copies to the trash. A picture coming home never overwrites one that took its name meanwhile: it gets a name with "(2)".
 - **Copies go to `Raccolte\<name>\`** inside the picture folder. The originals stay where they are.
 - The app never empties its trash. To free the space, delete `.regista\cestino` yourself when you are sure.
+- **Only the app's own page can ask for a change.** The service answers only to its own names, and refuses a request to change something when the browser says another page made it: a site you happen to have open cannot move your pictures or let a phone in.
 
 And on the phone:
 
 - **The phone app only reads.** It cannot change or delete a picture: there is no code in it that does. Pictures on the phone can be copied to the computer, not thrown away.
 - **The computer gets a small copy of each picture**, a few hundred pixels wide, to know what it shows. The originals stay on the phone until you ask for some; then they arrive in `Raccolte\<name>\`, and that too can be taken back.
+- **The app asks before pairing**, showing the name and the address of the computer, and it refuses a computer that is not inside a private network. A pairing link can reach the app from any page or app, not only from your camera: without your yes nothing is paired, and a pairing that fails leaves the one there was.
 - **A phone is let in once, by you, from the PC.** The code is good for five minutes and for one phone. It carries the fingerprint of the computer's certificate, so the phone talks only to that computer, encrypted; the phone gets a key of its own, of which the computer keeps only a hash. "Scollega" on the page shuts a phone out at once.
 - **The door of the phones is separate** from the one of the PC and closed to the network unless you start the app with `-Phone`. Without the key of a paired phone it answers to one thing only: the code that lets a phone in.
 
@@ -61,6 +64,7 @@ And on the phone:
 | Part | Where | What it is |
 |---|---|---|
 | Director | `app/orchestrator.py` | One model decides what to do with a request: answer, search the pictures, count them, or propose a change to them. It replies with a small form, not free text, so the decision is always one the app can carry out. What happened is said by the app, from the result: the numbers are never written by a model. Whether a request is about the phone is read in its words, not asked to the model. |
+| Periods | `app/period.py` | Reads a period of time in the words of a request, in Italian, and says it back. Not asked to the model: a small model gets dates wrong. |
 | Changes | `app/actions.py` | The trash, the copies, the journal and the undo. Called only by the service, after a yes in the page, with pictures named by the index and never by a path. |
 | Phones | `app/phone.py` | Pairing, the certificate, what is known of the pictures of each phone, and the requests for originals. |
 | Models | `app/llm.py`, `app/catalog.py` | What Ollama has installed, what each model is for, whether it fits this computer, who gets each job, and which model is worth having here. |
@@ -104,8 +108,11 @@ The emulator reaches the door of the phones at `10.0.2.2`, so start the app with
 - It understands English, so the director translates the request. A 3B model sometimes translates badly: "macchina rossa" became "a red machine", "motosega" became "a motorcycle chain".
 - The director decides right most of the time, not always: with the form `granite4.1:3b` got 59 of 60 test requests right, among them all 20 that ask to trash, copy or undo and all 8 about the phone.
 - "Sposta" is understood as "copia": the app has no move yet.
+- A period is understood when it is said in one of the ways `app/period.py` lists (days, months and years by name or number, "ieri", "il mese scorso", "l'anno scorso"); seasons and "l'estate del 2023" are not. A picture with no date written in it counts as taken on the date of its file, which for pictures copied from elsewhere is the day they were copied. Tried with the model on 15 requests that name a period, all read right, and on the emulator with 60 pictures two days apart: "dal 20 maggio al 20 luglio" found the 31 it should.
+- Pictures are not found by where they were taken: "le foto del Giappone" finds the ones that look like Japan.
 - The model the app suggests comes from a list of three, the sizes of the one it was measured with (`granite4.1` 3B, 8B, 30B; names and sizes read from the Ollama library on 2026-10-11). Only the 3B one was tried here. Graphics cards other than NVIDIA are not detected: on those computers the app reasons as if there were none.
 - The phone app was tried on an Android 15 emulator, not on a real phone: pairing, the pictures becoming known to the computer, a search from the phone, and four originals arriving on the PC identical to the ones on the phone. Reading the code with a real camera, and the home network with its firewall, were not tried.
+- What protects the pictures was written and tried by one author: nobody else has reviewed it. Tried on the running app: a stranger at the door of the phones gets nothing without a key, old encryption versions are refused, and the PC's own door does not answer from the network. A paired phone can do what the PC's page can, so a lost phone must be shut out from the page ("Scollega"); the small copies of the phone's pictures sit on the PC unencrypted, like the PC's own pictures.
 - The phone works for the computer only while the app is open in front. A search looks either at the computer or at the phone, not at both at once.
 - Reading the pictures takes about 18 per second on a laptop processor, once.
 

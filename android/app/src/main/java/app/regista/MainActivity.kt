@@ -32,18 +32,14 @@ class MainActivity : Activity() {
         super.onCreate(saved)
         memory = Memory(this)
         gallery = Gallery(this)
-        val invite = intent?.dataString?.let(::readInvite)
-        when {
-            invite != null -> pair(invite)
-            memory.paired -> showChat()
-            else -> showPairing("")
-        }
+        if (memory.paired) showChat() else showPairing("")
+        intent?.dataString?.let(::readInvite)?.let(::offer)
     }
 
     /** The camera read the code while the app was already open. */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        intent.dataString?.let(::readInvite)?.let(::pair)
+        intent.dataString?.let(::readInvite)?.let(::offer)
     }
 
     override fun onStart() {
@@ -76,9 +72,38 @@ class MainActivity : Activity() {
             if (invite == null) {
                 findViewById<TextView>(R.id.message).text = "Questo non è un collegamento di Regista. Copialo dalla pagina sul computer, alla voce «Telefono»."
             } else {
-                pair(invite)
+                offer(invite)
             }
         }
+    }
+
+    /**
+     * Asks the user before pairing. A link can reach this app from anywhere, also from a page or
+     * another app that wants this phone's pictures: so nothing is paired unless the user, who
+     * sees which computer it is, says yes here. And never with a computer outside a private network.
+     */
+    private fun offer(invite: Invite) {
+        if (invite.addresses.isEmpty()) {
+            say("Questo codice porta a un computer fuori dalla tua rete. Non mi collego.")
+            return
+        }
+        // what was said about an earlier link is no longer about this one
+        if (!chatting) say("")
+        val computer = invite.computer.ifBlank { "senza nome" }
+        var question = "Computer: $computer\nIndirizzo: ${invite.addresses.first()}\n\n" +
+            "Di' di sì solo se hai appena inquadrato il codice sul tuo computer: il computer collegato potrà vedere le foto di questo telefono."
+        if (memory.paired) question += "\n\nQuesto telefono è già collegato a «${memory.computer}»: il nuovo collegamento prende il suo posto."
+        AlertDialog.Builder(this)
+            .setTitle("Collego questo telefono?")
+            .setMessage(question)
+            .setPositiveButton("Collega") { _, _ -> pair(invite) }
+            .setNegativeButton("No", null)
+            .show()
+    }
+
+    /** One line for the user, on whichever screen is showing. */
+    private fun say(line: String) {
+        findViewById<TextView>(if (chatting) R.id.status else R.id.message).text = line
     }
 
     /** Shows the computer the secret of the link. If it lets this phone in, the key it gives back is kept. */
@@ -103,7 +128,15 @@ class MainActivity : Activity() {
                     // try the next address
                 }
             }
-            runOnUiThread { showPairing(problem) }
+            runOnUiThread {
+                // a pairing that did not go through leaves the one there was, if there was one
+                if (memory.paired) {
+                    showChat()
+                    say(problem)
+                } else {
+                    showPairing(problem)
+                }
+            }
         }
     }
 

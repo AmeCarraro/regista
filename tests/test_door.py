@@ -86,6 +86,26 @@ def test_the_page_inside_the_phone_app_is_let_in_by_the_key_once_and_then_by_a_c
     assert "set-cookie" not in phone.get("/api/photos").headers
 
 
+def test_another_page_cannot_ask_for_a_change_at_either_door(home):
+    phones, folder = home
+    elsewhere = {"Origin": "https://pictures.example.com"}
+
+    # at the computer: a site the user has open cannot make a pairing link, shut a phone out or move a picture
+    assert client.post("/api/phone/invite", headers=elsewhere).status_code == 403
+    assert client.post("/api/photos/read", headers=elsewhere).status_code == 403
+    assert client.post("/api/actions", json={"action": "trash", "ids": ["x"]}, headers=elsewhere).status_code == 403
+    assert client.post("/api/phone/invite", headers={"Origin": "null"}).status_code == 403
+    # the app's own page can, and so can what is not a browser and names no page
+    assert client.post("/api/phone/invite", headers={"Origin": "http://127.0.0.1:8090"}).status_code == 200
+    assert client.post("/api/phone/invite").status_code == 200
+    # looking is not changing: a GET is not refused for where it comes from (and another site cannot read the answer anyway)
+    assert client.get("/api/photos", headers=elsewhere).status_code == 200
+
+    phone, key, _ = let_in()
+    assert phone.post("/phone/library/done", headers={**key, **elsewhere}).status_code == 403
+    assert phone.post("/phone/library/done", headers={**key, "Origin": "https://192.168.1.23:8443"}).status_code == 200
+
+
 def test_what_a_phone_says_is_not_heard_at_the_door_of_the_computer(home):
     assert client.post("/phone/pair", json={"secret": "x", "name": "x"}).status_code == 404
     assert client.get("/phone/work").status_code == 404

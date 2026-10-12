@@ -1,9 +1,12 @@
 """The phones: letting one in, learning its pictures, asking it for the originals. No real phone, and the colour model."""
+import base64
 import hashlib
+import io
 import json
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+from PIL import Image
 
 import phone
 from actions import Refused
@@ -131,7 +134,13 @@ def test_what_cannot_be_a_small_copy_is_skipped(phones):
     broken = {**shot("1", "red"), "jpeg": "bm90IGEgcGljdHVyZQ=="}
     huge = {**shot("2", "red"), "jpeg": "A" * (phone.SMALL_COPY + 1)}
 
-    assert phones.add(device, [broken, huge, shot("3", "red")]) == 1
+    # a few bytes that claim to be an enormous picture: opening it would fill the memory
+    blown = io.BytesIO()
+    Image.new("RGB", (4000, 4000), (255, 0, 0)).save(blown, "PNG")
+    enormous = {**shot("4", "red"), "jpeg": base64.b64encode(blown.getvalue()).decode()}
+    assert len(enormous["jpeg"]) < phone.SMALL_COPY
+
+    assert phones.add(device, [broken, huge, enormous, shot("3", "red")]) == 1
     assert [photo["media"] for photo in phones.photos] == ["3"]
     assert phones.add(device, [broken]) == 0
 

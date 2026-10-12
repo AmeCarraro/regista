@@ -14,8 +14,23 @@ import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SSLContext
 import javax.net.ssl.X509TrustManager
 
-/** What the link shown by the computer says: where the computer is, how to recognise it, and the secret that lets this phone in. */
+/**
+ * What the link shown by the computer says: where the computer is, how to recognise it, and the
+ * secret that lets this phone in. `addresses` holds only the ones inside a private network.
+ */
 class Invite(val addresses: List<String>, val port: Int, val secret: String, val fingerprint: String, val computer: String)
+
+/**
+ * Whether an address is inside a private network: the one at home, or a private link between
+ * one's own devices. The user's computer is never out on the open internet, so a link that
+ * points there is not the user's: it is someone who wants this phone's pictures.
+ */
+fun isPrivate(address: String): Boolean {
+    val parts = address.split(".").map { it.toIntOrNull() ?: return false }
+    if (parts.size != 4 || parts.any { it !in 0..255 }) return false
+    val (first, second) = parts
+    return first == 10 || (first == 172 && second in 16..31) || (first == 192 && second == 168) || (first == 100 && second in 64..127)
+}
 
 /** Reads a link like regista://pair?a=192.168.1.23&p=8443&s=...&f=... Anything else is not an invitation. */
 fun readInvite(text: String): Invite? {
@@ -26,7 +41,7 @@ fun readInvite(text: String): Invite? {
     val secret = link.getQueryParameter("s") ?: return null
     val fingerprint = link.getQueryParameter("f") ?: return null
     if (addresses.isEmpty() || secret.isEmpty() || fingerprint.length != 64) return null
-    return Invite(addresses, port, secret, fingerprint, link.getQueryParameter("n") ?: "")
+    return Invite(addresses.filter(::isPrivate), port, secret, fingerprint, link.getQueryParameter("n") ?: "")
 }
 
 fun fingerprintOf(certificate: X509Certificate): String =

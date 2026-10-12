@@ -50,7 +50,16 @@ function PartView({ part, answers }: { part: Part; answers: Answers }) {
       return (
         <p className="step">
           {part.place === 'phone' ? <icons.Phone /> : <icons.Search />}
-          {part.place === 'phone' ? 'Cerco nelle foto del telefono:' : 'Cerco nelle foto:'} <q>{part.description}</q>
+          {part.description ? (
+            <>
+              {part.place === 'phone' ? 'Cerco nelle foto del telefono:' : 'Cerco nelle foto:'} <q>{part.description}</q>
+              {part.period && <span>{part.period}</span>}
+            </>
+          ) : (
+            <>
+              {part.place === 'phone' ? 'Cerco le foto del telefono' : 'Cerco le foto'} {part.period}
+            </>
+          )}
         </p>
       )
     case 'photos':

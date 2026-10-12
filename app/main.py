@@ -122,6 +122,9 @@ class Gate:
     The door of the phones answers only to a phone that was let in, and that shows its key
     with every request. The one exception is the request that lets a phone in, which shows
     the secret of the link instead. A phone cannot let other phones in.
+
+    At both doors, a request that changes something is refused when a browser says it was
+    made by a page that is not the app's own.
     """
 
     def __init__(self, inner):
@@ -132,6 +135,12 @@ class Gate:
             return await self.inner(scope, receive, send)
         headers = {name: value.decode("latin-1") for name, value in scope["headers"]}
         path = scope["path"]
+
+        # A request that changes something must come from the app's own page. A browser says which page
+        # made a request; if it is another one, a site that the user happens to have open is trying its luck.
+        origin = headers.get(b"origin")
+        if scope["method"] not in ("GET", "HEAD", "OPTIONS") and origin is not None and origin.split("://", 1)[-1] != headers.get(b"host", ""):
+            return await self._refuse(send, 403, "Questa richiesta arriva da un'altra pagina.")
 
         if (scope.get("server") or ("", 0))[1] != PHONE_PORT:
             if headers.get(b"host", "").rsplit(":", 1)[0] not in HOSTS:
@@ -215,8 +224,8 @@ class Listing(BaseModel):
 
 class SmallCopy(Listed):
     name: str = Field(default="", max_length=300)
-    # when it was taken, in milliseconds
-    taken: int = 0
+    # the day it was taken, as "2024-08-15"
+    day: str = Field(default="", max_length=10)
     # a JPEG a few hundred pixels wide, as base64
     jpeg: str
 

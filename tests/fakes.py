@@ -26,16 +26,20 @@ class ColourEmbedder:
         return vector / np.linalg.norm(vector)
 
 
-def picture(folder, name, colour):
+def picture(folder, name, colour, day=None):
+    """A picture of one colour. With `day`, as "2024-08-15", the camera's note of when it was taken is in it."""
     folder.mkdir(parents=True, exist_ok=True)
-    Image.new("RGB", (64, 48), COLOURS[colour]).save(folder / name)
+    written = Image.Exif()
+    if day:
+        written[0x0132] = day.replace("-", ":") + " 10:00:00"
+    Image.new("RGB", (64, 48), COLOURS[colour]).save(folder / name, exif=written)
 
 
-def shot(media, colour, name=None, stamp="1"):
-    """A picture as a phone sends it: its own name for it, and a small copy as text."""
+def shot(media, colour, name=None, stamp="1", day="2026-08-15"):
+    """A picture as a phone sends it: its own name for it, the day it was taken, and a small copy as text."""
     data = io.BytesIO()
     Image.new("RGB", (64, 48), COLOURS[colour]).save(data, "JPEG")
-    return {"id": media, "stamp": stamp, "name": name or f"IMG_{media}.jpg", "taken": 1_700_000_000_000, "jpeg": base64.b64encode(data.getvalue()).decode()}
+    return {"id": media, "stamp": stamp, "name": name or f"IMG_{media}.jpg", "day": day, "jpeg": base64.b64encode(data.getvalue()).decode()}
 
 
 def certificate_in(folder):

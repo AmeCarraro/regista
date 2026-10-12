@@ -33,6 +33,8 @@ from photos import BATCH, THUMB, closest
 INVITE_SECONDS = 300
 # the largest small copy a phone may send, as text: a 384-pixel JPEG is a tenth of this
 SMALL_COPY = 600_000
+# and the most pixels it may have: a phone of ours sends 384 on the long side
+SMALL_COPY_PIXELS = 1600 * 1600
 # what a file that arrives from a phone may end in
 ENDINGS = {"jpg", "jpeg", "png", "webp", "heic", "heif", "gif", "avif", "dng"}
 
@@ -70,7 +72,7 @@ class Phones:
         self._invite: tuple[str, float] | None = None
         self._saved = 0.0
         self.devices: list[dict] = self._read("devices.json", [])
-        # the pictures of every phone: {"id", "device", "media" (the phone's own name for it), "stamp", "name", "taken"}
+        # the pictures of every phone: {"id", "device", "media" (the phone's own name for it), "stamp", "name", "day"}
         self.photos: list[dict] = []
         self.vectors = np.zeros((0, 0), dtype=np.float32)
         self.transfers: list[dict] = self._read("transfers.json", [])
@@ -213,7 +215,8 @@ class Phones:
             if gone:
                 self._drop(gone)
                 self.save()
-            known = {photo["media"]: photo["stamp"] for photo in mine}
+            # a picture whose day is not known, sent by an app that did not say it yet, is asked for again
+            known = {photo["media"]: photo["stamp"] for photo in mine if photo.get("day")}
             return [media for media, stamp in there.items() if known.get(media) != stamp]
 
     def add(self, device: str, arrived: list[dict]) -> int:
@@ -224,18 +227,25 @@ class Phones:
                 data = str(item["jpeg"])
                 if len(data) > SMALL_COPY:
                     continue
-                picture = ImageOps.exif_transpose(Image.open(io.BytesIO(base64.b64decode(data)))).convert("RGB")
+                picture = Image.open(io.BytesIO(base64.b64decode(data)))
+                # a few bytes can claim to be an enormous picture, and opening it would fill the memory:
+                # a small copy is small, so anything else is refused before it is opened
+                if picture.width * picture.height > SMALL_COPY_PIXELS:
+                    continue
+                picture = ImageOps.exif_transpose(picture).convert("RGB")
             except (OSError, ValueError, KeyError):
                 continue  # one that cannot be read is skipped: the phone will offer it again
             picture.thumbnail((THUMB, THUMB))
             media = str(item["id"])
+            day = str(item.get("day", ""))
             entries.append({
                 "id": phone_photo_id(device, media),
                 "device": device,
                 "media": media,
                 "stamp": str(item.get("stamp", "")),
                 "name": file_name(str(item.get("name", ""))),
-                "taken": int(item.get("taken") or 0),
+                # the day it was taken, as the clock and the calendar of the phone say it
+                "day": day if re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) else "",
             })
             pictures.append(picture)
         if not pictures:
@@ -255,13 +265,13 @@ class Phones:
                 self.save()
         return len(entries)
 
-    def search(self, description: str, limit: int = 60) -> dict:
+    def search(self, description: str, limit: int = 60, period: tuple | None = None) -> dict:
         """The pictures of the phones closest to a sentence: the same answer the pictures of this computer give."""
         with self._lock:
             photos, vectors = self.photos, self.vectors
         if not photos:
-            return closest(vectors, np.zeros(0), [], limit)
-        return closest(vectors, self.embedder.text(description), photos, limit)
+            return closest(vectors, None, [], limit)
+        return closest(vectors, self.embedder.text(description) if description else None, photos, limit, period)
 
     def thumbnail(self, identifier: str) -> bytes | None:
         file = self.folder / "thumbs" / f"{identifier}.jpg"
