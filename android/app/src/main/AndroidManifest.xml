@@ -6,6 +6,8 @@
     <!-- to read the pictures: asked to the user when the app is first paired. Its name changed with Android 13 -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <!-- to read where a picture was taken: without it Android hands pictures over with the place taken out -->
+    <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />
 
     <!-- no backup: the key that lets this phone into the computer must not leave the phone -->
     <application

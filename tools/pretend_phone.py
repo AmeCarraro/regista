@@ -84,6 +84,18 @@ def day_of(path: Path) -> str:
     return datetime.date.fromtimestamp(path.stat().st_mtime).isoformat()
 
 
+def position_of(path: Path) -> dict:
+    """Where a picture was taken, as {"lat", "lon"} in degrees, if it is written in it; nothing otherwise."""
+    try:
+        with Image.open(path) as picture:
+            written = picture.getexif().get_ifd(0x8825)
+        latitude = sum(float(part) / 60 ** power for power, part in enumerate(written[2])) * (-1 if written[1] == "S" else 1)
+        longitude = sum(float(part) / 60 ** power for power, part in enumerate(written[4])) * (-1 if written[3] == "W" else 1)
+        return {"lat": latitude, "lon": longitude}
+    except (OSError, KeyError, TypeError, ValueError, ZeroDivisionError):
+        return {}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("link", nargs="?", help="the link the page shows when a phone is to be let in; not needed once it has been let in")
@@ -125,7 +137,7 @@ def main() -> None:
     wanted = computer.ask("POST", "/phone/library", {"photos": listing})["wanted"]
     print(f"{len(files)} pictures in the gallery, the computer wants a small copy of {len(wanted)}")
     for first in range(0, len(wanted), BATCH):
-        batch = [{"id": name, "stamp": stamps[name], "name": files[name].name, "day": day_of(files[name]), "jpeg": small_copy(files[name])}
+        batch = [{"id": name, "stamp": stamps[name], "name": files[name].name, "day": day_of(files[name]), **position_of(files[name]), "jpeg": small_copy(files[name])}
                  for name in wanted[first:first + BATCH]]
         computer.ask("POST", "/phone/photos", {"photos": batch})
     computer.ask("POST", "/phone/library/done", {})

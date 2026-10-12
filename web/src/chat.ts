@@ -29,8 +29,9 @@ export type Proposed = {
 /** A piece of a reply, in the order it arrived. */
 export type Part =
   | { kind: 'text'; text: string }
-  // `period` is the days the search looked at, in words, or nothing; `description` can be empty when only a period was asked for
-  | { kind: 'search'; description: string; place: Place; period: string }
+  // `period` is the days the search looked at and `spot` the place the pictures were taken in, both in words, or nothing;
+  // `description` can be empty when only a period or a place was asked for
+  | { kind: 'search'; description: string; place: Place; period: string; spot: string }
   | ({ kind: 'photos' } & Found)
   | Proposed
 
@@ -80,7 +81,7 @@ export function apply(reply: Reply, event: ChatEvent): Reply {
         // only a search has something to show; other tools speak through the text that follows
         parts:
           event.tool === 'find_photos'
-            ? [...reply.parts, { kind: 'search', description: String(event.arguments.description ?? ''), place: event.arguments.place === 'phone' ? 'phone' : 'computer', period: String(event.arguments.period ?? '') }]
+            ? [...reply.parts, { kind: 'search', description: String(event.arguments.description ?? ''), place: event.arguments.place === 'phone' ? 'phone' : 'computer', period: String(event.arguments.period ?? ''), spot: String(event.arguments.spot ?? '') }]
             : reply.parts,
       }
     case 'photos': {

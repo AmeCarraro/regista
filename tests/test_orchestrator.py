@@ -113,7 +113,7 @@ def test_a_request_for_pictures_becomes_a_search_and_the_app_says_what_it_found(
 
     assert photos.asked == ["a black dog"]
     assert [event["type"] for event in events] == ["start", "step", "photos", "text", "done"]
-    assert events[1] == {"type": "step", "tool": "find_photos", "arguments": {"description": "a black dog", "place": "computer", "period": ""}}
+    assert events[1] == {"type": "step", "tool": "find_photos", "arguments": {"description": "a black dog", "place": "computer", "period": "", "spot": ""}}
     assert events[2]["place"] == "computer"
     assert [photo["id"] for photo in events[2]["sure"]] == ["p0", "p1"]
     # counted by the app, not written by the model
@@ -466,7 +466,7 @@ def test_a_search_on_the_phone_looks_at_its_pictures_and_says_so(monkeypatch, ph
     events, photos = ask("trovami sul telefono le foto verdi", phones=phones)
 
     assert photos.asked == []
-    assert events[1] == {"type": "step", "tool": "find_photos", "arguments": {"description": "something green", "place": "phone", "period": ""}}
+    assert events[1] == {"type": "step", "tool": "find_photos", "arguments": {"description": "something green", "place": "phone", "period": "", "spot": ""}}
     assert events[2]["place"] == "phone" and events[2]["indexed"] == 3
     assert said(events) == "Non ho trovato niente del genere tra le 3 foto del telefono che conosco."
     assert events[-1]["memory"].startswith('Searched the photos on the phone for "something green"')

@@ -57,7 +57,9 @@ def test_a_period_keeps_only_the_pictures_taken_in_it_first_and_last_day_include
 def test_pictures_read_before_days_were_kept_get_their_day_without_being_read_again(library, tmp_path):
     index, folder = library
     for photo in index.photos:
-        del photo["day"]
+        # as an index made before days and places were kept
+        for noted in ("day", "lat", "lon", "country"):
+            del photo[noted]
     index._save()
     embedder = ColourEmbedder()
     again = PhotoIndex(str(folder), str(tmp_path / "index"), embedder)
@@ -112,7 +114,7 @@ def test_a_request_that_only_says_when_finds_every_picture_of_those_days(library
 
     events = ask("trovami le foto dal 20 maggio al 20 luglio 2024", index, monkeypatch)
 
-    assert events[1] == {"type": "step", "tool": "find_photos", "arguments": {"description": "", "place": "computer", "period": "dal 20 maggio al 20 luglio 2024"}}
+    assert events[1] == {"type": "step", "tool": "find_photos", "arguments": {"description": "", "place": "computer", "period": "dal 20 maggio al 20 luglio 2024", "spot": ""}}
     assert names(events[2]) == ["sky.jpg", "sea.jpg"]
     assert said(events) == "Ho trovato 2 foto dal 20 maggio al 20 luglio 2024."
     assert events[-1]["memory"] == "Searched the photos taken from 2024-05-20 to 2024-07-20: 2 found, 0 uncertain."
@@ -124,7 +126,7 @@ def test_what_the_pictures_show_and_when_they_were_taken_work_together(library, 
 
     events = ask("le foto blu di maggio 2024", index, monkeypatch)
 
-    assert events[1]["arguments"] == {"description": "something blue", "place": "computer", "period": "di maggio 2024"}
+    assert events[1]["arguments"] == {"description": "something blue", "place": "computer", "period": "di maggio 2024", "spot": ""}
     assert names(events[2]) == ["sea.jpg"] and said(events) == "Ho trovato 1 foto di maggio 2024."
     assert events[-1]["memory"].startswith('Searched the photos for "something blue" taken from 2024-05-01 to 2024-05-31')
 
@@ -165,7 +167,7 @@ def test_the_pictures_of_a_period_can_be_proposed_for_a_copy(library, monkeypatc
     events = ask("copia le foto dal 20 maggio al 20 luglio 2024 in una cartella Estate", index, monkeypatch, actions=Changes(), selection=["not these"])
 
     assert sorted(photo["name"] for photo in proposed(events)["photos"]) == ["sea.jpg", "sky.jpg"]
-    assert events[1]["arguments"] == {"description": "", "place": "computer", "period": "dal 20 maggio al 20 luglio 2024"}
+    assert events[1]["arguments"] == {"description": "", "place": "computer", "period": "dal 20 maggio al 20 luglio 2024", "spot": ""}
     assert events[-1]["memory"].startswith("Searched the photos taken from 2024-05-20 to 2024-07-20: 2 found. Proposed to copy them")
 
 

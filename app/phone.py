@@ -62,9 +62,11 @@ def file_name(text: str) -> str:
 
 
 class Phones:
-    def __init__(self, folder: str, embedder, addresses: list[str], port: int, computer: str = ""):
+    def __init__(self, folder: str, embedder, addresses: list[str], port: int, computer: str = "", places=None):
         self.folder = Path(folder)
         self.embedder = embedder
+        # the table that turns a position into a country (places.py)
+        self.places = places
         # where a phone finds this computer, as whoever started the app saw it from outside
         self.addresses, self.port, self.computer = addresses, port, computer
         self._lock = threading.RLock()
@@ -215,8 +217,8 @@ class Phones:
             if gone:
                 self._drop(gone)
                 self.save()
-            # a picture whose day is not known, sent by an app that did not say it yet, is asked for again
-            known = {photo["media"]: photo["stamp"] for photo in mine if photo.get("day")}
+            # a picture sent by an app that did not say yet its day, or where it was taken, is asked for again
+            known = {photo["media"]: photo["stamp"] for photo in mine if photo.get("day") and "lat" in photo}
             return [media for media, stamp in there.items() if known.get(media) != stamp]
 
     def add(self, device: str, arrived: list[dict]) -> int:
@@ -238,6 +240,7 @@ class Phones:
             picture.thumbnail((THUMB, THUMB))
             media = str(item["id"])
             day = str(item.get("day", ""))
+            position = self._position(item)
             entries.append({
                 "id": phone_photo_id(device, media),
                 "device": device,
@@ -246,6 +249,10 @@ class Phones:
                 "name": file_name(str(item.get("name", ""))),
                 # the day it was taken, as the clock and the calendar of the phone say it
                 "day": day if re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) else "",
+                # where it was taken, if the phone knew and was allowed to say
+                "lat": position[0] if position else None,
+                "lon": position[1] if position else None,
+                "country": self.places.of(position) if self.places else "",
             })
             pictures.append(picture)
         if not pictures:
@@ -265,13 +272,24 @@ class Phones:
                 self.save()
         return len(entries)
 
-    def search(self, description: str, limit: int = 60, period: tuple | None = None) -> dict:
+    @staticmethod
+    def _position(item: dict) -> tuple[float, float] | None:
+        """Where a phone says a picture was taken, if what it says is a place on Earth."""
+        try:
+            latitude, longitude = float(item["lat"]), float(item["lon"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        inside = -90 <= latitude <= 90 and -180 <= longitude <= 180 and (latitude, longitude) != (0, 0)
+        return (round(latitude, 5), round(longitude, 5)) if inside else None
+
+    def search(self, description: str, limit: int = 60, period: tuple | None = None, spot: dict | None = None) -> dict:
         """The pictures of the phones closest to a sentence: the same answer the pictures of this computer give."""
         with self._lock:
             photos, vectors = self.photos, self.vectors
         if not photos:
             return closest(vectors, None, [], limit)
-        return closest(vectors, self.embedder.text(description) if description else None, photos, limit, period)
+        only = self.places.inside(spot, photos) if spot and self.places else None
+        return closest(vectors, self.embedder.text(description) if description else None, photos, limit, period, only)
 
     def thumbnail(self, identifier: str) -> bytes | None:
         file = self.folder / "thumbs" / f"{identifier}.jpg"

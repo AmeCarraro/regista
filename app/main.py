@@ -28,6 +28,7 @@ from actions import Actions, Refused, collection_name
 from embedder import ClipEmbedder
 from phone import Phones, on_phone
 from photos import BATCH, PhotoIndex, photo_id
+from places import Places
 
 logger = logging.getLogger("uvicorn.error")
 INDEX_DIR = os.getenv("INDEX_DIR", "index")
@@ -41,7 +42,9 @@ PHONE_OPEN = os.getenv("PHONE_OPEN", "") == "1"
 # the largest picture a phone may send
 LARGEST = 400 * 1024 * 1024
 
-photos = PhotoIndex(PHOTOS_DIR, INDEX_DIR, ClipEmbedder())
+# the table of the places of the world, to know in which country and near which city a picture was taken
+places = Places(os.getenv("PLACES_DIR", "geonames"))
+photos = PhotoIndex(PHOTOS_DIR, INDEX_DIR, ClipEmbedder(), places)
 actions = Actions(PHOTOS_DIR)
 phones = Phones(
     str(Path(INDEX_DIR) / "phone"),
@@ -50,6 +53,7 @@ phones = Phones(
     [address for address in os.getenv("HOST_ADDRESSES", "").split(",") if address],
     int(os.getenv("PHONE_PUBLIC_PORT") or PHONE_PORT),
     os.getenv("HOST_NAME", ""),
+    places,
 )
 
 # whether the folder is being read right now, and whether it changed meanwhile and must be read once more
@@ -226,6 +230,9 @@ class SmallCopy(Listed):
     name: str = Field(default="", max_length=300)
     # the day it was taken, as "2024-08-15"
     day: str = Field(default="", max_length=10)
+    # where it was taken, in degrees, if the phone knows and is allowed to say
+    lat: float | None = None
+    lon: float | None = None
     # a JPEG a few hundred pixels wide, as base64
     jpeg: str
 
@@ -283,7 +290,7 @@ async def chat(body: ChatRequest):
     async def events():
         installed = await llm.installed()
         history = [message.model_dump() for message in body.messages]
-        reply = orchestrator.reply(history, body.model, installed, catalog.hardware(), selftest.load(INDEX_DIR), photos, actions, body.selection, phones)
+        reply = orchestrator.reply(history, body.model, installed, catalog.hardware(), selftest.load(INDEX_DIR), photos, actions, body.selection, phones, places)
         async for event in reply:
             yield event
 

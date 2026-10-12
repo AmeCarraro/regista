@@ -176,7 +176,8 @@ class MainActivity : Activity() {
                 !view.url.orEmpty().startsWith("https://${request.url.host}:")
         }
 
-        if (!gallery.allowed) requestPermissions(arrayOf(gallery.permission), 1)
+        // to see the pictures and where each was taken: Android asks the user once for both
+        gallery.missing().takeIf { it.isNotEmpty() }?.let { requestPermissions(it, 1) }
         connect()
     }
 

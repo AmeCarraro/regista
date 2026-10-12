@@ -62,8 +62,10 @@ class Link(
                 tell("Il computer ha risposto: ${refused.message}")
                 pause(5000)
             } catch (problem: IOException) {
-                // off, asleep, or out of reach: a phone keeps trying
+                // off, asleep, or out of reach: a phone keeps trying, and once back it says again what it has,
+                // so that this line does not stay on the screen
                 computer = null
+                again = true
                 tell("Non raggiungo il computer: riprovo tra poco.")
                 pause(5000)
             }
@@ -114,10 +116,11 @@ class Link(
             for (id in batch) {
                 val photo = known[id] ?: continue
                 val small = gallery.small(photo.id) ?: continue
-                copies.put(
-                    JSONObject().put("id", id).put("stamp", photo.stamp).put("name", photo.name).put("day", gallery.day(photo))
-                        .put("jpeg", Base64.encodeToString(small, Base64.NO_WRAP))
-                )
+                val notes = gallery.notes(photo)
+                val copy = JSONObject().put("id", id).put("stamp", photo.stamp).put("name", photo.name).put("day", notes.day)
+                    .put("jpeg", Base64.encodeToString(small, Base64.NO_WRAP))
+                if (notes.latitude != null && notes.longitude != null) copy.put("lat", notes.latitude).put("lon", notes.longitude)
+                copies.put(copy)
             }
             if (copies.length() > 0) computer.ask("POST", "/phone/photos", JSONObject().put("photos", copies))
             sent += batch.size

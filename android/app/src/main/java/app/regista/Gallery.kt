@@ -18,9 +18,12 @@ import java.time.ZoneId
 
 /**
  * A picture of the phone: the phone's own number for it, its file name, a stamp that changes
- * when the picture does, and the day Android believes it was taken (see Gallery.day for the real one).
+ * when the picture does, and the day Android believes it was taken (see Gallery.notes for the real one).
  */
 class Photo(val id: Long, val name: String, val stamp: String, val day: String)
+
+/** What a picture says about itself: the day it was taken and, if known, where, in degrees. */
+class Notes(val day: String, val latitude: Double?, val longitude: Double?)
 
 /** The pictures of this phone, read through Android's own list of them. Nothing here changes a picture. */
 class Gallery(private val context: Context) {
@@ -59,26 +62,40 @@ class Gallery(private val context: Context) {
 
     private fun address(id: Long): Uri = ContentUris.withAppendedId(pictures, id)
 
+    /** The permissions the app still lacks: to see the pictures, and to see where each was taken. Android asks the user for both at once. */
+    fun missing(): Array<String> =
+        arrayOf(permission, Manifest.permission.ACCESS_MEDIA_LOCATION).filter { context.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }.toTypedArray()
+
     /**
-     * The day a picture was taken, like "2024-08-15". The camera writes it in the picture, as
-     * the clock said where the picture was taken: that is the day the user remembers. Android's
-     * own list often has no date for pictures that came from another phone or from a backup,
-     * and then it would be the day they were copied. So the picture itself is asked first.
+     * What a picture says about itself: the day it was taken and, if its camera knew, where.
+     *
+     * The camera writes the day as the clock said where the picture was taken: that is the day
+     * the user remembers. Android's own list often has no date for pictures that came from
+     * another phone or from a backup, and then it would be the day they were copied. So the
+     * picture itself is asked first. The place Android takes out of a picture before handing
+     * it to an app, unless the user allowed the app to see it: the picture is asked for whole
+     * first, and if that is refused, as Android gives it.
      */
-    fun day(photo: Photo): String {
-        try {
-            context.contentResolver.openInputStream(address(photo.id))?.use { stream ->
-                val notes = ExifInterface(stream)
-                val written = notes.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL) ?: notes.getAttribute(ExifInterface.TAG_DATETIME)
-                val day = written?.take(10)?.replace(':', '-')
-                if (day != null && Regex("[12]\\d{3}-\\d{2}-\\d{2}").matches(day)) return day
+    fun notes(photo: Photo): Notes {
+        for (whole in listOf(true, false)) {
+            try {
+                val picture = if (whole) MediaStore.setRequireOriginal(address(photo.id)) else address(photo.id)
+                context.contentResolver.openInputStream(picture)?.use { stream ->
+                    val written = ExifInterface(stream)
+                    val moment = written.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL) ?: written.getAttribute(ExifInterface.TAG_DATETIME)
+                    val day = moment?.take(10)?.replace(':', '-')?.takeIf { Regex("[12]\\d{3}-\\d{2}-\\d{2}").matches(it) } ?: photo.day
+                    val place = FloatArray(2)
+                    return if (written.getLatLong(place)) Notes(day, place[0].toDouble(), place[1].toDouble()) else Notes(day, null, null)
+                }
+            } catch (problem: IOException) {
+                // not readable this way: the next
+            } catch (problem: SecurityException) {
+                // the place is not for this app to see: the picture without it
+            } catch (problem: UnsupportedOperationException) {
+                // the same, as some versions of Android say it
             }
-        } catch (problem: IOException) {
-            // not readable: Android's date will do
-        } catch (problem: SecurityException) {
-            // not allowed: the same
         }
-        return photo.day
+        return Notes(photo.day, null, null)
     }
 
     /** A small copy of a picture, as a JPEG: what the computer needs to know what the picture shows. */

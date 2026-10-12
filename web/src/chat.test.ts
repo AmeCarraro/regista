@@ -47,7 +47,7 @@ test('a search shows what was looked for, then the pictures, then what the app s
   ])
 
   expect(reply.parts.map((part) => part.kind)).toEqual(['search', 'photos', 'text'])
-  expect(reply.parts[0]).toEqual({ kind: 'search', description: 'a black dog', place: 'computer', period: '' })
+  expect(reply.parts[0]).toEqual({ kind: 'search', description: 'a black dog', place: 'computer', period: '', spot: '' })
   expect(reply.status).toBe('done')
   expect(reply.seconds).toBe(4.2)
 })

@@ -53,11 +53,12 @@ function PartView({ part, answers }: { part: Part; answers: Answers }) {
           {part.description ? (
             <>
               {part.place === 'phone' ? 'Cerco nelle foto del telefono:' : 'Cerco nelle foto:'} <q>{part.description}</q>
-              {part.period && <span>{part.period}</span>}
+              {(part.spot || part.period) && <span>{[part.spot && `scattate ${part.spot}`, part.period].filter(Boolean).join(' ')}</span>}
             </>
           ) : (
             <>
-              {part.place === 'phone' ? 'Cerco le foto del telefono' : 'Cerco le foto'} {part.period}
+              {part.place === 'phone' ? 'Cerco le foto del telefono' : 'Cerco le foto'}
+              {part.spot && ` scattate ${part.spot}`} {part.period}
             </>
           )}
         </p>

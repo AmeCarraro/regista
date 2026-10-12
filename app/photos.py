@@ -19,6 +19,7 @@ import numpy as np
 from PIL import Image, ImageOps
 
 from actions import NOT_LIBRARY
+from places import position_of
 
 KINDS = {".jpg", ".jpeg", ".png", ".webp"}
 BATCH = 16
@@ -50,18 +51,21 @@ def day_of(file: Path) -> str:
     return datetime.date.fromtimestamp(file.stat().st_mtime).isoformat()
 
 
-def closest(vectors: np.ndarray, sentence: np.ndarray | None, entries: list[dict], limit: int, period: tuple | None = None) -> dict:
+def closest(vectors: np.ndarray, sentence: np.ndarray | None, entries: list[dict], limit: int, period: tuple | None = None, only: list[int] | None = None) -> dict:
     """The pictures closest to a sentence, best first, split into sure matches and maybes.
 
     `entries` are the pictures, each with "id", "name" and "day", in the order of their
     fingerprints. With a `period` (first day, last day) only the pictures taken then are
-    looked at; without a sentence, all of them match, the newest first. At most `limit`
+    looked at, and with `only` just the ones at those positions of the list (the ones taken
+    in a place). Without a sentence, all of them match, the newest first. At most `limit`
     come back; "matching" says how many sure matches there are in all.
     """
     known = len(entries)
-    if period:
-        since, until = period[0].isoformat(), period[1].isoformat()
-        inside = [position for position, entry in enumerate(entries) if since <= entry.get("day", "") <= until]
+    if period or only is not None:
+        inside = list(range(known)) if only is None else only
+        if period:
+            since, until = period[0].isoformat(), period[1].isoformat()
+            inside = [position for position in inside if since <= entries[position].get("day", "") <= until]
         entries = [entries[position] for position in inside]
         vectors = vectors[inside] if inside else vectors[:0]
     if not entries:
@@ -82,10 +86,12 @@ def closest(vectors: np.ndarray, sentence: np.ndarray | None, entries: list[dict
 
 
 class PhotoIndex:
-    def __init__(self, photos_dir: str, index_dir: str, embedder):
+    def __init__(self, photos_dir: str, index_dir: str, embedder, places=None):
         self.photos_dir = Path(photos_dir)
         self.index_dir = Path(index_dir)
         self.embedder = embedder
+        # the table that turns a position into a country (places.py); without it pictures are not found by place
+        self.places = places
         # one entry per indexed picture: {"id", "path" relative to the folder, "stamp"}
         self.photos: list[dict] = []
         self.vectors = np.zeros((0, 0), dtype=np.float32)
@@ -111,6 +117,16 @@ class PhotoIndex:
         self.index_dir.mkdir(parents=True, exist_ok=True)
         np.save(self.index_dir / "vectors.npy", self.vectors)
         (self.index_dir / "photos.json").write_text(json.dumps({"model": self.embedder.name, "photos": self.photos}))
+
+    def _noted(self, file: Path) -> dict:
+        """What is written in a picture about itself: the day it was taken, and where, if its camera knew."""
+        position = position_of(file)
+        return {
+            "day": day_of(file),
+            "lat": position[0] if position else None,
+            "lon": position[1] if position else None,
+            "country": self.places.of(position) if self.places else "",
+        }
 
     def _files(self) -> list[Path]:
         if not self.photos_dir.is_dir():
@@ -149,11 +165,12 @@ class PhotoIndex:
             # a picture is the same as before if its size and its date are: no need to read it again
             stamp = f"{stat.st_size}-{int(stat.st_mtime)}"
             if relative in known and known[relative][0]["stamp"] == stamp:
-                # a picture read before days were kept gets its day now: it is written in the file, the picture is not read again
-                kept.append(known[relative][0] if "day" in known[relative][0] else {**known[relative][0], "day": day_of(file)})
+                # a picture read before days and places were kept gets them now: they are written in the file,
+                # and the picture itself is not read again
+                kept.append(known[relative][0] if "lat" in known[relative][0] else {**known[relative][0], **self._noted(file)})
                 vectors.append(known[relative][1])
             else:
-                todo.append((file, {"id": photo_id(relative), "path": relative, "stamp": stamp, "day": day_of(file)}))
+                todo.append((file, {"id": photo_id(relative), "path": relative, "stamp": stamp, **self._noted(file)}))
 
         self.state = {"running": True, "done": len(kept), "total": len(files), "error": ""}
         for first in range(0, len(todo), BATCH):
@@ -183,18 +200,20 @@ class PhotoIndex:
 
     # ---- searching
 
-    def search(self, description: str, limit: int = 60, period: tuple | None = None) -> dict:
+    def search(self, description: str, limit: int = 60, period: tuple | None = None, spot: dict | None = None) -> dict:
         """The pictures closest to a sentence, best first, split into sure matches and maybes.
 
-        With a `period` only the pictures taken in it; with no description, all of those.
-        At most `limit` pictures come back; "matching" says how many sure matches there are in all.
+        With a `period` only the pictures taken in it, with a `spot` only the ones taken
+        there; with no description, all of those. At most `limit` pictures come back;
+        "matching" says how many sure matches there are in all.
         """
         with self._swap:
             photos, vectors = self.photos, self.vectors
         if not photos:
             return closest(vectors, None, [], limit)
-        entries = [{"id": photo["id"], "name": Path(photo["path"]).name, "day": photo.get("day", "")} for photo in photos]
-        return closest(vectors, self.embedder.text(description) if description else None, entries, limit, period)
+        entries = [{**photo, "name": Path(photo["path"]).name} for photo in photos]
+        only = self.places.inside(spot, entries) if spot and self.places else None
+        return closest(vectors, self.embedder.text(description) if description else None, entries, limit, period, only)
 
     def forget(self, identifiers: list[str]) -> None:
         """Drops pictures from the index at once, without waiting for the folder to be read again."""

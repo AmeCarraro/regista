@@ -28,6 +28,8 @@ WORKDIR /app
 # Small libraries added after the first version go here, so that the large layers above are
 # not downloaded again: segno draws the QR code that lets a phone in.
 RUN pip install --no-cache-dir "segno>=1.6,<2"
+# the cities of the world with their position (GeoNames, CC BY 4.0): what turns the position of a picture into a place
+COPY data/geonames ./geonames
 COPY app/ .
 COPY --from=web /web/dist ./static
 # the index of the pictures lives in a volume mounted here, written by the app's own user
