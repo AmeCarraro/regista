@@ -200,8 +200,13 @@ class Actions:
             entry = self._record(self._name(), "receive", files, back=lambda file: None, folder=collection_name(folder))
             return {**entry, "count": len(files), "missing": 0, "failed": 0}
 
+    def cleared(self, of: str, count: int) -> None:
+        """Notes that pictures of an arrival were then taken off the phone they came from: the copies here are now the ones that stay."""
+        with self._lock:
+            self._append({"id": "", "kind": "cleared", "when": datetime.datetime.now().astimezone().isoformat(timespec="seconds"), "files": [], "of": of, "count": count})
+
     def history(self) -> list[dict]:
-        """Every change made so far, oldest first, each with whether it was taken back."""
+        """Every change made so far, oldest first, each with whether it was taken back, and how many of its pictures left their phone."""
         if not self.journal.exists():
             return []
         entries = []
@@ -211,7 +216,8 @@ class Actions:
             except ValueError:
                 continue  # a line cut short by a crash does not make the others unreadable
         undone = {entry["of"] for entry in entries if entry["kind"] == "undo"}
-        return [{**entry, "undone": entry["id"] in undone} for entry in entries]
+        cleared = {entry["of"]: entry.get("count", 0) for entry in entries if entry["kind"] == "cleared"}
+        return [{**entry, "undone": entry["id"] in undone, "cleared": cleared.get(entry["id"], 0)} for entry in entries if entry["kind"] != "cleared"]
 
     def last(self) -> dict | None:
         """The most recent change that can still be taken back."""
@@ -250,7 +256,8 @@ class Actions:
                 self._tidy(where.parent)
             if not failed:
                 self._append({"id": "", "kind": "undo", "when": datetime.datetime.now().astimezone().isoformat(timespec="seconds"), "files": files, "of": entry["id"]})
-            return {"kind": "undo", "undid": entry["kind"], "of": entry["id"], "files": files, "count": len(files), "missing": missing, "failed": failed, "folder": entry.get("folder", "")}
+            return {"kind": "undo", "undid": entry["kind"], "of": entry["id"], "files": files, "count": len(files), "missing": missing, "failed": failed,
+                    "folder": entry.get("folder", ""), "cleared": entry["cleared"]}
 
     def in_trash(self) -> int:
         """How many files are in the trash right now."""

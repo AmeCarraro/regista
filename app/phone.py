@@ -6,6 +6,11 @@ small copy of each of its pictures. The computer reads them as it reads its own,
 can be searched here; the pictures themselves stay on the phone until the user asks for
 some. Then the computer asks, and the phone sends the originals.
 
+The user can also ask to take pictures off the phone. Then the originals come here first,
+each checked against what the phone says it sent, and only the ones that arrived whole are
+named to the phone as pictures it may move to its own trash. Whether it does is for the
+user to say once more, on the phone, to Android itself.
+
 Everything travels encrypted, with a certificate this computer makes for itself. Its
 fingerprint is in the link, so the phone talks only to the computer it was shown.
 """
@@ -172,7 +177,7 @@ class Phones:
             self.devices = [known for known in self.devices if known["id"] != device]
             self._drop({photo["id"] for photo in self.photos if photo["device"] == device})
             for transfer in self.transfers:
-                if transfer["device"] == device and transfer["state"] == "waiting":
+                if transfer["device"] == device and transfer["state"] != "done":
                     transfer["state"] = "done"
             self._write("devices.json", self.devices)
             self._write("transfers.json", self.transfers)
@@ -303,10 +308,12 @@ class Phones:
         # a picture the phone no longer has cannot arrive: it is not waited for
         return [identifier for identifier in transfer["photos"] if identifier in known and identifier not in transfer["arrived"] and identifier not in transfer["missing"]]
 
-    def ask(self, identifiers: list[str], folder: str) -> dict:
+    def ask(self, identifiers: list[str], folder: str, then: str = "") -> dict:
         """Asks a phone for the originals of some of its pictures, to go into a folder of the collections.
 
         Nothing arrives now: the phone answers when its app is open. One phone at a time.
+        With `then` "trash", the phone is afterwards asked to move to its trash the pictures
+        that arrived here whole.
         """
         with self._lock:
             known = {photo["id"]: photo for photo in self.photos}
@@ -322,10 +329,16 @@ class Phones:
                 # short name of the picture -> where it is now, inside the picture folder
                 "arrived": {},
                 "missing": [],
+                # "waiting" for the originals, then "done"; in between, when the pictures are to leave the phone,
+                # "confirming": the copies are here and the phone is asking its user
                 "state": "waiting",
                 "asked": _now(),
                 # the name of the change in the journal, once everything has arrived
                 "entry": "",
+                "then": then,
+                # the pictures the phone moved to its trash, and why it moved none if it did not
+                "trashed": [],
+                "why": "",
             }
             self.transfers.append(transfer)
             self._write("transfers.json", self.transfers)
@@ -335,13 +348,24 @@ class Phones:
         return next((transfer for transfer in self.transfers if transfer["id"] == identifier), None)
 
     def work(self, device: str) -> list[dict]:
-        """What a phone is asked to send: for every request still open, the pictures that have not arrived yet."""
+        """What a phone is asked to do: for every request still open, the pictures to send that have
+        not arrived yet and, once they all have, the ones it may move to its trash."""
         with self._lock:
             media = {photo["id"]: photo["media"] for photo in self.photos}
+
+            def named(identifiers) -> list[dict]:
+                return [{"id": identifier, "media": media[identifier]} for identifier in identifiers if identifier in media]
+
             return [
-                {"id": transfer["id"], "photos": [{"id": identifier, "media": media[identifier]} for identifier in self._left(transfer)]}
+                {
+                    "id": transfer["id"],
+                    "then": transfer.get("then", ""),
+                    "photos": named(self._left(transfer)) if transfer["state"] == "waiting" else [],
+                    # only what is safely here
+                    "trash": named(transfer["arrived"]) if transfer["state"] == "confirming" else [],
+                }
                 for transfer in self.transfers
-                if transfer["device"] == device and transfer["state"] == "waiting"
+                if transfer["device"] == device and transfer["state"] != "done"
             ]
 
     def expected(self, transfer: str, device: str, identifier: str) -> dict:
@@ -350,7 +374,7 @@ class Phones:
             found = self.transfer(transfer)
             if found is None or found["device"] != device or found["state"] != "waiting" or identifier not in self._left(found):
                 raise Refused("Questa foto non è stata chiesta.")
-            return {"folder": found["folder"], "name": next(photo["name"] for photo in self.photos if photo["id"] == identifier)}
+            return {"folder": found["folder"], "name": next(photo["name"] for photo in self.photos if photo["id"] == identifier), "then": found.get("then", "")}
 
     def settle(self, transfer: str, device: str, arrived: dict | None = None, missing: list[str] | None = None) -> dict | None:
         """Notes pictures that arrived, or that the phone could not send. Returns the request if this was its last picture."""
@@ -362,9 +386,28 @@ class Phones:
             found["missing"].extend(identifier for identifier in missing or [] if identifier in found["photos"] and identifier not in found["missing"])
             finished = not self._left(found)
             if finished:
-                found["state"] = "done"
+                # pictures that are to leave the phone, and are here: now it is for the phone to ask its user
+                found["state"] = "confirming" if found.get("then") == "trash" and found["arrived"] else "done"
             self._write("transfers.json", self.transfers)
             return found if finished else None
+
+    def trashed(self, transfer: str, device: str, identifiers: list[str], why: str = "") -> dict | None:
+        """Notes what a phone did with the pictures it could move to its trash: which ones it moved, or why none.
+
+        Only pictures that had arrived here count, whatever the phone says. They are no
+        longer among the pictures of the phone.
+        """
+        with self._lock:
+            found = self.transfer(transfer)
+            if found is None or found["device"] != device or found["state"] != "confirming":
+                return None
+            found["trashed"] = [identifier for identifier in dict.fromkeys(identifiers) if identifier in found["arrived"]]
+            found["why"] = "" if found["trashed"] else why
+            found["state"] = "done"
+            self._drop(set(found["trashed"]))
+            self._write("transfers.json", self.transfers)
+            self.save()
+            return found
 
     def close(self, transfer: str, entry: str) -> None:
         """Writes on a finished request the name its pictures have in the journal of changes."""

@@ -1,4 +1,5 @@
 """The door of the phones, with a phone played by the test: letting it in, learning its pictures, receiving the originals."""
+import hashlib
 import json
 from urllib.parse import parse_qs, urlparse
 
@@ -106,6 +107,33 @@ def test_another_page_cannot_ask_for_a_change_at_either_door(home):
     assert phone.post("/phone/library/done", headers={**key, "Origin": "https://192.168.1.23:8443"}).status_code == 200
 
 
+def test_a_request_cannot_carry_more_than_it_has_reason_to(home):
+    stranger = a_phone()
+    json_body = {"Content-Type": "application/json"}
+
+    # the request that lets a phone in is heard before any key is shown: it is a secret and a name, not a way to fill the memory
+    assert stranger.post("/phone/pair", content=b'{"secret": "' + b"x" * 5000 + b'"}', headers=json_body).status_code == 413
+    # nor when its size is left unsaid: what is too much is not read
+    unsaid = stranger.post("/phone/pair", content=iter([b'{"secret": "', b"x" * 5000, b'"}']), headers=json_body)
+    assert unsaid.status_code == 400
+    # at the computer's door too
+    assert client.post("/api/chat", content=b"x" * (main.BODY + 1), headers=json_body).status_code == 413
+    # what has a reason to be large still passes: a real secret is refused for being wrong, not for its size
+    assert stranger.post("/phone/pair", json={"secret": "a guess", "name": "x"}).status_code == 403
+
+
+def test_every_answer_tells_the_browser_to_keep_the_page_to_itself(home):
+    refused = client.post("/api/phone/invite", headers={"Origin": "https://pictures.example.com"})
+
+    for answer in (client.get("/api/photos"), refused, a_phone().get("/")):
+        # no other page can show this one inside itself, and the page loads nothing from elsewhere
+        assert "frame-ancestors 'none'" in answer.headers["content-security-policy"]
+        assert "default-src 'self'" in answer.headers["content-security-policy"]
+        assert answer.headers["x-frame-options"] == "DENY" and answer.headers["x-content-type-options"] == "nosniff"
+    # and the service does not list what it can do
+    assert client.get("/api/docs").status_code == 404 and client.get("/api/openapi.json").status_code == 404
+
+
 def test_what_a_phone_says_is_not_heard_at_the_door_of_the_computer(home):
     assert client.post("/phone/pair", json={"secret": "x", "name": "x"}).status_code == 404
     assert client.get("/phone/work").status_code == 404
@@ -181,6 +209,100 @@ def test_pictures_asked_of_a_phone_arrive_in_a_folder_and_can_be_taken_back(home
     back = client.post("/api/actions/undo", json={"of": done["entry"]}).json()
     assert back["text"] == "Annullato: ho tolto le 2 copie dalla cartella «Mare». Sul telefono le foto ci sono ancora."
     assert not (folder / "Raccolte").exists() and client.get("/api/actions").json()["trash"] == 2
+
+
+def sha(data: bytes) -> dict:
+    """What a phone says of a picture it sends: the fingerprint of its bytes."""
+    return {"X-Regista-Sha256": hashlib.sha256(data).hexdigest()}
+
+
+def with_two_pictures():
+    """A phone that was let in and has told the computer of two pictures. Returns it, its key and the short names of the pictures."""
+    phone, key, _ = let_in()
+    phone.post("/phone/photos", json={"photos": [shot("41", "blue", name="mare.jpg"), shot("42", "blue", name="lago.jpg")]}, headers=key)
+    return phone, key, [photo["id"] for photo in main.phones.photos]
+
+
+def test_pictures_leave_a_phone_only_after_a_checked_copy_here_and_a_yes_on_the_phone(home):
+    phones, folder = home
+    phone, key, ids = with_two_pictures()
+    kept = folder / "Raccolte" / "Tolte dal telefono"
+
+    # the yes in the page: the phone is asked for the pictures, and nothing has left it
+    asked = client.post("/api/actions", json={"action": "clear", "ids": ids}).json()
+    assert asked["kind"] == "clear" and asked["folder"] == "Tolte dal telefono" and asked["text"].startswith("Ho chiesto al telefono 2 foto. Quando sono al sicuro")
+    job = phone.get("/phone/work", headers=key).json()["transfers"][0]
+    assert job["then"] == "trash" and len(job["photos"]) == 2 and job["trash"] == []
+    first, second = (f"/phone/transfers/{job['id']}/photos/{photo['id']}" for photo in job["photos"])
+
+    # a picture that is to leave the phone must say what it is, and arrive as that
+    assert phone.put(first, content=b"original 1", headers=key).status_code == 400
+    assert phone.put(first, content=b"original", headers={**key, **sha(b"original 1")}).status_code == 400
+    assert not list(kept.glob("*")), "a picture that did not arrive whole is not kept"
+    assert phone.put(first, content=b"original 1", headers={**key, **sha(b"original 1")}).json() == {"kept": True}
+    # until every picture is here the phone is not told it may throw anything away
+    assert phone.get("/phone/work", headers=key).json()["transfers"][0]["trash"] == []
+    assert phone.put(second, content=b"original 2", headers={**key, **sha(b"original 2")}).json() == {"kept": True}
+    assert sorted(path.read_bytes() for path in kept.iterdir()) == [b"original 1", b"original 2"]
+
+    # now it is: the copies are here, and the phone asks its user
+    waiting = client.get(f"/api/transfers/{asked['transfer']}").json()
+    assert waiting["state"] == "confirming" and waiting["text"].startswith("Le 2 foto sono al sicuro sul computer, nella cartella «Tolte dal telefono».")
+    job = phone.get("/phone/work", headers=key).json()["transfers"][0]
+    assert job["photos"] == [] and sorted(photo["media"] for photo in job["trash"]) == ["41", "42"]
+    assert len(phones.photos) == 2
+
+    # the user said yes on the phone: the pictures are no longer among the phone's
+    said = phone.post(f"/phone/transfers/{job['id']}/trashed", json={"ids": [photo["id"] for photo in job["trash"]]}, headers=key)
+    assert said.json() == {"noted": True}
+    done = client.get(f"/api/transfers/{asked['transfer']}").json()
+    assert done["state"] == "done" and sorted(done["gone"]) == sorted(ids)
+    assert done["text"] == "Fatto: 2 foto tolte dal telefono. Restano 30 giorni nel suo cestino, e una copia è sul computer nella cartella «Tolte dal telefono»."
+    assert phones.photos == [] and phone.get("/phone/work", headers=key).json() == {"transfers": []}
+    # the copies here are now the ones that stay: no way back at a click, and in words it is said for what it is
+    assert done["entry"] == ""
+    last = main.actions.last()
+    assert (last["kind"], last["cleared"], len(last["files"])) == ("receive", 2, 2)
+    # said twice, it is heard once
+    assert phone.post(f"/phone/transfers/{job['id']}/trashed", json={"ids": []}, headers=key).json() == {"noted": False}
+
+
+def test_a_no_on_the_phone_leaves_its_pictures_and_keeps_the_copies(home):
+    phones, folder = home
+    phone, key, ids = with_two_pictures()
+    asked = client.post("/api/actions", json={"action": "clear", "ids": ids}).json()
+    job = phone.get("/phone/work", headers=key).json()["transfers"][0]
+    for photo in job["photos"]:
+        phone.put(f"/phone/transfers/{job['id']}/photos/{photo['id']}", content=b"original", headers={**key, **sha(b"original")})
+
+    phone.post(f"/phone/transfers/{job['id']}/trashed", json={"ids": [], "why": "declined"}, headers=key)
+
+    done = client.get(f"/api/transfers/{asked['transfer']}").json()
+    assert done["text"] == "Sul telefono hai detto di no: le foto sono rimaste dov'erano. La copia è sul computer, nella cartella «Tolte dal telefono»."
+    assert done["gone"] == [] and len(phones.photos) == 2
+    # what happened is a copy like any other, and can be taken back like one
+    back = client.post("/api/actions/undo", json={"of": done["entry"]}).json()
+    assert back["text"] == "Annullato: ho tolto le 2 copie dalla cartella «Tolte dal telefono». Sul telefono le foto ci sono ancora."
+
+
+def test_a_phone_cannot_say_it_threw_away_what_never_arrived_here(home):
+    phones, folder = home
+    phone, key, ids = with_two_pictures()
+    asked = client.post("/api/actions", json={"action": "clear", "ids": ids}).json()
+    job = phone.get("/phone/work", headers=key).json()["transfers"][0]
+    arrived, lost = job["photos"]
+    phone.put(f"/phone/transfers/{job['id']}/photos/{arrived['id']}", content=b"original", headers={**key, **sha(b"original")})
+    # too early: one picture is still awaited
+    assert phone.post(f"/phone/transfers/{job['id']}/trashed", json={"ids": ids}, headers=key).json() == {"noted": False}
+    phone.post(f"/phone/transfers/{job['id']}/missing", json={"ids": [lost["id"]]}, headers=key)
+
+    # only the one that is here may go, and only that one is believed gone
+    assert [photo["id"] for photo in phone.get("/phone/work", headers=key).json()["transfers"][0]["trash"]] == [arrived["id"]]
+    phone.post(f"/phone/transfers/{job['id']}/trashed", json={"ids": ids}, headers=key)
+
+    done = client.get(f"/api/transfers/{asked['transfer']}").json()
+    assert done["gone"] == [arrived["id"]] and [photo["id"] for photo in phones.photos] == [lost["id"]]
+    assert done["text"].startswith("Fatto: 1 foto tolta dal telefono.") and done["text"].endswith("1 foto il telefono non è riuscito a mandarla: non la ho toccata.")
 
 
 def test_a_picture_the_phone_cannot_send_ends_the_wait(home):

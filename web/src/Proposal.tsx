@@ -44,6 +44,13 @@ function wording(proposed: Proposed): { icon: ReactNode; title: string; hint: st
         hint: 'Sul telefono restano dove sono.',
         yes: count === 1 ? 'Copia 1 foto dal telefono' : `Copia ${count} foto dal telefono`,
       }
+    case 'clear':
+      return {
+        icon: <icons.Phone />,
+        title: 'Togli dal telefono',
+        hint: `Prima una copia sul computer, in «${proposal.folder}». Poi nel cestino del telefono, dopo un sì anche lì.`,
+        yes: count === 1 ? 'Togli 1 foto dal telefono' : `Togli ${count} foto dal telefono`,
+      }
     case 'undo': {
       const at = clock(proposal.when)
       const what =

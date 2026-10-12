@@ -8,7 +8,9 @@ numbers in a reply are counted by the app and never written by a model.
 
 A model never changes a picture. A request to throw away, copy or undo becomes a
 proposal: the page shows it, and it is carried out only when the user says yes there
-(main.py). So a wrong decision costs a click on "no", and nothing else.
+(main.py). So a wrong decision costs a click on "no", and nothing else. Pictures on a
+phone are thrown away by the phone, into its own trash, after a copy has arrived here
+and after a second yes, given on the phone to Android itself.
 
 The decision is a form, with examples, because a small model left free to call tools
 calls them too often: asked for advice on taking pictures, it searched the pictures.
@@ -78,6 +80,7 @@ DECIDE = (
     'le foto del mare di agosto 2024 -> {"action": "find_photos", "caption": "the sea", "folder": ""}\n'
     'prendi dal telefono le foto della neve e salvale sul computer nella cartella Neve -> {"action": "copy_photos", "caption": "snow", "folder": "Neve"}\n'
     'ripensandoci, rimettile dove erano -> {"action": "undo", "caption": "", "folder": ""}\n'
+    'elimina dal telefono le foto dei tramonti -> {"action": "trash_photos", "caption": "a sunset", "folder": ""}\n'
     'come si elimina una foto dal telefono? -> {"action": "answer", "caption": "", "folder": ""}'
 )
 DECISION = {
@@ -112,7 +115,8 @@ NOTHING_TO_UNDO = "Non c'è niente da annullare: non ho ancora spostato né copi
 READ_ONLY = "La cartella delle foto mi è stata data in sola lettura: posso cercare, ma non spostare né copiare."
 NO_PHONE = "Non c'è nessun telefono collegato. Collegane uno dal pannello, alla voce «Telefono»."
 PHONE_EMPTY = "Il telefono è collegato, ma non mi ha ancora mandato le sue foto: apri Regista sul telefono e lascialo finire."
-PHONE_ONLY_COPIES = "Dal telefono per ora posso solo copiare le foto sul computer: non le cancello."
+# where the copies of pictures taken off a phone are kept, among the collections
+REMOVED = "Tolte dal telefono"
 
 
 def _photos(count: int) -> str:
@@ -164,6 +168,9 @@ def proposed_in_words(kind: str, count: int, folder: str, every: int = 0) -> str
         text = f"Sposto nel cestino {these}? Restano sul disco, e le riporto dov'erano quando vuoi."
     elif kind == "fetch":
         text = f"Copio dal telefono al computer {these}, {into} Sul telefono restano dove sono."
+    elif kind == "clear":
+        text = (f"Tolgo dal telefono {these}? Prima le copio sul computer, nella cartella «{folder}», e controllo che siano arrivate intere. "
+                "Poi il telefono le sposta nel suo cestino, dove restano 30 giorni: te lo chiederà Android.")
     else:
         text = f"Copio {these} {into} Gli originali restano dove sono."
     if every > count:
@@ -178,6 +185,11 @@ def undo_proposed_in_words(entry: dict) -> str:
         back = "La rimetto al suo posto?" if count == 1 else "Le rimetto al loro posto?"
         return f"L'ultima modifica è stata spostare {_photos(count)} nel cestino. {back}"
     copies = "quella copia" if count == 1 else "quelle copie"
+    if entry["kind"] == "receive" and entry.get("cleared"):
+        # the pictures left the phone: what can be taken back from here is only the copy, and the user must know
+        return (f"L'ultima modifica è stata togliere {_photos(entry['cleared'])} dal telefono, dopo averle copiate nella cartella «{entry.get('folder', '')}». "
+                "Sul telefono le riprendi dal cestino della galleria, finché ci restano. "
+                f"Da qui posso solo togliere dal computer {copies}: lo faccio?")
     if entry["kind"] == "receive":
         return f"L'ultima modifica è stata copiare {_photos(count)} dal telefono nella cartella «{entry.get('folder', '')}». Tolgo {copies}? Sul telefono le foto restano."
     return f"L'ultima modifica è stata copiare {_photos(count)} nella cartella «{entry.get('folder', '')}». Tolgo {copies}? Gli originali non vengono toccati."
@@ -215,7 +227,12 @@ def undone_in_words(result: dict) -> tuple[str, str]:
             text = "Nel cestino quelle foto non ci sono più: non ho potuto rimetterle a posto."
         memory = f"The change was undone: {count} photos were restored from the trash."
     else:
-        still = "Sul telefono le foto ci sono ancora." if result["undid"] == "receive" else "Gli originali sono al loro posto."
+        if result["undid"] != "receive":
+            still = "Gli originali sono al loro posto."
+        elif result.get("cleared"):
+            still = "Sul telefono le trovi nel cestino della galleria, finché ci restano."
+        else:
+            still = "Sul telefono le foto ci sono ancora."
         text = f"Annullato: ho tolto {'la copia' if count == 1 else f'le {count} copie'} dalla cartella «{result['folder']}». {still}"
         memory = f'The change was undone: {count} copies were removed from the folder "{result["folder"]}".'
     if stuck := result.get("failed"):
@@ -223,8 +240,13 @@ def undone_in_words(result: dict) -> tuple[str, str]:
     return text, memory
 
 
-def asked_in_words(count: int, folder: str) -> tuple[str, str]:
+def asked_in_words(count: int, folder: str, clear: bool = False) -> tuple[str, str]:
     """What is said when a phone has been asked for pictures and they have not arrived yet."""
+    if clear:
+        return (
+            f"Ho chiesto al telefono {_photos(count)}. Quando sono al sicuro sul computer, il telefono ti chiede di spostarle nel suo cestino. Tieni Regista aperto sul telefono.",
+            f'The user confirmed: the phone was asked for {count} photos, to be copied into the folder "{folder}" and then moved to the trash of the phone. Nothing has left the phone yet.',
+        )
     return (
         f"Ho chiesto al telefono {_photos(count)}. Arrivano quando Regista è aperto sul telefono.",
         f'The user confirmed: the phone was asked for {count} photos, to be copied into the folder "{folder}". They arrive when the phone app is open.',
@@ -240,6 +262,31 @@ def received_in_words(arrived: int, missing: int, folder: str) -> tuple[str, str
     if missing:
         text += f" {_photos(missing).capitalize()} il telefono non è riuscito a mandarl{'a' if missing == 1 else 'e'}."
     return text, f'{arrived} photos arrived from the phone into the folder "{folder}".'
+
+
+def confirming_in_words(arrived: int, folder: str) -> str:
+    """What is said while the phone asks its user whether the pictures, now copied, may go to its trash."""
+    safe = "La foto è al sicuro" if arrived == 1 else f"Le {arrived} foto sono al sicuro"
+    return f"{safe} sul computer, nella cartella «{folder}». Ora rispondi sul telefono alla domanda di Android, che le sposta nel suo cestino."
+
+
+def cleared_in_words(arrived: int, trashed: int, missing: int, why: str, folder: str) -> tuple[str, str]:
+    """What is said when a request to take pictures off a phone has ended, however it ended."""
+    kept = f"La copia è sul computer, nella cartella «{folder}»."
+    if not arrived:
+        text = "Dal telefono non è arrivata nessuna foto, quindi non ne ho tolta nessuna."
+    elif trashed:
+        text = (f"Fatto: {_photos(trashed)} tolt{'a' if trashed == 1 else 'e'} dal telefono. "
+                f"{'Resta' if trashed == 1 else 'Restano'} 30 giorni nel suo cestino, e una copia è sul computer nella cartella «{folder}».")
+        if arrived > trashed:
+            text += f" {_photos(arrived - trashed).capitalize()} sul telefono {'è rimasta' if arrived - trashed == 1 else 'sono rimaste'} dov'{'era' if arrived - trashed == 1 else 'erano'}."
+    elif why == "old":
+        text = f"Questo telefono non ha un cestino che io possa usare (serve Android 11 o più recente): le foto sono rimaste dov'erano. {kept}"
+    else:
+        text = f"Sul telefono hai detto di no: le foto sono rimaste dov'erano. {kept}"
+    if missing:
+        text += f" {_photos(missing).capitalize()} il telefono non è riuscito a mandarl{'a' if missing == 1 else 'e'}: non l{'a' if missing == 1 else 'e'} ho toccat{'a' if missing == 1 else 'e'}."
+    return text, f'{arrived} photos were copied from the phone into the folder "{folder}"; {trashed} of them were then moved to the trash of the phone.'
 
 
 def _searched(caption: str, phone: bool, when: tuple | None, there: str = "") -> str:
@@ -305,12 +352,13 @@ def propose(decision: dict, photos, actions, selection: list[str], phones=None, 
     if away:
         if phones is None or not phones.devices:
             return only(NO_PHONE, "No phone is connected.")
-        if kind == "trash":
-            return only(PHONE_ONLY_COPIES, "The user asked to delete photos on the phone: that cannot be done yet.")
         if not phones.photos:
             return only(PHONE_EMPTY, "The phone has not sent its photos yet.")
-        kind = "fetch"
-    if kind != "trash":
+        # thrown away on a phone means: a copy here first, and then the phone's own trash
+        kind = "clear" if kind == "trash" else "fetch"
+    if kind == "clear":
+        folder = REMOVED
+    elif kind != "trash":
         try:
             folder = collection_name(decision["folder"])
         except Refused:
@@ -336,7 +384,12 @@ def propose(decision: dict, photos, actions, selection: list[str], phones=None, 
             return only(WHICH_ONES, "No photos were chosen, so nothing was proposed.")
 
     into = f'into the folder "{folder}"' if folder else "into a folder that has no name yet"
-    what = {"trash": "move them to the trash", "copy": f"copy them {into}", "fetch": f"copy them from the phone to the computer, {into}"}[kind]
+    what = {
+        "trash": "move them to the trash",
+        "copy": f"copy them {into}",
+        "fetch": f"copy them from the phone to the computer, {into}",
+        "clear": f"copy them from the phone to the computer, {into}, and then move them to the trash of the phone",
+    }[kind]
     # with the caption, so that the next request can build on this search too
     searched = f"{_searched(caption, away, when, spot['name'] if there else '')}: {every} found. " if caption or when or there else ""
     return {

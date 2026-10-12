@@ -3,6 +3,9 @@
 It does what the Android app does: it is let in with the link shown on the page, checks
 that the computer is the one the link names, sends a small copy of every picture of a
 folder (its "gallery"), and then waits for requests and sends the originals asked for.
+When the computer says that pictures may go to the phone's trash, it answers as its user
+would with --trash yes or --trash no: with yes the files move to a folder ".cestino" inside
+the gallery, which plays the part of the phone's trash. Nothing is ever deleted.
 
     python tools/pretend_phone.py "regista://pair?..." --gallery some/folder --address 127.0.0.1
 
@@ -51,6 +54,9 @@ class Computer:
         connection = self._connect()
         try:
             headers = {"Authorization": f"Bearer {self.key}"} if self.key else {}
+            if raw is not None:
+                # what the picture is: the computer checks what arrives against it
+                headers["X-Regista-Sha256"] = hashlib.sha256(raw).hexdigest()
             if body is not None:
                 raw, headers["Content-Type"] = json.dumps(body).encode(), "application/json"
             connection.request(method, path, body=raw, headers=headers)
@@ -104,6 +110,7 @@ def main() -> None:
     parser.add_argument("--name", default="Telefono di prova")
     parser.add_argument("--memory", type=Path, default=Path("pretend_phone.json"), help="where this phone keeps its key, as a real one does")
     parser.add_argument("--once", action="store_true", help="send what is asked for now and stop, instead of waiting for more")
+    parser.add_argument("--trash", choices=["yes", "no"], default="no", help="what the user of this phone answers when asked whether pictures may go to its trash")
     arguments = parser.parse_args()
     # line by line also when the output goes to a file: whoever watches it sees what happens as it happens
     sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
@@ -131,7 +138,9 @@ def main() -> None:
     else:
         raise SystemExit("This phone was never let in: give it the link the page shows.")
 
-    files = {path.relative_to(arguments.gallery).as_posix(): path for path in sorted(arguments.gallery.rglob("*")) if path.suffix.lower() in KINDS}
+    trash = arguments.gallery / ".cestino"
+    files = {path.relative_to(arguments.gallery).as_posix(): path for path in sorted(arguments.gallery.rglob("*"))
+             if path.suffix.lower() in KINDS and trash not in path.parents}
     listing = [{"id": name, "stamp": f"{path.stat().st_size}-{int(path.stat().st_mtime)}"} for name, path in files.items()]
     stamps = {item["id"]: item["stamp"] for item in listing}
     wanted = computer.ask("POST", "/phone/library", {"photos": listing})["wanted"]
@@ -153,6 +162,16 @@ def main() -> None:
                         continue
                     computer.ask("PUT", f"/phone/transfers/{transfer['id']}/photos/{quote(photo['id'])}", raw=path.read_bytes())
                     print(f"sent {path.name}")
+                if transfer.get("trash"):
+                    moved = []
+                    for photo in transfer["trash"] if arguments.trash == "yes" else []:
+                        path = files.pop(photo["media"], None)
+                        if path is not None and path.exists():
+                            trash.mkdir(exist_ok=True)
+                            path.rename(trash / path.name)
+                        moved.append(photo["id"])
+                    computer.ask("POST", f"/phone/transfers/{transfer['id']}/trashed", {"ids": moved, "why": "" if moved else "declined"})
+                    print(f"asked about the trash for {len(transfer['trash'])} pictures: {'moved' if moved else 'the user said no'}")
         except OSError as problem:
             # the computer is off or out of reach: a phone keeps trying, it does not give up
             print(f"the computer does not answer ({problem}): trying again")

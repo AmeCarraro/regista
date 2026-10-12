@@ -1,5 +1,6 @@
 package app.regista
 
+import android.os.Build
 import android.util.Base64
 import org.json.JSONArray
 import org.json.JSONObject
@@ -10,7 +11,9 @@ import java.io.IOException
  * tells it which pictures the phone has and sends a small copy of the ones it does not
  * know; then it waits for requests, and sends the originals the user asked for.
  *
- * Nothing here changes or deletes a picture: the phone only reads its own.
+ * Nothing here changes or deletes a picture. When the user asked to take pictures off the
+ * phone, and the computer says their copies are safely there, the question goes to Android,
+ * which asks the user and moves them to the phone's trash itself.
  */
 class Link(
     private val memory: Memory,
@@ -21,6 +24,12 @@ class Link(
     private val tell: (String) -> Unit,
     /** The computer no longer knows this phone. */
     private val shutOut: () -> Unit,
+    /**
+     * Pictures whose copies are on the computer may go to this phone's trash: the user is to be
+     * asked. A request of the computer, its pictures as (the computer's name, the phone's number),
+     * and the names of the ones that have gone already.
+     */
+    private val clear: (transfer: String, pictures: List<Pair<String, Long>>, gone: List<String>) -> Unit,
 ) : Thread("link") {
     @Volatile private var open = true
 
@@ -135,31 +144,67 @@ class Link(
     private fun send(computer: Computer): Boolean {
         val transfers = computer.ask("GET", "/phone/work").getJSONArray("transfers")
         val total = (0 until transfers.length()).sumOf { transfers.getJSONObject(it).getJSONArray("photos").length() }
-        if (total == 0) return false
 
         var sent = 0
+        var settled = false
         for (index in 0 until transfers.length()) {
             val transfer = transfers.getJSONObject(index)
             val asked = transfer.getJSONArray("photos")
+            // a picture that is to leave the phone is sent whole, or not at all
+            val whole = transfer.optString("then") == "trash"
             val missing = JSONArray()
             for (position in 0 until asked.length()) {
                 if (!open) return true
                 val photo = asked.getJSONObject(position)
-                val source = photo.getString("media").toLongOrNull()?.let { gallery.open(it) }
-                if (source == null) {
-                    // deleted from the phone since the computer saw it
+                val source = photo.getString("media").toLongOrNull()?.let { gallery.source(it, whole) }
+                val fingerprint = source?.let { gallery.fingerprint(it) }
+                val stream = if (source != null && fingerprint != null) gallery.open(source) else null
+                if (stream == null || fingerprint == null) {
+                    // deleted from the phone since the computer saw it, or not readable as it must be
                     missing.put(photo.getString("id"))
                     continue
                 }
-                computer.send("/phone/transfers/${transfer.getString("id")}/photos/${photo.getString("id")}", -1, source)
+                computer.send("/phone/transfers/${transfer.getString("id")}/photos/${photo.getString("id")}", -1, stream, fingerprint)
                 sent += 1
                 tell("Mando le foto al computer: $sent di $total")
             }
             if (missing.length() > 0) {
                 computer.ask("POST", "/phone/transfers/${transfer.getString("id")}/missing", JSONObject().put("ids", missing))
             }
+            if (offer(computer, transfer)) settled = true
         }
-        tell(if (sent == total) "Fatto: $sent foto mandate al computer." else "Mandate $sent foto su $total: le altre non sono più su questo telefono.")
-        return true
+        if (total > 0) tell(if (sent == total) "Fatto: $sent foto mandate al computer." else "Mandate $sent foto su $total: le altre non le ho potute mandare.")
+        return total > 0 || settled
+    }
+
+    /**
+     * The pictures of a request that the computer has safely, and that the user asked to take
+     * off this phone: Android is asked to move them to its trash, and asks the user. Says
+     * whether the request was closed here, without a question.
+     */
+    private fun offer(computer: Computer, transfer: JSONObject): Boolean {
+        val named = transfer.optJSONArray("trash") ?: return false
+        val pictures = (0 until named.length()).map { named.getJSONObject(it) }.mapNotNull { one ->
+            one.getString("media").toLongOrNull()?.let { one.getString("id") to it }
+        }
+        if (pictures.isEmpty()) return false
+        val answer = "/phone/transfers/${transfer.getString("id")}/trashed"
+        if (Build.VERSION.SDK_INT < 30) {
+            // before Android 11 a phone has no trash an app can ask for: the pictures stay
+            computer.ask("POST", answer, JSONObject().put("ids", JSONArray()).put("why", "old"))
+            tell("Questo telefono non ha un cestino che io possa usare: le foto restano qui, e una copia è sul computer.")
+            return true
+        }
+        // one that is no longer in the gallery has gone already: by a yes whose news did not reach the computer
+        val there = gallery.present(pictures.map { it.second })
+        val gone = pictures.filter { it.second !in there }.map { it.first }
+        val left = pictures.filter { it.second in there }
+        if (left.isEmpty()) {
+            computer.ask("POST", answer, JSONObject().put("ids", JSONArray(gone)))
+            return true
+        }
+        tell("Le copie sono sul computer: rispondi alla domanda per spostare le foto nel cestino.")
+        clear(transfer.getString("id"), left, gone)
+        return false
     }
 }

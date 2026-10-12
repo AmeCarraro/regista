@@ -13,6 +13,7 @@ import android.util.Size
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
+import java.security.MessageDigest
 import java.time.Instant
 import java.time.ZoneId
 
@@ -25,7 +26,10 @@ class Photo(val id: Long, val name: String, val stamp: String, val day: String)
 /** What a picture says about itself: the day it was taken and, if known, where, in degrees. */
 class Notes(val day: String, val latitude: Double?, val longitude: Double?)
 
-/** The pictures of this phone, read through Android's own list of them. Nothing here changes a picture. */
+/**
+ * The pictures of this phone, read through Android's own list of them. Nothing here changes a
+ * picture: moving some to the phone's trash is asked of Android, which asks the user (MainActivity).
+ */
 class Gallery(private val context: Context) {
     private val pictures: Uri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
 
@@ -106,12 +110,66 @@ class Gallery(private val context: Context) {
         null
     }
 
-    /** The picture itself, to be read from start to end. */
-    fun open(id: Long): InputStream? = try {
-        context.contentResolver.openInputStream(address(id))
+    /**
+     * How to read a picture from start to end. As its camera wrote it, if Android allows: that
+     * is the picture, place included. Otherwise as Android hands it to an app, with the place
+     * taken out; but not when `whole` is asked for, as for a picture that is about to leave the
+     * phone: a copy with something missing is not the copy to keep.
+     */
+    fun source(id: Long, whole: Boolean): Uri? {
+        val written = MediaStore.setRequireOriginal(address(id))
+        if (readable(written)) return written
+        return address(id).takeIf { !whole && readable(it) }
+    }
+
+    private fun readable(picture: Uri): Boolean = try {
+        context.contentResolver.openInputStream(picture)?.use { it.read() >= 0 } ?: false
+    } catch (problem: IOException) {
+        false
+    } catch (problem: SecurityException) {
+        false
+    } catch (problem: UnsupportedOperationException) {
+        false
+    }
+
+    fun open(source: Uri): InputStream? = try {
+        context.contentResolver.openInputStream(source)
     } catch (problem: IOException) {
         null
     } catch (problem: SecurityException) {
         null
+    }
+
+    /** What tells these bytes from any others: the computer checks it against what arrives. */
+    fun fingerprint(source: Uri): String? {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val stream = open(source) ?: return null
+        return try {
+            stream.use { input ->
+                val buffer = ByteArray(64 * 1024)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    digest.update(buffer, 0, read)
+                }
+            }
+            digest.digest().joinToString("") { "%02x".format(it) }
+        } catch (problem: IOException) {
+            null
+        }
+    }
+
+    /** The name Android knows a picture by, for the question that moves it to the trash. */
+    fun named(id: Long): Uri = address(id)
+
+    /** Which of some pictures are still in the gallery: one moved to the trash, or deleted, is not. */
+    fun present(ids: List<Long>): Set<Long> {
+        if (ids.isEmpty()) return emptySet()
+        val there = mutableSetOf<Long>()
+        val among = "${MediaStore.Images.Media._ID} IN (${ids.joinToString(",")})"
+        context.contentResolver.query(pictures, arrayOf(MediaStore.Images.Media._ID), among, null, null)?.use { rows ->
+            while (rows.moveToNext()) there += rows.getLong(0)
+        }
+        return there
     }
 }

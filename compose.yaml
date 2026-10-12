@@ -18,6 +18,8 @@ services:
       HOST_NAME: ${HOST_NAME:-}
       HOST_GPU_NAME: ${HOST_GPU_NAME:-}
       HOST_GPU_MB: ${HOST_GPU_MB:-0}
+      # "nvidia", or "other" for a card Ollama may or may not use
+      HOST_GPU_KIND: ${HOST_GPU_KIND:-}
       HOST_RAM_MB: ${HOST_RAM_MB:-0}
       HOST_CORES: ${HOST_CORES:-0}
       # the folder as the user knows it, to show it in the page

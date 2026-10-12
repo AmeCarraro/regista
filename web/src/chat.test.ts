@@ -177,7 +177,7 @@ test('a model is described by what it is for and by where it runs', () => {
 
 test('the models offered for talking come in the order the app prefers', () => {
   const models: Models = {
-    hardware: { gpu: '', gpu_gb: 0, ram_gb: 8, cores: 4 },
+    hardware: { gpu: '', gpu_gb: 0, ram_gb: 8, cores: 4, unproven_gb: 0 },
     models: [model('b'), model('embed', { can: [] }), model('a')],
     order: { tools: ['a'], chat: ['a', 'b'], vision: [] },
     suggested: null,

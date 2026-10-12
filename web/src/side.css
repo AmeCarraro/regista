@@ -87,6 +87,14 @@
   color: var(--muted);
 }
 
+/* a line about the fact above it, not a fact of its own */
+.facts li.note {
+  border-top: 0;
+  padding-top: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
 .facts b {
   font-weight: 550;
   text-align: right;

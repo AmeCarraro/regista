@@ -37,6 +37,8 @@ class Hardware:
     gpu_gb: float
     ram_gb: float
     cores: int
+    # the memory of a card that is there and not counted on, because Ollama was never seen using it
+    unproven_gb: float = 0.0
 
     @property
     def budget_gb(self) -> float:
@@ -48,14 +50,25 @@ class Hardware:
         return self.gpu_gb - HEADROOM_GB if self.gpu_gb else self.ram_gb / 2
 
 
-def hardware() -> Hardware:
+def hardware(models: list[dict] | None = None, tests: dict | None = None) -> Hardware:
     """The computer the models run on. The app itself runs in a container and cannot see it,
-    so whoever starts the app measures it and passes it in (run.ps1)."""
+    so whoever starts the app measures it and passes it in (run.ps1).
+
+    Ollama uses NVIDIA cards and only some of the others, and which ones changes with its
+    versions. So a card that is not NVIDIA is counted on only once a model was seen running
+    on it: one that is loaded there now (`models`), or one that was when the models were
+    tried (`tests`). Until then the app reasons as if there were no card, which is slow but
+    never wrong, and the page says that the card is there and how to find out.
+    """
+    card = round(int(os.getenv("HOST_GPU_MB") or 0) / 1024, 1)
+    seen = any(model.get("gpu_share") for model in models or []) or any(test.get("gpu_share") for test in (tests or {}).values())
+    proven = os.getenv("HOST_GPU_KIND", "nvidia") != "other" or seen
     return Hardware(
         gpu=os.getenv("HOST_GPU_NAME", ""),
-        gpu_gb=round(int(os.getenv("HOST_GPU_MB") or 0) / 1024, 1),
+        gpu_gb=card if proven else 0.0,
         ram_gb=round(int(os.getenv("HOST_RAM_MB") or 0) / 1024, 1),
         cores=int(os.getenv("HOST_CORES") or 0),
+        unproven_gb=0.0 if proven else card,
     )
 
 
@@ -162,7 +175,7 @@ def describe(models: list[dict], machine: Hardware, tests: dict) -> dict:
             "tested": tests.get(model["name"]),
         })
     return {
-        "hardware": {"gpu": machine.gpu, "gpu_gb": machine.gpu_gb, "ram_gb": machine.ram_gb, "cores": machine.cores},
+        "hardware": {"gpu": machine.gpu, "gpu_gb": machine.gpu_gb, "ram_gb": machine.ram_gb, "cores": machine.cores, "unproven_gb": machine.unproven_gb},
         "models": listed,
         # for every job, the names in order of preference: the first is what "automatic" uses
         "order": order,

@@ -173,7 +173,7 @@ def test_a_phone_is_asked_for_originals_and_the_request_ends_when_all_are_accoun
     job = phones.work(device)[0]
     assert job["id"] == asked["id"] and sorted(photo["media"] for photo in job["photos"]) == ["1", "2", "3"]
     first = next(photo["id"] for photo in phones.photos if photo["media"] == "1")
-    assert phones.expected(asked["id"], device, first) == {"folder": "Mare", "name": "mare.jpg"}
+    assert phones.expected(asked["id"], device, first) == {"folder": "Mare", "name": "mare.jpg", "then": ""}
 
     # one arrives, the others cannot be sent: only then is the request over
     assert phones.settle(asked["id"], device, arrived={first: "Raccolte/Mare/mare.jpg"}) is None

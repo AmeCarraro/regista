@@ -123,8 +123,11 @@ export default function Side({ models, library, changes, phone, onPhoneChange, t
           <ul className="facts">
             <li>
               <span>Scheda video</span>
-              <b>{machine.gpu ? `${shortGpu(machine.gpu)} · ${machine.gpu_gb.toLocaleString('it-IT')} GB` : 'nessuna: si usa il processore'}</b>
+              <b>{machine.gpu ? `${shortGpu(machine.gpu)} · ${(machine.gpu_gb || machine.unproven_gb).toLocaleString('it-IT')} GB` : 'nessuna: si usa il processore'}</b>
             </li>
+            {machine.unproven_gb > 0 && (
+              <li className="note">Non so ancora se i modelli usano questa scheda: per ora conto sul processore. Lo scopro con «Prova i modelli».</li>
+            )}
             <li>
               <span>Memoria</span>
               <b>{Math.round(machine.ram_gb)} GB</b>

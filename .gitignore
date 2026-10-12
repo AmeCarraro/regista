@@ -5,6 +5,9 @@ __pycache__/
 # the pictures the app looks at are personal: never in the repository
 foto/
 
+# what install.ps1 makes for this PC: the file that starts the app on the folder chosen here
+Regista.cmd
+
 web/node_modules/
 web/dist/
 

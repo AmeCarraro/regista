@@ -545,12 +545,56 @@ def test_saving_them_on_the_computer_says_where_they_go_not_where_they_are(monke
     assert proposed(events)["action"] == "fetch" and sorted(photo["id"] for photo in proposed(events)["photos"]) == sorted(on_screen)
 
 
-def test_pictures_on_the_phone_are_not_thrown_away(monkeypatch, phones):
+def test_throwing_away_pictures_of_the_phone_is_proposed_as_a_copy_here_and_then_its_trash(monkeypatch, phones):
     script(monkeypatch, [form("trash_photos", "something blue")])
 
     events, _ = ask("elimina dal telefono le foto blu", phones=phones, actions=Changes())
 
-    assert said(events) == orchestrator.PHONE_ONLY_COPIES and proposed(events) is None
+    plan = proposed(events)
+    assert (plan["action"], plan["folder"]) == ("clear", "Tolte dal telefono")
+    assert sorted(photo["name"] for photo in plan["photos"]) == ["cielo.jpg", "mare.jpg"]
+    assert said(events) == (
+        "Tolgo dal telefono queste 2 foto? Prima le copio sul computer, nella cartella «Tolte dal telefono», e controllo che siano arrivate intere. "
+        "Poi il telefono le sposta nel suo cestino, dove restano 30 giorni: te lo chiederà Android."
+    )
+    assert events[-1]["memory"].endswith("and then move them to the trash of the phone (2 photos). Nothing was done: the user must confirm.")
+
+
+def test_the_ones_on_screen_are_taken_off_the_phone_when_they_are_its_pictures(monkeypatch, phones):
+    script(monkeypatch, [form("trash_photos", "")])
+    on_screen = [phones.photos[0]["id"]]
+
+    events, _ = ask("eliminale", phones=phones, actions=Changes(), selection=on_screen)
+
+    assert proposed(events) == {"type": "proposal", "action": "clear", "folder": "Tolte dal telefono", "photos": [{"id": on_screen[0], "name": "mare.jpg"}]}
+
+
+def test_what_taking_pictures_off_a_phone_becomes_in_words():
+    assert orchestrator.asked_in_words(2, "Tolte dal telefono", clear=True)[0] == (
+        "Ho chiesto al telefono 2 foto. Quando sono al sicuro sul computer, il telefono ti chiede di spostarle nel suo cestino. Tieni Regista aperto sul telefono."
+    )
+    assert orchestrator.confirming_in_words(2, "Tolte dal telefono") == (
+        "Le 2 foto sono al sicuro sul computer, nella cartella «Tolte dal telefono». Ora rispondi sul telefono alla domanda di Android, che le sposta nel suo cestino."
+    )
+    said = lambda *numbers: orchestrator.cleared_in_words(*numbers, "Tolte dal telefono")[0]  # noqa: E731
+    assert said(2, 2, 0, "") == "Fatto: 2 foto tolte dal telefono. Restano 30 giorni nel suo cestino, e una copia è sul computer nella cartella «Tolte dal telefono»."
+    assert said(1, 1, 1, "") == (
+        "Fatto: 1 foto tolta dal telefono. Resta 30 giorni nel suo cestino, e una copia è sul computer nella cartella «Tolte dal telefono». "
+        "1 foto il telefono non è riuscito a mandarla: non la ho toccata."
+    )
+    assert said(2, 0, 0, "declined") == "Sul telefono hai detto di no: le foto sono rimaste dov'erano. La copia è sul computer, nella cartella «Tolte dal telefono»."
+    assert said(2, 0, 0, "old").startswith("Questo telefono non ha un cestino che io possa usare (serve Android 11 o più recente): le foto sono rimaste dov'erano.")
+    assert said(0, 0, 2, "") == "Dal telefono non è arrivata nessuna foto, quindi non ne ho tolta nessuna. 2 foto il telefono non è riuscito a mandarle: non le ho toccate."
+    # taking back the arrival of pictures that then left their phone is said for what it is
+    entry = {"kind": "receive", "files": [1, 2], "folder": "Tolte dal telefono", "cleared": 2}
+    assert orchestrator.undo_proposed_in_words(entry) == (
+        "L'ultima modifica è stata togliere 2 foto dal telefono, dopo averle copiate nella cartella «Tolte dal telefono». "
+        "Sul telefono le riprendi dal cestino della galleria, finché ci restano. Da qui posso solo togliere dal computer quelle copie: lo faccio?"
+    )
+    undone = {"undid": "receive", "count": 2, "folder": "Tolte dal telefono", "cleared": 2}
+    assert orchestrator.undone_in_words(undone)[0] == (
+        "Annullato: ho tolto le 2 copie dalla cartella «Tolte dal telefono». Sul telefono le trovi nel cestino della galleria, finché ci restano."
+    )
 
 
 def test_what_a_request_to_the_phone_becomes_in_words():

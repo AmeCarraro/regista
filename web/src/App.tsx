@@ -82,6 +82,8 @@ export default function App() {
           (now) => {
             if (now.state === 'done') {
               patch(one.reply, (current) => settle(current, { state: 'done', note: now.text, entry: now.entry, transfer: '' }, now.memory))
+              // pictures that left the phone are no longer there to be shown or chosen
+              if (now.gone.length > 0) setGone((before) => new Set([...before, ...now.gone]))
               loadChanges()
               loadPhone()
             } else {

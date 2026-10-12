@@ -1,5 +1,5 @@
 # Builds the Android app and tries it on a pretend phone, all in containers: nothing Android is installed on the PC.
-# Usage: .\android.ps1 build       makes android\app\build\outputs\apk\debug\app-debug.apk, to install on a phone
+# Usage: .\android.ps1 build       makes android\app\build\outputs\apk\release\app-release.apk, to install on a phone
 #        .\android.ps1 phone       starts a pretend phone (an Android 15 emulator, no window) and waits until it is on
 #        .\android.ps1 install     puts the app on the pretend phone
 #        .\android.ps1 pictures D:\some\folder   copies the pictures of a folder into the pretend phone's gallery
@@ -23,10 +23,10 @@ if ($LASTEXITCODE -ne 0) {
 switch ($What) {
     'build' {
         # the key is made once and kept out of the repository: with a new key at each build a phone would refuse the update
-        $script = 'mkdir -p .keys && { [ -f .keys/regista.keystore ] || keytool -genkeypair -keystore .keys/regista.keystore -storepass regista -keypass regista -alias regista -keyalg RSA -keysize 2048 -validity 10000 -dname CN=Regista; } && gradle --no-daemon -q assembleDebug'
+        $script = 'mkdir -p .keys && { [ -f .keys/regista.keystore ] || keytool -genkeypair -keystore .keys/regista.keystore -storepass regista -keypass regista -alias regista -keyalg RSA -keysize 2048 -validity 10000 -dname CN=Regista; } && gradle --no-daemon -q assembleRelease'
         docker run --rm -v "${project}:/work" -v regista-gradle:/root/.gradle regista-android sh -c $script
         if ($LASTEXITCODE -ne 0) { Stop-Run 'the build' }
-        Write-Host "App: $(Join-Path $project 'app\build\outputs\apk\debug\app-debug.apk')" -ForegroundColor Green
+        Write-Host "App: $(Join-Path $project 'app\build\outputs\apk\release\app-release.apk')" -ForegroundColor Green
     }
     'phone' {
         docker rm -f regista-phone 2>$null | Out-Null
@@ -40,7 +40,7 @@ switch ($What) {
         Write-Host "The pretend phone is on (Android $(docker exec regista-phone adb shell getprop ro.build.version.release))." -ForegroundColor Green
     }
     'install' {
-        docker exec regista-phone adb install -r /work/app/build/outputs/apk/debug/app-debug.apk
+        docker exec regista-phone adb install -r /work/app/build/outputs/apk/release/app-release.apk
     }
     'pictures' {
         if (-not $More -or -not (Test-Path $More[0] -PathType Container)) { Stop-Run 'give the folder with the pictures' }

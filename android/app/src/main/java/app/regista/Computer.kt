@@ -41,7 +41,9 @@ fun readInvite(text: String): Invite? {
     val secret = link.getQueryParameter("s") ?: return null
     val fingerprint = link.getQueryParameter("f") ?: return null
     if (addresses.isEmpty() || secret.isEmpty() || fingerprint.length != 64) return null
-    return Invite(addresses.filter(::isPrivate), port, secret, fingerprint, link.getQueryParameter("n") ?: "")
+    // the name is shown to the user in the question that pairs: one line of it, so that it cannot pass for the rest of the question
+    val computer = (link.getQueryParameter("n") ?: "").filter { !it.isISOControl() }.trim().take(40)
+    return Invite(addresses.filter(::isPrivate), port, secret, fingerprint, computer)
 }
 
 fun fingerprintOf(certificate: X509Certificate): String =
@@ -114,12 +116,13 @@ class Computer(val address: String, private val port: Int, private val fingerpri
         return answer(connection)
     }
 
-    /** Sends a file as it is, without holding it all in memory. */
-    fun send(path: String, length: Long, source: InputStream): JSONObject {
+    /** Sends a file as it is, without holding it all in memory, with the fingerprint the computer checks it against. */
+    fun send(path: String, length: Long, source: InputStream, fingerprint: String): JSONObject {
         val connection = open("PUT", path)
         connection.doOutput = true
         connection.readTimeout = 180000
         connection.setRequestProperty("Content-Type", "application/octet-stream")
+        connection.setRequestProperty("X-Regista-Sha256", fingerprint)
         if (length > 0) connection.setFixedLengthStreamingMode(length) else connection.setChunkedStreamingMode(64 * 1024)
         source.use { input -> connection.outputStream.use { output -> input.copyTo(output, 64 * 1024) } }
         return answer(connection)

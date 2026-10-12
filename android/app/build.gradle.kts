@@ -29,6 +29,15 @@ android {
         }
     }
 
+    buildTypes {
+        // The app a phone gets is this one, not the "debug" one: from a debug app, whoever has the phone
+        // unlocked and a cable can read what the app keeps, the key that lets it into the computer included.
+        getByName("release") {
+            signingConfig = signingConfigs.getByName("debug")
+            isMinifyEnabled = false
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -38,5 +47,6 @@ android {
     }
     lint {
         abortOnError = false
+        checkReleaseBuilds = false
     }
 }

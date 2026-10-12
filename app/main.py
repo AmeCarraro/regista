@@ -41,6 +41,21 @@ PHONE_PORT = int(os.getenv("PHONE_PORT", "8443"))
 PHONE_OPEN = os.getenv("PHONE_OPEN", "") == "1"
 # the largest picture a phone may send
 LARGEST = 400 * 1024 * 1024
+# The most any other request may carry. Without a limit, whoever reaches a door could fill this
+# computer's memory with one endless request; at the door of the phones that is anyone on the
+# network, since the request that lets a phone in is heard before any key is shown.
+BODY = 32 * 1024 * 1024
+# and the most for that request: a secret and a name
+PAIRING_BODY = 4096
+# What every answer tells the browser that shows it: load nothing from elsewhere, and do not
+# let another page show this one inside itself, where a click meant for that page lands here.
+BROWSER_RULES = [
+    (b"content-security-policy", b"default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; "
+                                 b"object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"),
+    (b"x-frame-options", b"DENY"),
+    (b"x-content-type-options", b"nosniff"),
+    (b"referrer-policy", b"no-referrer"),
+]
 
 # the table of the places of the world, to know in which country and near which city a picture was taken
 places = Places(os.getenv("PLACES_DIR", "geonames"))
@@ -113,7 +128,8 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="regista", docs_url="/api/docs", openapi_url="/api/openapi.json", redoc_url=None, lifespan=lifespan)
+# no page that lists what the service can do: nobody needs it, and it would load its parts from elsewhere
+app = FastAPI(title="regista", docs_url=None, openapi_url=None, redoc_url=None, lifespan=lifespan)
 
 
 class Gate:
@@ -128,7 +144,8 @@ class Gate:
     the secret of the link instead. A phone cannot let other phones in.
 
     At both doors, a request that changes something is refused when a browser says it was
-    made by a page that is not the app's own.
+    made by a page that is not the app's own, a request cannot carry more than it has reason
+    to, and every answer tells the browser to keep the page to itself.
     """
 
     def __init__(self, inner):
@@ -139,6 +156,20 @@ class Gate:
             return await self.inner(scope, receive, send)
         headers = {name: value.decode("latin-1") for name, value in scope["headers"]}
         path = scope["path"]
+        outer = send
+
+        async def send(message):
+            if message["type"] == "http.response.start":
+                message = {**message, "headers": [*message.get("headers", []), *BROWSER_RULES]}
+            await outer(message)
+
+        # an original from a phone is counted by who writes it to disk, as it arrives
+        if not (scope["method"] == "PUT" and path.startswith("/phone/transfers/")):
+            most = PAIRING_BODY if path == "/phone/pair" else BODY
+            declared = headers.get(b"content-length", "")
+            if declared.isdigit() and int(declared) > most:
+                return await self._refuse(send, 413, "Questa richiesta è troppo grande.")
+            receive = self._counted(receive, most)
 
         # A request that changes something must come from the app's own page. A browser says which page
         # made a request; if it is another one, a site that the user happens to have open is trying its luck.
@@ -176,6 +207,23 @@ class Gate:
         await self.inner(scope, receive, remembering)
 
     @staticmethod
+    def _counted(receive, most: int):
+        """What a request sends, cut off when it is more than it may be: its size can be left unsaid."""
+        got = 0
+
+        async def counted():
+            nonlocal got
+            message = await receive()
+            if message["type"] == "http.request":
+                got += len(message.get("body", b""))
+                if got > most:
+                    # as if whoever was sending had gone away: nothing more is read
+                    return {"type": "http.disconnect"}
+            return message
+
+        return counted
+
+    @staticmethod
     async def _refuse(send, status: int, detail: str) -> None:
         body = json.dumps({"detail": detail}).encode()
         await send({"type": "http.response.start", "status": status, "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())]})
@@ -199,8 +247,9 @@ class ChatRequest(BaseModel):
 
 
 class Change(BaseModel):
-    # "fetch" asks a phone for the originals of pictures that are on it
-    action: Literal["trash", "copy", "fetch"]
+    # "fetch" asks a phone for the originals of pictures that are on it; "clear" asks for them and then
+    # has the phone move them to its trash
+    action: Literal["trash", "copy", "fetch", "clear"]
     # pictures by their short names: the page never names a file
     ids: list[str] = Field(min_length=1, max_length=1000)
     folder: str = Field(default="", max_length=200)
@@ -245,6 +294,12 @@ class NotSent(BaseModel):
     ids: list[str] = Field(min_length=1, max_length=1000)
 
 
+class Trashed(BaseModel):
+    # the pictures the phone moved to its trash; none when its user said no, or when it has no trash
+    ids: list[str] = Field(default=[], max_length=1000)
+    why: Literal["", "declined", "old"] = ""
+
+
 def stream(events) -> StreamingResponse:
     """Events as JSON lines, one per event. Closing the connection stops what is producing them."""
     async def lines():
@@ -272,7 +327,8 @@ async def models():
     except Exception as exc:
         # Ollama is not running, or not reachable from here: the page says so instead of breaking
         return {**catalog.describe([], catalog.hardware(), {}), "problem": f"{type(exc).__name__}: {exc}"}
-    return catalog.describe(installed, catalog.hardware(), selftest.load(INDEX_DIR))
+    tests = selftest.load(INDEX_DIR)
+    return catalog.describe(installed, catalog.hardware(installed, tests), tests)
 
 
 @app.post("/api/models/test")
@@ -290,7 +346,8 @@ async def chat(body: ChatRequest):
     async def events():
         installed = await llm.installed()
         history = [message.model_dump() for message in body.messages]
-        reply = orchestrator.reply(history, body.model, installed, catalog.hardware(), selftest.load(INDEX_DIR), photos, actions, body.selection, phones, places)
+        tests = selftest.load(INDEX_DIR)
+        reply = orchestrator.reply(history, body.model, installed, catalog.hardware(installed, tests), tests, photos, actions, body.selection, phones, places)
         async for event in reply:
             yield event
 
@@ -379,7 +436,7 @@ def act(body: Change):
     This is the only way a picture is ever moved or copied. No model can call it: the
     page does, when the user says yes to a proposal.
     """
-    if body.action == "fetch":
+    if body.action in ("fetch", "clear"):
         return _ask_phone(body)
     known = {identifier: relative for identifier in dict.fromkeys(body.ids) if (relative := photos.relative_of(identifier))}
     result = _carried_out(lambda: actions.trash(list(known.values())) if body.action == "trash" else actions.copy(list(known.values()), body.folder))
@@ -396,16 +453,20 @@ def act(body: Change):
 
 
 def _ask_phone(body: Change) -> dict:
-    """Asks a phone for the originals of some of its pictures. They arrive later, when its app is open."""
+    """Asks a phone for the originals of some of its pictures. They arrive later, when its app is open.
+
+    With "clear" the phone is then asked to move them to its trash: the copies have a folder of their own.
+    """
     if not actions.writable():
         raise HTTPException(status_code=409, detail=orchestrator.READ_ONLY)
+    clear = body.action == "clear"
     try:
-        folder = collection_name(body.folder)
-        asked = phones.ask(body.ids, folder)
+        folder = collection_name(orchestrator.REMOVED if clear else body.folder)
+        asked = phones.ask(body.ids, folder, "trash" if clear else "")
     except Refused as refused:
         raise HTTPException(status_code=409, detail=str(refused))
-    text, memory = orchestrator.asked_in_words(len(asked["photos"]), folder)
-    waiting = {"kind": "fetch", "id": "", "count": 0, "missing": 0, "failed": 0, "folder": folder}
+    text, memory = orchestrator.asked_in_words(len(asked["photos"]), folder, clear)
+    waiting = {"kind": body.action, "id": "", "count": 0, "missing": 0, "failed": 0, "folder": folder}
     # the page follows the request by this name, until the pictures have arrived
     return {**_outcome(waiting, [], text, memory), "transfer": asked["id"]}
 
@@ -442,12 +503,30 @@ def transfer_state(transfer: str):
     if found is None:
         raise HTTPException(status_code=404, detail="no such request")
     arrived, total = len(found["arrived"]), len(found["photos"])
-    if found["state"] == "done":
-        text, memory = orchestrator.received_in_words(arrived, total - arrived, found["folder"])
-    else:
+    clear, trashed = found.get("then") == "trash", found.get("trashed", [])
+    if found["state"] == "confirming":
+        text, memory = orchestrator.confirming_in_words(arrived, found["folder"]), ""
+    elif found["state"] != "done":
         text, memory = f"Aspetto il telefono: {arrived} di {total} arrivate. Tieni Regista aperto sul telefono.", ""
-    # "entry" names the arrival in the journal of changes: with it the page can take it back
-    return {"id": found["id"], "state": found["state"], "arrived": arrived, "total": total, "folder": found["folder"], "entry": found["entry"], "text": text, "memory": memory}
+    elif clear:
+        text, memory = orchestrator.cleared_in_words(arrived, len(trashed), total - arrived, found.get("why", ""), found["folder"])
+    else:
+        text, memory = orchestrator.received_in_words(arrived, total - arrived, found["folder"])
+    return {
+        "id": found["id"],
+        "state": found["state"],
+        "arrived": arrived,
+        "total": total,
+        "folder": found["folder"],
+        # "entry" names the arrival in the journal of changes: with it the page can take it back at a click.
+        # Not when the pictures left the phone: then the copies here are the ones that stay, and taking
+        # them away is asked in words, where it can be explained.
+        "entry": "" if trashed else found["entry"],
+        # the pictures that are no longer on the phone
+        "gone": trashed,
+        "text": text,
+        "memory": memory,
+    }
 
 
 # ---- the phones, as this computer sees them: only from this computer's door
@@ -529,16 +608,25 @@ async def original(transfer: str, identifier: str, request: Request):
         partial = actions.incoming(expected["folder"])
     except Refused as refused:
         raise HTTPException(status_code=409, detail=str(refused))
-    size = 0
+    # What the phone says the picture is, as the SHA-256 of its bytes. A picture that is to leave the
+    # phone must come with it: what arrives is then known to be the picture, whole, before the phone is
+    # told that it may throw its own away.
+    said = request.headers.get("x-regista-sha256", "").lower()
+    if expected["then"] == "trash" and not said:
+        raise HTTPException(status_code=400, detail="Per togliere foto dal telefono serve la versione nuova dell'app.")
+    size, seen = 0, hashlib.sha256()
     try:
         with partial.open("wb") as file:
             async for chunk in request.stream():
                 size += len(chunk)
                 if size > LARGEST:
                     raise HTTPException(status_code=413, detail="too large")
+                seen.update(chunk)
                 file.write(chunk)
         if not size:
             raise HTTPException(status_code=400, detail="nothing arrived")
+        if said and said != seen.hexdigest():
+            raise HTTPException(status_code=400, detail="La foto non è arrivata intera.")
         where = actions.land(partial, expected["name"])
     except BaseException:
         # what stopped halfway is not a picture
@@ -546,6 +634,15 @@ async def original(transfer: str, identifier: str, request: Request):
         raise
     _arrived(phones.settle(transfer, device, arrived={identifier: where}))
     return {"kept": True}
+
+
+@app.post("/phone/transfers/{transfer}/trashed")
+def moved_to_its_trash(transfer: str, body: Trashed, request: Request):
+    """A phone says what it did with the pictures it could move to its trash: which ones, or why none."""
+    found = phones.trashed(transfer, request.state.device, body.ids, body.why)
+    if found is not None and found["trashed"] and found["entry"]:
+        actions.cleared(found["entry"], len(found["trashed"]))
+    return {"noted": found is not None}
 
 
 @app.post("/phone/transfers/{transfer}/missing")

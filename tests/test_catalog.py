@@ -68,7 +68,7 @@ def test_the_user_can_choose_who_talks_but_only_among_those_who_can():
 def test_the_page_gets_every_model_with_what_it_is_for_and_the_order_for_each_job():
     described = catalog.describe(ALL, LAPTOP, {"granite4.1:3b": {"cases": 8, "right": 8, "tokens_per_second": 61.5}})
 
-    assert described["hardware"] == {"gpu": "RTX 3050 Ti", "gpu_gb": 4.0, "ram_gb": 16.0, "cores": 14}
+    assert described["hardware"] == {"gpu": "RTX 3050 Ti", "gpu_gb": 4.0, "ram_gb": 16.0, "cores": 14, "unproven_gb": 0.0}
     assert described["order"]["tools"][0] == "granite4.1:3b"
     assert described["order"]["vision"] == ["eyes:4b"]
     granite = next(entry for entry in described["models"] if entry["name"] == "granite4.1:3b")
@@ -116,3 +116,24 @@ def test_the_computer_is_described_by_whoever_starts_the_app(monkeypatch):
 
     assert (machine.gpu_gb, machine.ram_gb, machine.cores) == (4.0, 16.0, 14)
     assert machine.budget_gb == pytest.approx(3.2)
+
+
+def test_a_card_that_is_not_nvidia_counts_once_a_model_was_seen_running_on_it(monkeypatch):
+    monkeypatch.setenv("HOST_GPU_NAME", "AMD Radeon RX 7800 XT")
+    monkeypatch.setenv("HOST_GPU_MB", "16384")
+    monkeypatch.setenv("HOST_GPU_KIND", "other")
+    monkeypatch.setenv("HOST_RAM_MB", "32768")
+    granite = model("granite4.1:3b", 2.1, "3.4B", ["completion", "tools"])
+
+    # Ollama uses only some of these cards: until one is seen at work, the app reasons as without it
+    unknown = catalog.hardware([granite], {})
+    assert (unknown.gpu, unknown.gpu_gb, unknown.unproven_gb) == ("AMD Radeon RX 7800 XT", 0.0, 16.0)
+    assert catalog.suggest([], unknown)["name"] == "granite4.1:3b" and catalog.suggest([], unknown)["where"] == "cpu"
+    assert catalog.describe([granite], unknown, {})["hardware"]["unproven_gb"] == 16.0
+
+    # a model loaded on the card right now, or one that ran there when the models were tried, settles it
+    for seen in (catalog.hardware([{**granite, "loaded": True, "gpu_share": 1.0}], {}), catalog.hardware([granite], {"granite4.1:3b": {"cases": 14, "right": 14, "gpu_share": 0.8}})):
+        assert (seen.gpu_gb, seen.unproven_gb) == (16.0, 0.0)
+        assert catalog.suggest([], seen)["name"] == "granite4.1:8b"
+    # and one that ran on the processor alone does not
+    assert catalog.hardware([granite], {"granite4.1:3b": {"cases": 14, "right": 14, "gpu_share": 0.0}}).gpu_gb == 0.0

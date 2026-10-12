@@ -37,7 +37,8 @@ export type Suggested = {
 }
 
 export type Models = {
-  hardware: { gpu: string; gpu_gb: number; ram_gb: number; cores: number }
+  // unproven_gb: the memory of a card that is there, but that no model was seen running on yet
+  hardware: { gpu: string; gpu_gb: number; ram_gb: number; cores: number; unproven_gb: number }
   models: ModelInfo[]
   /** For every job, the names of the models that can do it, best first. */
   order: Record<Job, string[]>
@@ -71,8 +72,9 @@ export type Picked = { id: string; name: string }
  * the user says yes, by the page, with carryOut or takeBack below.
  */
 export type Proposal =
-  // "fetch" copies pictures from a phone to this computer: the phone sends them when its app is open
-  | { action: 'trash' | 'copy' | 'fetch'; folder: string; photos: Picked[] }
+  // "fetch" copies pictures from a phone to this computer: the phone sends them when its app is open.
+  // "clear" does the same and then has the phone move them to its own trash, after a yes given there.
+  | { action: 'trash' | 'copy' | 'fetch' | 'clear'; folder: string; photos: Picked[] }
   // "receive" is what a fetch becomes in the journal once the pictures have arrived
   | { action: 'undo'; of: string; undoes: 'trash' | 'copy' | 'receive'; folder: string; count: number; when: string }
 
@@ -88,7 +90,7 @@ export type ChatEvent =
 
 /** What a change did, once carried out: in numbers, and in the words to show. */
 export type Outcome = {
-  kind: 'trash' | 'copy' | 'fetch' | 'undo'
+  kind: 'trash' | 'copy' | 'fetch' | 'clear' | 'undo'
   /** The name of the change, to take it back later. Empty when nothing was touched, or for an undo. */
   id: string
   count: number
@@ -105,12 +107,15 @@ export type Outcome = {
 /** How far a request to a phone is. */
 export type Transfer = {
   id: string
-  state: 'waiting' | 'done'
+  /** "confirming": the pictures are here, and the phone is asking its user whether they may go to its trash. */
+  state: 'waiting' | 'confirming' | 'done'
   arrived: number
   total: number
   folder: string
-  /** The name of the arrival among the changes, to take it back; empty until done, or if nothing arrived. */
+  /** The name of the arrival among the changes, to take it back; empty until done, if nothing arrived, or if the pictures left the phone. */
   entry: string
+  /** The pictures that are no longer on the phone. */
+  gone: string[]
   text: string
   memory: string
 }
@@ -253,7 +258,7 @@ export const fetchLibrary = () => get<Library>('/api/photos')
 export const fetchChanges = () => get<Changes>('/api/actions')
 
 /** Carries out a change the user said yes to. Nothing else in the page changes a picture. */
-export const carryOut = (action: 'trash' | 'copy' | 'fetch', ids: string[], folder: string) =>
+export const carryOut = (action: 'trash' | 'copy' | 'fetch' | 'clear', ids: string[], folder: string) =>
   post<Outcome>('/api/actions', { action, ids, folder })
 
 export const fetchTransfer = (id: string) => get<Transfer>(`/api/transfers/${id}`)
