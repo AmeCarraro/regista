@@ -57,7 +57,11 @@ export type Found = {
   matching: number
   indexed: number
   partial: boolean
+  /** Where the pictures are: on this computer, or on a phone that sent small copies of them. */
+  place?: Place
 }
+
+export type Place = 'computer' | 'phone'
 
 /** A picture named in a proposal: its short name, and the name of its file. */
 export type Picked = { id: string; name: string }
@@ -67,8 +71,10 @@ export type Picked = { id: string; name: string }
  * the user says yes, by the page, with carryOut or takeBack below.
  */
 export type Proposal =
-  | { action: 'trash' | 'copy'; folder: string; photos: Picked[] }
-  | { action: 'undo'; of: string; undoes: 'trash' | 'copy'; folder: string; count: number; when: string }
+  // "fetch" copies pictures from a phone to this computer: the phone sends them when its app is open
+  | { action: 'trash' | 'copy' | 'fetch'; folder: string; photos: Picked[] }
+  // "receive" is what a fetch becomes in the journal once the pictures have arrived
+  | { action: 'undo'; of: string; undoes: 'trash' | 'copy' | 'receive'; folder: string; count: number; when: string }
 
 /** The events of POST /api/chat, one JSON object per line. */
 export type ChatEvent =
@@ -82,7 +88,7 @@ export type ChatEvent =
 
 /** What a change did, once carried out: in numbers, and in the words to show. */
 export type Outcome = {
-  kind: 'trash' | 'copy' | 'undo'
+  kind: 'trash' | 'copy' | 'fetch' | 'undo'
   /** The name of the change, to take it back later. Empty when nothing was touched, or for an undo. */
   id: string
   count: number
@@ -92,7 +98,45 @@ export type Outcome = {
   text: string
   /** What the model should remember of it. */
   memory: string
+  /** For a fetch: the name of the request to the phone, to follow until the pictures arrive. */
+  transfer?: string
 }
+
+/** How far a request to a phone is. */
+export type Transfer = {
+  id: string
+  state: 'waiting' | 'done'
+  arrived: number
+  total: number
+  folder: string
+  /** The name of the arrival among the changes, to take it back; empty until done, or if nothing arrived. */
+  entry: string
+  text: string
+  memory: string
+}
+
+/** A phone that was let in. */
+export type Device = {
+  id: string
+  name: string
+  paired: string
+  /** When it last talked to this computer. */
+  seen: string
+  /** How many of its pictures this computer knows. */
+  photos: number
+  /** How many pictures it has been asked for and has not sent yet. */
+  waiting: number
+}
+
+export type PhoneState = {
+  /** Whether the door of the phones was opened to the network when the app was started. */
+  open: boolean
+  addresses: string[]
+  devices: Device[]
+}
+
+/** What lets one phone in: a link, and the same link as a QR code (a picture, ready to be the source of an image). */
+export type Invite = { link: string; seconds: number; qr: string }
 
 /** What can be changed, and what was: the answer of GET /api/actions. */
 export type Changes = {
@@ -100,7 +144,7 @@ export type Changes = {
   writable: boolean
   /** How many files are in the app's trash. */
   trash: number
-  last: { id: string; kind: 'trash' | 'copy'; count: number; folder: string; when: string } | null
+  last: { id: string; kind: 'trash' | 'copy' | 'receive'; count: number; folder: string; when: string } | null
 }
 
 /** The events of POST /api/models/test. */
@@ -118,6 +162,8 @@ export type Library = {
   error: string
   indexed: number
   folder: string
+  /** Which door the page came through: this computer's, or the one of the phones (inside a phone's app). */
+  door: 'computer' | 'phone'
 }
 
 export type Message = { role: 'user' | 'assistant'; content: string }
@@ -207,8 +253,16 @@ export const fetchLibrary = () => get<Library>('/api/photos')
 export const fetchChanges = () => get<Changes>('/api/actions')
 
 /** Carries out a change the user said yes to. Nothing else in the page changes a picture. */
-export const carryOut = (action: 'trash' | 'copy', ids: string[], folder: string) =>
+export const carryOut = (action: 'trash' | 'copy' | 'fetch', ids: string[], folder: string) =>
   post<Outcome>('/api/actions', { action, ids, folder })
+
+export const fetchTransfer = (id: string) => get<Transfer>(`/api/transfers/${id}`)
+
+export const fetchPhone = () => get<PhoneState>('/api/phone')
+
+export const invitePhone = () => post<Invite>('/api/phone/invite', {})
+
+export const forgetPhone = (id: string) => post<{ forgotten: boolean }>(`/api/phone/devices/${id}/forget`, {})
 
 /** Takes back a change, named by the id its outcome carried. */
 export const takeBack = (of: string) => post<Outcome>('/api/actions/undo', { of })

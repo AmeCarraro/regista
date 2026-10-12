@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ground">#0B0910</color>
+    <color name="card">#17131F</color>
+    <color name="text">#F6F2F8</color>
+    <color name="muted">#AAA1B8</color>
+    <color name="rose">#E052A0</color>
+    <color name="bad">#FF6B81</color>
+
+    <style name="App" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/ground</item>
+        <item name="android:statusBarColor">@color/ground</item>
+        <item name="android:navigationBarColor">@color/ground</item>
+        <item name="android:colorAccent">@color/rose</item>
+        <item name="android:textColorPrimary">@color/text</item>
+    </style>
+</resources>

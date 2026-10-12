@@ -25,11 +25,15 @@ RUN python -c "import open_clip; open_clip.create_model_and_transforms('ViT-B-32
 
 FROM base
 WORKDIR /app
+# Small libraries added after the first version go here, so that the large layers above are
+# not downloaded again: segno draws the QR code that lets a phone in.
+RUN pip install --no-cache-dir "segno>=1.6,<2"
 COPY app/ .
 COPY --from=web /web/dist ./static
 # the index of the pictures lives in a volume mounted here, written by the app's own user
 RUN mkdir -p /data && chown 1000:1000 /data
 ENV HF_HUB_OFFLINE=1 HOME=/tmp PHOTOS_DIR=/photos INDEX_DIR=/data
 USER 1000
-EXPOSE 8000
+# 8000 is this computer's door, 8443 the encrypted one for the phones
+EXPOSE 8000 8443
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

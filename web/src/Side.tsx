@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import type { Changes, Library, ModelInfo, Models, Suggested } from './api.ts'
+import type { Changes, Library, ModelInfo, Models, PhoneState, Suggested } from './api.ts'
 import { placement, purposes, shortGpu } from './chat.ts'
 import * as icons from './icons.tsx'
+import PhoneCard from './Phone.tsx'
 
 const WHERE: Record<Suggested['where'], string> = {
   gpu: 'sta tutto nella scheda video, quindi è veloce',
@@ -55,6 +56,10 @@ type Props = {
   library: Library | null
   /** What can be changed in the picture folder, and how much is in the trash. */
   changes: Changes | null
+  /** The phones that were let in, and whether more can be. */
+  phone: PhoneState | null
+  /** Called when a phone was let in or shut out, to look at the phones again. */
+  onPhoneChange: () => void
   /** While the models are being tried: which one, and how far. */
   testing: { model: string; done: number; of: number } | null
   onTest: () => void
@@ -92,7 +97,7 @@ function ModelRow({ model, director }: { model: ModelInfo; director: boolean }) 
 }
 
 /** The side panel: the computer, the models on it with what each is for, and the pictures. */
-export default function Side({ models, library, changes, testing, onTest, onReadAgain, theme, onTheme }: Props) {
+export default function Side({ models, library, changes, phone, onPhoneChange, testing, onTest, onReadAgain, theme, onTheme }: Props) {
   const machine = models?.hardware
   const director = models?.order.tools[0]
   const reading = library?.running
@@ -208,6 +213,8 @@ export default function Side({ models, library, changes, testing, onTest, onRead
           <p className="fine">Non raggiungo il servizio.</p>
         )}
       </section>
+
+      {library?.door !== 'phone' && <PhoneCard phone={phone} onChange={onPhoneChange} />}
     </>
   )
 }

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Regista</string>
+    <string name="pairing_title">Collega il telefono al computer</string>
+    <string name="pairing_how">"Sul computer apri Regista, alla voce «Telefono» scegli «Collega un telefono» e inquadra il codice con la fotocamera di questo telefono.
+
+Se la fotocamera non lo legge, copia il collegamento che trovi sotto il codice e incollalo qui."</string>
+    <string name="pairing_hint">regista://pair?…</string>
+    <string name="pairing_go">Collega</string>
+    <string name="pairing_promise">Questa app legge le tue foto e le mostra solo al computer che colleghi tu. Non cancella e non modifica niente.</string>
+</resources>

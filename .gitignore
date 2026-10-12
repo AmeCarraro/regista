@@ -7,3 +7,11 @@ foto/
 
 web/node_modules/
 web/dist/
+
+# the Android app: what a build leaves behind, and the key builds are signed with
+android/.gradle/
+android/.kotlin/
+android/build/
+android/app/build/
+android/.keys/
+android/local.properties

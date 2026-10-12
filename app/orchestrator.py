@@ -15,15 +15,29 @@ calls them too often: asked for advice on taking pictures, it searched the pictu
 """
 import asyncio
 import json
+import re
 import time
 
 import catalog
 import llm
 from actions import Refused, collection_name
+from phone import on_phone
 
 ACTIONS = ("answer", "find_photos", "count_photos", "trash_photos", "copy_photos", "undo")
 # the decisions that would change the pictures: they are proposed, never carried out here
 CHANGES = ("trash_photos", "copy_photos", "undo")
+
+# A request is about the pictures of the phone when it names the phone as a place: "sul telefono",
+# "dal mio cellulare". This is read here, in the words of the user, and not asked to the model:
+# the model has enough to decide already. "Una foto con un telefono" is a picture of a phone, not this.
+ON_PHONE = re.compile(
+    r"\b(?:dal|sul|nel|del|al)\s+(?:mio\s+)?(?:telefono|telefonino|cellulare|smartphone)\b"
+    r"|\b(?:on|from|in)\s+(?:my|the)\s+(?:phone|smartphone)\b",
+    re.IGNORECASE,
+)
+ON_COMPUTER = re.compile(r"\b(?:dal|sul|nel|del|al)\s+(?:mio\s+)?(?:computer|pc)\b|\b(?:on|from|in)\s+(?:my|the)\s+(?:computer|pc)\b", re.IGNORECASE)
+# what a model may leave in a caption about the place, and that the pictures do not show
+PLACE_WORDS = re.compile(r"\b(?:on|from|in|of)\s+(?:my\s+|the\s+)?(?:phone|smartphone|cellphone|mobile|computer|pc)\b", re.IGNORECASE)
 
 DECIDE = (
     "You decide what an assistant must do with the last message of the user. "
@@ -40,7 +54,8 @@ DECIDE = (
     "- undo: the user tells you to take back the last change: bring back what was deleted, cancel the copy.\n"
     "- answer: everything else. Greetings, thanks, questions, requests for advice or explanations, "
     "also when they are about photography, cameras, files, or HOW to delete or copy something.\n"
-    "Leave caption and folder empty when they are not needed.\n"
+    "Leave caption and folder empty when they are not needed. "
+    "The caption says what the pictures show, never where they are kept: no 'phone' or 'computer' in it.\n"
     "Examples:\n"
     'mostrami le foto della montagna -> {"action": "find_photos", "caption": "a mountain", "folder": ""}\n'
     'solo quelle con la neve (after a search for "a mountain") -> {"action": "find_photos", "caption": "a mountain with snow", "folder": ""}\n'
@@ -54,6 +69,8 @@ DECIDE = (
     'mettile in una cartella chiamata Vacanze -> {"action": "copy_photos", "caption": "", "folder": "Vacanze"}\n'
     'salva le foto dei fiori nella cartella Giardino -> {"action": "copy_photos", "caption": "flowers", "folder": "Giardino"}\n'
     'prendi tutte le foto di Parigi e mettimele in una cartella Parigi -> {"action": "copy_photos", "caption": "Paris", "folder": "Parigi"}\n'
+    'trovami sul telefono le foto del lago -> {"action": "find_photos", "caption": "a lake", "folder": ""}\n'
+    'prendi dal telefono le foto della neve e salvale sul computer nella cartella Neve -> {"action": "copy_photos", "caption": "snow", "folder": "Neve"}\n'
     'ripensandoci, rimettile dove erano -> {"action": "undo", "caption": "", "folder": ""}\n'
     'come si elimina una foto dal telefono? -> {"action": "answer", "caption": "", "folder": ""}'
 )
@@ -87,28 +104,32 @@ WHICH_ONES = "Dimmi prima quali foto: cercale, e poi dimmi cosa farne."
 NONE_LIKE_THAT = "Non ho trovato foto così, quindi non tocco niente."
 NOTHING_TO_UNDO = "Non c'è niente da annullare: non ho ancora spostato né copiato nulla."
 READ_ONLY = "La cartella delle foto mi è stata data in sola lettura: posso cercare, ma non spostare né copiare."
+NO_PHONE = "Non c'è nessun telefono collegato. Collegane uno dal pannello, alla voce «Telefono»."
+PHONE_EMPTY = "Il telefono è collegato, ma non mi ha ancora mandato le sue foto: apri Regista sul telefono e lascialo finire."
+PHONE_ONLY_COPIES = "Dal telefono per ora posso solo copiare le foto sul computer: non le cancello."
 
 
 def _photos(count: int) -> str:
     return "1 foto" if count == 1 else f"{count} foto"
 
 
-def found_in_words(result: dict) -> str:
+def found_in_words(result: dict, phone: bool = False) -> str:
     """What a search found, said by the app. The numbers are counted here, never written by a model."""
     sure, maybe = len(result["sure"]), len(result["maybe"])
     every = result.get("matching", sure)
+    where = " sul telefono" if phone else ""
     if not result["indexed"]:
-        return NO_PHOTOS
+        return PHONE_EMPTY if phone else NO_PHOTOS
     if every > sure:
-        text = f"Ho trovato {_photos(every)}: ti mostro le {sure} più vicine a quello che hai chiesto."
+        text = f"Ho trovato {_photos(every)}{where}: ti mostro le {sure} più vicine a quello che hai chiesto."
     elif sure:
-        text = f"Ho trovato {_photos(sure)}."
+        text = f"Ho trovato {_photos(sure)}{where}."
         if maybe:
             text += " Ce n'è un'altra che potrebbe andare bene." if maybe == 1 else f" Altre {maybe} potrebbero andare bene, ma ne sono meno sicuro."
     elif maybe:
-        text = "Non sono sicuro di averne trovate. " + ("Questa è la più vicina." if maybe == 1 else f"Queste {maybe} sono le più vicine.")
+        text = f"Non sono sicuro di averne trovate{where}. " + ("Questa è la più vicina." if maybe == 1 else f"Queste {maybe} sono le più vicine.")
     else:
-        text = f"Non ho trovato niente del genere tra le {result['indexed']} foto che conosco."
+        text = f"Non ho trovato niente del genere tra le {result['indexed']} foto{' del telefono' if phone else ''} che conosco."
     if result.get("partial"):
         text += " Sto ancora leggendo le foto, quindi il risultato è parziale."
     return text
@@ -126,12 +147,13 @@ def counted_in_words(state: dict, indexed: int) -> str:
 def proposed_in_words(kind: str, count: int, folder: str, every: int = 0) -> str:
     """The question the user must answer before anything changes."""
     these = "questa foto" if count == 1 else f"queste {count} foto"
+    into = f"nella cartella «{folder}»?" if folder else "in una cartella nuova? Scrivi qui sotto come chiamarla."
     if kind == "trash":
         text = f"Sposto nel cestino {these}? Restano sul disco, e le riporto dov'erano quando vuoi."
-    elif folder:
-        text = f"Copio {these} nella cartella «{folder}»? Gli originali restano dove sono."
+    elif kind == "fetch":
+        text = f"Copio dal telefono al computer {these}, {into} Sul telefono restano dove sono."
     else:
-        text = f"Copio {these} in una cartella nuova? Scrivi qui sotto come chiamarla. Gli originali restano dove sono."
+        text = f"Copio {these} {into} Gli originali restano dove sono."
     if every > count:
         text += f" In tutto sono {every}: te ne propongo {count} per volta."
     return text
@@ -144,6 +166,8 @@ def undo_proposed_in_words(entry: dict) -> str:
         back = "La rimetto al suo posto?" if count == 1 else "Le rimetto al loro posto?"
         return f"L'ultima modifica è stata spostare {_photos(count)} nel cestino. {back}"
     copies = "quella copia" if count == 1 else "quelle copie"
+    if entry["kind"] == "receive":
+        return f"L'ultima modifica è stata copiare {_photos(count)} dal telefono nella cartella «{entry.get('folder', '')}». Tolgo {copies}? Sul telefono le foto restano."
     return f"L'ultima modifica è stata copiare {_photos(count)} nella cartella «{entry.get('folder', '')}». Tolgo {copies}? Gli originali non vengono toccati."
 
 
@@ -179,18 +203,39 @@ def undone_in_words(result: dict) -> tuple[str, str]:
             text = "Nel cestino quelle foto non ci sono più: non ho potuto rimetterle a posto."
         memory = f"The change was undone: {count} photos were restored from the trash."
     else:
-        text = f"Annullato: ho tolto {'la copia' if count == 1 else f'le {count} copie'} dalla cartella «{result['folder']}». Gli originali sono al loro posto."
+        still = "Sul telefono le foto ci sono ancora." if result["undid"] == "receive" else "Gli originali sono al loro posto."
+        text = f"Annullato: ho tolto {'la copia' if count == 1 else f'le {count} copie'} dalla cartella «{result['folder']}». {still}"
         memory = f'The change was undone: {count} copies were removed from the folder "{result["folder"]}".'
     if stuck := result.get("failed"):
         text += f" {_photos(stuck).capitalize()} non sono riuscito a spostarl{'a' if stuck == 1 else 'e'}: chiedimelo di nuovo tra poco."
     return text, memory
 
 
-def propose(decision: dict, photos, actions, selection: list[str]) -> dict:
+def asked_in_words(count: int, folder: str) -> tuple[str, str]:
+    """What is said when a phone has been asked for pictures and they have not arrived yet."""
+    return (
+        f"Ho chiesto al telefono {_photos(count)}. Arrivano quando Regista è aperto sul telefono.",
+        f'The user confirmed: the phone was asked for {count} photos, to be copied into the folder "{folder}". They arrive when the phone app is open.',
+    )
+
+
+def received_in_words(arrived: int, missing: int, folder: str) -> tuple[str, str]:
+    """What is said when a phone has sent what it was asked for."""
+    if arrived:
+        text = f"Fatto: {_photos(arrived)} arrivat{'a' if arrived == 1 else 'e'} dal telefono, nella cartella «{folder}»."
+    else:
+        text = "Dal telefono non è arrivata nessuna foto."
+    if missing:
+        text += f" {_photos(missing).capitalize()} il telefono non è riuscito a mandarl{'a' if missing == 1 else 'e'}."
+    return text, f'{arrived} photos arrived from the phone into the folder "{folder}".'
+
+
+def propose(decision: dict, photos, actions, selection: list[str], phones=None, phone: bool = False) -> dict:
     """What a request to change the pictures becomes: words, and a proposal for the user to confirm.
 
     Nothing is touched here. `selection` is the pictures the user is looking at, by their
-    short names: they are what "these" means.
+    short names: they are what "these" means. `phone` says that the request names the
+    phone as the place of the pictures.
     """
     def only(text: str, memory: str, searched: str = "") -> dict:
         return {"text": text, "memory": memory, "proposal": None, "searched": searched}
@@ -215,31 +260,41 @@ def propose(decision: dict, photos, actions, selection: list[str]) -> dict:
 
     kind = "trash" if decision["action"] == "trash_photos" else "copy"
     caption, folder = decision["caption"], ""
-    if kind == "copy":
+    # the pictures are on the phone if the request says so, or if "these" are pictures of the phone
+    away = phone or (not caption and bool(selection) and all(on_phone(identifier) for identifier in selection))
+    if away:
+        if phones is None or not phones.devices:
+            return only(NO_PHONE, "No phone is connected.")
+        if kind == "trash":
+            return only(PHONE_ONLY_COPIES, "The user asked to delete photos on the phone: that cannot be done yet.")
+        if not phones.photos:
+            return only(PHONE_EMPTY, "The phone has not sent its photos yet.")
+        kind = "fetch"
+    if kind != "trash":
         try:
             folder = collection_name(decision["folder"])
         except Refused:
             pass  # no usable name: the proposal is made all the same, and the page asks for the name
     if caption:
         # the message says which pictures: only the ones the search is sure about are proposed
-        result = photos.search(caption, limit=MOST)
+        result = (phones if away else photos).search(caption, limit=MOST)
         chosen, every = result["sure"], result["matching"]
         if not chosen:
             return only(NONE_LIKE_THAT, f'Searched the photos for "{caption}": none found, so nothing was proposed.', caption)
     else:
-        known = {photo["id"]: photo["path"] for photo in photos.photos}
-        chosen = [
-            {"id": identifier, "name": known[identifier].rsplit("/", 1)[-1]}
-            for identifier in dict.fromkeys(selection)
-            if identifier in known
-        ][:MOST]
+        if away:
+            known = {photo["id"]: photo["name"] for photo in phones.photos}
+        else:
+            known = {photo["id"]: photo["path"].rsplit("/", 1)[-1] for photo in photos.photos}
+        chosen = [{"id": identifier, "name": known[identifier]} for identifier in dict.fromkeys(selection) if identifier in known][:MOST]
         every = len(chosen)
         if not chosen:
             return only(WHICH_ONES, "No photos were chosen, so nothing was proposed.")
 
-    what = "move them to the trash" if kind == "trash" else f'copy them into the folder "{folder}"' if folder else "copy them into a folder that has no name yet"
+    into = f'into the folder "{folder}"' if folder else "into a folder that has no name yet"
+    what = {"trash": "move them to the trash", "copy": f"copy them {into}", "fetch": f"copy them from the phone to the computer, {into}"}[kind]
     # with the caption, so that the next request can build on this search too
-    searched = f'Searched the photos for "{caption}": {every} found. ' if caption else ""
+    searched = f'Searched the photos{" on the phone" if away else ""} for "{caption}": {every} found. ' if caption else ""
     return {
         "text": proposed_in_words(kind, len(chosen), folder, every),
         # nothing has changed yet, and the model must not think it has
@@ -277,7 +332,8 @@ async def decide(model: str, history: list[dict]) -> dict:
         return {"action": "answer", "caption": "", "folder": ""}
 
 
-async def reply(history: list[dict], wanted: str, models: list[dict], machine, tests: dict, photos, actions=None, selection: list[str] | None = None):
+async def reply(history: list[dict], wanted: str, models: list[dict], machine, tests: dict, photos, actions=None,
+                selection: list[str] | None = None, phones=None):
     """One reply as a stream of events, so that the page can show it while it happens.
 
     "start" says which models are at work, "step" and "photos" carry a search and what it
@@ -296,16 +352,32 @@ async def reply(history: list[dict], wanted: str, models: list[dict], machine, t
 
     # without a model that can direct, the app can still talk
     decision = await decide(director, history) if director else {"action": "answer", "caption": "", "folder": ""}
+    # the place is not something a picture shows: out of the caption, whatever the model left in it
+    decision["caption"] = re.sub(r"\s+", " ", PLACE_WORDS.sub(" ", decision["caption"])).strip()
     action, caption = decision["action"], decision["caption"]
+    asked = next((str(message.get("content", "")) for message in reversed(history) if message.get("role") == "user"), "")
+    # on the phone when the request says so; and when it names no place, where the pictures on screen are
+    looking_there = bool(selection) and all(on_phone(identifier) for identifier in selection)
+    # "salvale sul computer" names where pictures go, not where they are: only a search is moved by it
+    elsewhere = action in ("find_photos", "count_photos") and bool(ON_COMPUTER.search(asked))
+    phone = phones is not None and (bool(ON_PHONE.search(asked)) or (looking_there and not elsewhere))
 
     def done(model: str, memory: str, **more) -> dict:
         return {"type": "done", "model": model, "seconds": round(time.perf_counter() - started, 1), "memory": memory, **more}
 
+    if phone and action in ("count_photos", "find_photos") and not phones.devices:
+        yield {"type": "text", "text": NO_PHONE}
+        yield done(director, "No phone is connected.")
+        return
+
     if action == "count_photos":
-        indexed = len(photos.photos)
+        indexed = len(phones.photos if phone else photos.photos)
         yield {"type": "step", "tool": "count_photos", "arguments": {}}
-        yield {"type": "text", "text": counted_in_words(photos.state, indexed)}
-        yield done(director, f"Counted the photos: {indexed}.")
+        if phone:
+            yield {"type": "text", "text": f"Conosco {_photos(indexed)} del telefono." if indexed else PHONE_EMPTY}
+        else:
+            yield {"type": "text", "text": counted_in_words(photos.state, indexed)}
+        yield done(director, f"Counted the photos{' on the phone' if phone else ''}: {indexed}.")
         return
 
     if action == "find_photos":
@@ -313,19 +385,19 @@ async def reply(history: list[dict], wanted: str, models: list[dict], machine, t
             yield {"type": "text", "text": UNCLEAR}
             yield done(director, "The search could not start: no description was given.")
             return
-        yield {"type": "step", "tool": "find_photos", "arguments": {"description": caption}}
-        result = await asyncio.to_thread(photos.search, caption)
-        result["partial"] = photos.state["running"]
-        yield {"type": "photos", "description": caption, **result}
-        yield {"type": "text", "text": found_in_words(result)}
+        yield {"type": "step", "tool": "find_photos", "arguments": {"description": caption, "place": "phone" if phone else "computer"}}
+        result = await asyncio.to_thread((phones if phone else photos).search, caption)
+        result["partial"] = False if phone else photos.state["running"]
+        yield {"type": "photos", "description": caption, "place": "phone" if phone else "computer", **result}
+        yield {"type": "text", "text": found_in_words(result, phone)}
         # in English and with the caption, so that "only the black ones" can build on it
-        yield done(director, f'Searched the photos for "{caption}": {result["matching"]} found, {len(result["maybe"])} uncertain.')
+        yield done(director, f'Searched the photos{" on the phone" if phone else ""} for "{caption}": {result["matching"]} found, {len(result["maybe"])} uncertain.')
         return
 
     if action in CHANGES and actions is not None:
-        plan = await asyncio.to_thread(propose, decision, photos, actions, selection or [])
+        plan = await asyncio.to_thread(propose, decision, photos, actions, selection or [], phones, phone)
         if plan["searched"]:
-            yield {"type": "step", "tool": "find_photos", "arguments": {"description": plan["searched"]}}
+            yield {"type": "step", "tool": "find_photos", "arguments": {"description": plan["searched"], "place": "phone" if phone else "computer"}}
         yield {"type": "text", "text": plan["text"]}
         if plan["proposal"]:
             yield {"type": "proposal", **plan["proposal"]}

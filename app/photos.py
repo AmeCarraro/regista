@@ -35,6 +35,26 @@ def photo_id(relative: str) -> str:
     return hashlib.sha1(relative.encode()).hexdigest()[:12]
 
 
+def closest(vectors: np.ndarray, sentence: np.ndarray, entries: list[dict], limit: int) -> dict:
+    """The pictures closest to a sentence, best first, split into sure matches and maybes.
+
+    `entries` are the pictures, each with "id" and "name", in the order of their fingerprints.
+    At most `limit` come back; "matching" says how many sure matches there are in all.
+    """
+    if not entries:
+        return {"sure": [], "maybe": [], "matching": 0, "indexed": 0}
+    # rounded once, so that what is counted and what is shown agree on which side of a threshold a picture is
+    scores = np.round((vectors @ sentence).astype(np.float64), 3)
+    order = np.argsort(-scores, kind="stable")[:limit]
+    found = [{"id": entries[i]["id"], "name": entries[i]["name"], "score": float(scores[i])} for i in order]
+    return {
+        "sure": [photo for photo in found if photo["score"] >= SURE],
+        "maybe": [photo for photo in found if MAYBE <= photo["score"] < SURE],
+        "matching": int((scores >= SURE).sum()),
+        "indexed": len(entries),
+    }
+
+
 class PhotoIndex:
     def __init__(self, photos_dir: str, index_dir: str, embedder):
         self.photos_dir = Path(photos_dir)
@@ -144,17 +164,9 @@ class PhotoIndex:
         with self._swap:
             photos, vectors = self.photos, self.vectors
         if not photos:
-            return {"sure": [], "maybe": [], "matching": 0, "indexed": 0}
-        # rounded once, so that what is counted and what is shown agree on which side of a threshold a picture is
-        scores = np.round((vectors @ self.embedder.text(description)).astype(np.float64), 3)
-        order = np.argsort(-scores, kind="stable")[:limit]
-        found = [{"id": photos[i]["id"], "name": Path(photos[i]["path"]).name, "score": float(scores[i])} for i in order]
-        return {
-            "sure": [photo for photo in found if photo["score"] >= SURE],
-            "maybe": [photo for photo in found if MAYBE <= photo["score"] < SURE],
-            "matching": int((scores >= SURE).sum()),
-            "indexed": len(photos),
-        }
+            return closest(vectors, np.zeros(0), [], limit)
+        entries = [{"id": photo["id"], "name": Path(photo["path"]).name} for photo in photos]
+        return closest(vectors, self.embedder.text(description), entries, limit)
 
     def forget(self, identifiers: list[str]) -> None:
         """Drops pictures from the index at once, without waiting for the folder to be read again."""

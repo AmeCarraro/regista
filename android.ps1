@@ -1,0 +1,66 @@
+# Builds the Android app and tries it on a pretend phone, all in containers: nothing Android is installed on the PC.
+# Usage: .\android.ps1 build       makes android\app\build\outputs\apk\debug\app-debug.apk, to install on a phone
+#        .\android.ps1 phone       starts a pretend phone (an Android 15 emulator, no window) and waits until it is on
+#        .\android.ps1 install     puts the app on the pretend phone
+#        .\android.ps1 pictures D:\some\folder   copies the pictures of a folder into the pretend phone's gallery
+#        .\android.ps1 pair "regista://pair?..."   opens the app on the pretend phone with a pairing link
+#        .\android.ps1 screen out.png            saves what the pretend phone is showing
+#        .\android.ps1 adb ...     any adb command on the pretend phone
+#        .\android.ps1 stop        turns the pretend phone off
+# The first time it builds the image with the tools (android\tools\Dockerfile): about 1.3 GB to download.
+# The pretend phone reaches Regista's door for the phones at 10.0.2.2, port 8443.
+param([Parameter(Position = 0)][string]$What = 'build', [Parameter(Position = 1, ValueFromRemainingArguments)][string[]]$More = @())
+
+$project = Join-Path $PSScriptRoot 'android'
+function Stop-Run($message) { Write-Host "FAILED: $message" -ForegroundColor Red; exit 1 }
+
+docker image inspect regista-android 2>$null | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    docker build -t regista-android (Join-Path $project 'tools')
+    if ($LASTEXITCODE -ne 0) { Stop-Run 'building the image with the Android tools' }
+}
+
+switch ($What) {
+    'build' {
+        # the key is made once and kept out of the repository: with a new key at each build a phone would refuse the update
+        $script = 'mkdir -p .keys && { [ -f .keys/regista.keystore ] || keytool -genkeypair -keystore .keys/regista.keystore -storepass regista -keypass regista -alias regista -keyalg RSA -keysize 2048 -validity 10000 -dname CN=Regista; } && gradle --no-daemon -q assembleDebug'
+        docker run --rm -v "${project}:/work" -v regista-gradle:/root/.gradle regista-android sh -c $script
+        if ($LASTEXITCODE -ne 0) { Stop-Run 'the build' }
+        Write-Host "App: $(Join-Path $project 'app\build\outputs\apk\debug\app-debug.apk')" -ForegroundColor Green
+    }
+    'phone' {
+        docker rm -f regista-phone 2>$null | Out-Null
+        $start = 'python3 /work/tools/forward.py 8443 host.docker.internal 8443 & exec emulator -avd regista -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -no-metrics -memory 2048'
+        docker run -d --name regista-phone --device /dev/kvm -v "${project}:/work" regista-android sh -c $start | Out-Null
+        if ($LASTEXITCODE -ne 0) { Stop-Run 'starting the pretend phone' }
+        foreach ($attempt in 1..90) {
+            if ((docker exec regista-phone adb shell getprop sys.boot_completed 2>$null) -match '1') { break }
+            Start-Sleep -Seconds 2
+        }
+        Write-Host "The pretend phone is on (Android $(docker exec regista-phone adb shell getprop ro.build.version.release))." -ForegroundColor Green
+    }
+    'install' {
+        docker exec regista-phone adb install -r /work/app/build/outputs/apk/debug/app-debug.apk
+    }
+    'pictures' {
+        if (-not $More -or -not (Test-Path $More[0] -PathType Container)) { Stop-Run 'give the folder with the pictures' }
+        docker exec regista-phone mkdir -p /tmp/pictures
+        docker cp "$((Resolve-Path $More[0]).Path)\." regista-phone:/tmp/pictures
+        # into the folder where a camera puts them, and then Android is told to look: it is its list the app reads
+        docker exec regista-phone sh -c 'adb shell mkdir -p /sdcard/DCIM/Camera && adb push /tmp/pictures/. /sdcard/DCIM/Camera/ > /dev/null && adb shell content call --uri content://media/ --method scan_volume --arg external_primary > /dev/null'
+        Write-Host 'Pictures copied into the gallery of the pretend phone.' -ForegroundColor Green
+    }
+    'pair' {
+        if (-not $More) { Stop-Run 'give the link shown on the page' }
+        docker exec regista-phone adb shell am start -a android.intent.action.VIEW -d "'$($More[0])'" app.regista
+    }
+    'screen' {
+        $target = if ($More) { $More[0] } else { 'phone.png' }
+        docker exec regista-phone sh -c 'adb exec-out screencap -p > /tmp/screen.png'
+        docker cp regista-phone:/tmp/screen.png $target
+        Write-Host "Saved $target" -ForegroundColor Green
+    }
+    'adb' { docker exec regista-phone adb @More }
+    'stop' { docker rm -f regista-phone | Out-Null }
+    default { Stop-Run "unknown command '$What': build, phone, install, pictures, pair, screen, adb, stop" }
+}

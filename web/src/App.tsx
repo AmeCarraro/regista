@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { carryOut, chatStream, fetchChanges, fetchLibrary, fetchModels, readFolderAgain, takeBack, testModels } from './api.ts'
-import type { Changes, Library, Models, Outcome } from './api.ts'
+import { carryOut, chatStream, fetchChanges, fetchLibrary, fetchModels, fetchPhone, fetchTransfer, readFolderAgain, takeBack, testModels } from './api.ts'
+import type { Changes, Library, Models, Outcome, PhoneState } from './api.ts'
 import { apply, lapse, missing, newReply, selection, settle, tail, toMessages, waiting, yesOrNo } from './chat.ts'
 import type { Proposed, Reply, Turn } from './chat.ts'
 import Composer from './Composer.tsx'
@@ -28,6 +28,7 @@ export default function App() {
   const [models, setModels] = useState<Models | null>(null)
   const [library, setLibrary] = useState<Library | null>(null)
   const [changes, setChanges] = useState<Changes | null>(null)
+  const [phone, setPhone] = useState<PhoneState | null>(null)
   // the pictures that went to the trash since they were shown in this conversation
   const [gone, setGone] = useState<ReadonlySet<string>>(new Set())
   const [testing, setTesting] = useState<{ model: string; done: number; of: number } | null>(null)
@@ -47,10 +48,55 @@ export default function App() {
     fetchChanges().then(setChanges, () => setChanges(null))
   }
 
+  function loadPhone() {
+    fetchPhone().then(setPhone, () => setPhone(null))
+  }
+
   useEffect(() => {
     loadModels()
     loadChanges()
   }, [])
+
+  // Which phones are connected is shown, and decided, only at the computer: inside a phone's app the page does not ask.
+  const atComputer = library?.door === 'computer'
+  useEffect(() => {
+    if (!atComputer) return
+    loadPhone()
+    // a phone connects, sends its pictures and answers requests on its own time: look again every few seconds
+    const timer = setInterval(loadPhone, 5000)
+    return () => clearInterval(timer)
+  }, [atComputer])
+
+  // the requests to a phone that are still open, each with the reply whose card follows it
+  const awaited = turns.flatMap((turn) =>
+    turn.role === 'assistant'
+      ? turn.parts.flatMap((part) => (part.kind === 'proposal' && part.state === 'waiting' && part.transfer ? [{ reply: turn.id, transfer: part.transfer }] : []))
+      : [],
+  )
+  const awaitedKey = awaited.map((one) => `${one.reply}:${one.transfer}`).join(',')
+  useEffect(() => {
+    if (!awaitedKey) return
+    const timer = setInterval(() => {
+      for (const one of awaited) {
+        fetchTransfer(one.transfer).then(
+          (now) => {
+            if (now.state === 'done') {
+              patch(one.reply, (current) => settle(current, { state: 'done', note: now.text, entry: now.entry, transfer: '' }, now.memory))
+              loadChanges()
+              loadPhone()
+            } else {
+              patch(one.reply, (current) => settle(current, { note: now.text }))
+            }
+          },
+          // the service may be restarting: the next look will tell
+          () => {},
+        )
+      }
+    }, 1500)
+    return () => clearInterval(timer)
+    // the list is rebuilt at every render: its key says when it really changed
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [awaitedKey])
 
   // the number of pictures is asked again every second while they are being read, and rarely otherwise
   useEffect(() => {
@@ -84,7 +130,8 @@ export default function App() {
   // follow the conversation as it grows, but stay put when a picture is ticked in a card further up
   const grown = tail(turns)
   useEffect(() => {
-    end.current?.scrollIntoView({ block: 'end' })
+    // not before the first request: on a small screen it would hide the top of the welcome
+    if (grown !== '0') end.current?.scrollIntoView({ block: 'end' })
   }, [grown])
 
   function patch(id: number, change: (reply: Reply) => Reply) {
@@ -116,6 +163,13 @@ export default function App() {
       const { proposal } = proposed
       const outcome =
         proposal.action === 'undo' ? await takeBack(proposal.of) : await carryOut(proposal.action, proposed.picked, proposed.folder)
+      if (outcome.transfer) {
+        // a phone was asked: the card now follows the request until the pictures have arrived
+        const transfer = outcome.transfer
+        patch(reply.id, (current) => settle(current, { state: 'waiting', note: outcome.text, folder: outcome.folder, transfer }, outcome.memory))
+        loadPhone()
+        return outcome.text
+      }
       patch(reply.id, (current) => settle(current, { state: 'done', note: outcome.text, entry: outcome.id, folder: outcome.folder }, outcome.memory))
       if (proposal.action === 'undo') {
         // the card of the change that was just taken back must not offer to take it back again
@@ -251,6 +305,8 @@ export default function App() {
           models={models}
           library={library}
           changes={changes}
+          phone={phone}
+          onPhoneChange={loadPhone}
           testing={testing}
           onTest={() => void test()}
           onReadAgain={readAgain}

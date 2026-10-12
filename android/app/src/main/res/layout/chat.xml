@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/ground"
+    android:fitsSystemWindows="true"
+    android:orientation="vertical">
+
+    <!-- the computer's own page: the same chat as on the computer -->
+    <WebView
+        android:id="@+id/page"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+
+    <!-- what the phone is doing for the computer. A long press unpairs -->
+    <TextView
+        android:id="@+id/status"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/card"
+        android:maxLines="2"
+        android:paddingHorizontal="16dp"
+        android:paddingVertical="9dp"
+        android:textColor="@color/muted"
+        android:textSize="12sp" />
+</LinearLayout>

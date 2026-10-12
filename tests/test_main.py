@@ -93,7 +93,7 @@ def test_a_picture_that_is_not_known_is_not_served():
 def test_the_library_reports_how_many_pictures_are_known():
     body = client.get("/api/photos").json()
 
-    assert body["indexed"] == 0 and body["running"] is False
+    assert body["indexed"] == 0 and body["running"] is False and body["door"] == "computer"
 
 
 # ---- changes to the pictures, on a folder made for the test

@@ -8,6 +8,8 @@ import llm
 import orchestrator
 import selftest
 from catalog import Hardware
+from fakes import ColourEmbedder, shot
+from phone import Phones
 
 LAPTOP = Hardware(gpu="RTX 3050 Ti", gpu_gb=4.0, ram_gb=16.0, cores=14)
 GRANITE = {"name": "granite4.1:3b", "bytes": 2.1e9, "parameters": "3.4B", "capabilities": ["completion", "tools"], "loaded": True, "gpu_share": 1.0}
@@ -85,12 +87,12 @@ def script(monkeypatch, replies):
     return seen
 
 
-def ask(text, photos=None, models=(GRANITE,), wanted="auto", history=(), actions=None, selection=()):
+def ask(text, photos=None, models=(GRANITE,), wanted="auto", history=(), actions=None, selection=(), phones=None):
     photos = photos or Photos()
 
     async def collect():
         messages = [*history, {"role": "user", "content": text}]
-        return [event async for event in orchestrator.reply(messages, wanted, list(models), LAPTOP, {}, photos, actions, list(selection))]
+        return [event async for event in orchestrator.reply(messages, wanted, list(models), LAPTOP, {}, photos, actions, list(selection), phones)]
 
     return asyncio.run(collect()), photos
 
@@ -110,7 +112,8 @@ def test_a_request_for_pictures_becomes_a_search_and_the_app_says_what_it_found(
 
     assert photos.asked == ["a black dog"]
     assert [event["type"] for event in events] == ["start", "step", "photos", "text", "done"]
-    assert events[1] == {"type": "step", "tool": "find_photos", "arguments": {"description": "a black dog"}}
+    assert events[1] == {"type": "step", "tool": "find_photos", "arguments": {"description": "a black dog", "place": "computer"}}
+    assert events[2]["place"] == "computer"
     assert [photo["id"] for photo in events[2]["sure"]] == ["p0", "p1"]
     # counted by the app, not written by the model
     assert said(events) == "Ho trovato 2 foto. Ce n'è un'altra che potrebbe andare bene."
@@ -426,3 +429,135 @@ def test_results_of_a_test_with_other_requests_are_not_used(tmp_path):
     })
 
     assert list(selftest.load(str(tmp_path))) == ["new"]
+
+
+# ---- the pictures of a phone
+
+
+@pytest.fixture
+def phones(tmp_path):
+    """A phone that was let in and has sent the small copies of three pictures."""
+    known = Phones(str(tmp_path / "phone"), ColourEmbedder(), ["192.168.1.23"], 8443)
+    known.devices.append({"id": "d1", "name": "Pixel", "key": "", "paired": "", "seen": ""})
+    known.add("d1", [shot("1", "blue", name="mare.jpg"), shot("2", "blue", name="cielo.jpg"), shot("3", "red", name="rosa.jpg")])
+    return known
+
+
+@pytest.mark.parametrize("request_text, there", [
+    ("trovami sul telefono le foto del mare", True),
+    ("prendi dal mio cellulare le foto del Giappone", True),
+    ("quante foto ho nel telefono?", True),
+    ("show me the pictures on my phone", True),
+    ("le foto del telefono con un cane", True),
+    # a picture that shows a phone is not a picture on the phone
+    ("trovami le foto con un telefono", False),
+    ("una foto di un telefono rotto", False),
+    ("trovami le foto del mare", False),
+])
+def test_a_request_names_the_phone_as_a_place_or_does_not(request_text, there):
+    assert bool(orchestrator.ON_PHONE.search(request_text)) is there
+
+
+def test_a_search_on_the_phone_looks_at_its_pictures_and_says_so(monkeypatch, phones):
+    # the model left the place in the caption: a picture does not show where it is kept
+    script(monkeypatch, [find("something green on the phone")])
+
+    events, photos = ask("trovami sul telefono le foto verdi", phones=phones)
+
+    assert photos.asked == []
+    assert events[1] == {"type": "step", "tool": "find_photos", "arguments": {"description": "something green", "place": "phone"}}
+    assert events[2]["place"] == "phone" and events[2]["indexed"] == 3
+    assert said(events) == "Non ho trovato niente del genere tra le 3 foto del telefono che conosco."
+    assert events[-1]["memory"].startswith('Searched the photos on the phone for "something green"')
+
+
+def test_what_is_found_on_the_phone_is_said_to_be_there(monkeypatch, phones):
+    script(monkeypatch, [find("something blue")])
+
+    events, _ = ask("le foto blu sul telefono", phones=phones)
+
+    assert said(events) == "Ho trovato 2 foto sul telefono."
+    assert all(photo["id"].startswith("t") for photo in events[2]["sure"])
+
+
+def test_the_next_request_stays_on_the_phone_until_the_computer_is_named(monkeypatch, phones):
+    on_screen = [photo["id"] for photo in phones.photos if photo["name"] != "rosa.jpg"]
+
+    script(monkeypatch, [find("something red")])
+    events, photos = ask("e quelle rosse?", phones=phones, selection=on_screen)
+    assert events[2]["place"] == "phone" and photos.asked == []
+
+    script(monkeypatch, [find("something red")])
+    events, photos = ask("e quelle rosse sul computer?", phones=phones, selection=on_screen)
+    assert events[2]["place"] == "computer" and photos.asked == ["something red"]
+
+
+def test_without_a_phone_let_in_a_request_about_the_phone_says_how_to_connect_one(monkeypatch, tmp_path):
+    script(monkeypatch, [find("the sea")])
+    nobody = Phones(str(tmp_path / "phone"), ColourEmbedder(), [], 8443)
+
+    events, photos = ask("trovami sul telefono le foto del mare", phones=nobody)
+
+    assert said(events) == orchestrator.NO_PHONE and photos.asked == []
+
+
+def test_how_many_pictures_are_on_the_phone_is_counted_there(monkeypatch, phones):
+    script(monkeypatch, [COUNT])
+
+    events, _ = ask("quante foto ho sul telefono?", phones=phones)
+
+    assert said(events) == "Conosco 3 foto del telefono."
+    assert events[-1]["memory"] == "Counted the photos on the phone: 3."
+
+
+def test_copying_from_the_phone_is_proposed_as_a_request_to_the_phone(monkeypatch, phones):
+    script(monkeypatch, [form("copy_photos", "something blue", "Mare")])
+    actions = Changes()
+
+    events, _ = ask("prendi dal telefono le foto blu e salvale nella cartella Mare", phones=phones, actions=actions)
+
+    assert [event["type"] for event in events] == ["start", "step", "text", "proposal", "done"]
+    assert proposed(events)["action"] == "fetch" and proposed(events)["folder"] == "Mare"
+    assert sorted(photo["name"] for photo in proposed(events)["photos"]) == ["cielo.jpg", "mare.jpg"]
+    assert said(events) == "Copio dal telefono al computer queste 2 foto, nella cartella «Mare»? Sul telefono restano dove sono."
+    assert 'copy them from the phone to the computer, into the folder "Mare"' in events[-1]["memory"]
+    assert actions.done == [] and phones.transfers == []
+
+
+def test_these_are_pictures_of_the_phone_when_the_ones_on_screen_are(monkeypatch, phones):
+    script(monkeypatch, [form("copy_photos", "", "Vacanze")])
+    on_screen = [phones.photos[0]["id"]]
+
+    events, _ = ask("copiale nella cartella Vacanze", phones=phones, actions=Changes(), selection=on_screen)
+
+    assert proposed(events) == {"type": "proposal", "action": "fetch", "folder": "Vacanze", "photos": [{"id": on_screen[0], "name": "mare.jpg"}]}
+
+
+def test_saving_them_on_the_computer_says_where_they_go_not_where_they_are(monkeypatch, phones):
+    # the pictures on screen are on the phone; the model repeats what they show, as it often does
+    script(monkeypatch, [form("copy_photos", "something blue", "Mare")])
+    on_screen = [photo["id"] for photo in phones.photos if photo["name"] != "rosa.jpg"]
+
+    events, photos = ask("salvale sul computer in una cartella Mare", phones=phones, actions=Changes(), selection=on_screen)
+
+    assert photos.asked == []
+    assert proposed(events)["action"] == "fetch" and sorted(photo["id"] for photo in proposed(events)["photos"]) == sorted(on_screen)
+
+
+def test_pictures_on_the_phone_are_not_thrown_away(monkeypatch, phones):
+    script(monkeypatch, [form("trash_photos", "something blue")])
+
+    events, _ = ask("elimina dal telefono le foto blu", phones=phones, actions=Changes())
+
+    assert said(events) == orchestrator.PHONE_ONLY_COPIES and proposed(events) is None
+
+
+def test_what_a_request_to_the_phone_becomes_in_words():
+    assert orchestrator.asked_in_words(12, "Mare")[0] == "Ho chiesto al telefono 12 foto. Arrivano quando Regista è aperto sul telefono."
+    assert orchestrator.received_in_words(12, 0, "Mare")[0] == "Fatto: 12 foto arrivate dal telefono, nella cartella «Mare»."
+    assert orchestrator.received_in_words(1, 2, "Mare")[0] == "Fatto: 1 foto arrivata dal telefono, nella cartella «Mare». 2 foto il telefono non è riuscito a mandarle."
+    assert orchestrator.received_in_words(0, 1, "Mare")[0] == "Dal telefono non è arrivata nessuna foto. 1 foto il telefono non è riuscito a mandarla."
+    arrived = {"id": "x", "kind": "receive", "folder": "Mare", "files": [{}] * 3}
+    assert orchestrator.undo_proposed_in_words(arrived) == "L'ultima modifica è stata copiare 3 foto dal telefono nella cartella «Mare». Tolgo quelle copie? Sul telefono le foto restano."
+    taken_back = {"undid": "receive", "count": 3, "failed": 0, "folder": "Mare"}
+    assert orchestrator.undone_in_words(taken_back)[0] == "Annullato: ho tolto le 3 copie dalla cartella «Mare». Sul telefono le foto ci sono ancora."

@@ -183,6 +183,13 @@ export const Undo = (props: Props) => (
   </Icon>
 )
 
+export const Phone = (props: Props) => (
+  <Icon {...props}>
+    <rect x="7" y="2.5" width="10" height="19" rx="2.5" />
+    <path d="M11 18.5h2" />
+  </Icon>
+)
+
 export const Dog = (props: Props) => (
   <Icon {...props}>
     <path d="M6 9l-2.5-3.5L8 4.5l2 2h4l2-2 4.5 1L18 9v5a6 6 0 0 1-12 0z" />

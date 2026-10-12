@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- to talk to the computer it was paired with, and to nothing else -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- to read the pictures: asked to the user when the app is first paired. Its name changed with Android 13 -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+
+    <!-- no backup: the key that lets this phone into the computer must not leave the phone -->
+    <application
+        android:allowBackup="false"
+        android:icon="@mipmap/icon"
+        android:label="@string/app_name"
+        android:theme="@style/App">
+
+        <activity
+            android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- the link in the code the computer shows: the phone's camera reads it and opens the app with it -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:host="pair" android:scheme="regista" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

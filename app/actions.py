@@ -179,6 +179,27 @@ class Actions:
             entry = self._record(self._name(), "copy", files, back=lambda file: (self.root / file["to"]).unlink(missing_ok=True), folder=target.name)
             return {**entry, "folder": target.name, "count": len(files), "missing": missing, "failed": failed}
 
+    def incoming(self, folder: str) -> Path:
+        """A temporary file in a folder of the collections, for a picture that is arriving from a phone."""
+        directory = self.root / COLLECTIONS / collection_name(folder)
+        directory.mkdir(parents=True, exist_ok=True)
+        # under another name while it arrives: a picture that stops halfway must never look like one
+        return directory / f"{secrets.token_hex(6)}.part"
+
+    def land(self, partial: Path, name: str) -> str:
+        """Gives a picture that has arrived its name, never the name of one already there. Returns where it is."""
+        with self._lock:
+            target = free(partial.parent / name)
+            os.rename(partial, target)
+            return self._relative(target)
+
+    def arrived(self, files: list[dict], folder: str) -> dict:
+        """Writes down the pictures that arrived from a phone, so that they can be taken back like any copy."""
+        with self._lock:
+            # if this cannot be written the pictures stay where they landed: they are copies, and the phone has the originals
+            entry = self._record(self._name(), "receive", files, back=lambda file: None, folder=collection_name(folder))
+            return {**entry, "count": len(files), "missing": 0, "failed": 0}
+
     def history(self) -> list[dict]:
         """Every change made so far, oldest first, each with whether it was taken back."""
         if not self.journal.exists():

@@ -221,10 +221,42 @@
 }
 
 .command span {
+  flex: none;
   color: var(--rose);
   font-family: var(--body);
   font-size: 0.72rem;
   font-weight: 600;
+}
+
+/* a long link: one line of it is enough to recognise it */
+.command i {
+  min-width: 0;
+  overflow: hidden;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- letting a phone in ---- */
+
+.invite {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* the code keeps a white ground in both themes: a camera reads dark on light */
+.invite img {
+  align-self: center;
+  /* as large as the panel allows: the code is dense, and a camera reads it more easily when it is big */
+  width: min(100%, 280px);
+  border-radius: var(--radius-small);
+  background: #fff;
+}
+
+.model-name svg {
+  flex: none;
+  color: var(--rose);
 }
 
 .quiet-button {

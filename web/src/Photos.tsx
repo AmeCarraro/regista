@@ -111,12 +111,17 @@ export default function PhotoResults({ found }: { found: Found }) {
               type="button"
               className={`photo${index >= found.sure.length ? ' unsure' : ''}${away ? ' gone' : ''}`}
               style={{ '--i': Math.min(index, 24) } as CSSProperties}
-              aria-label={away ? `${photo.name}, nel cestino` : `Apri ${photo.name}`}
+              aria-label={away ? `${photo.name}, nel cestino` : found.place === 'phone' ? `Apri ${photo.name}, sul telefono` : `Apri ${photo.name}`}
               disabled={away}
               onClick={() => setOpen(photo.id)}
             >
               <Thumb id={photo.id} />
               {away && <icons.Trash className="mark-gone" />}
+              {found.place === 'phone' && (
+                <span className="on-phone" title="È sul telefono">
+                  <icons.Phone />
+                </span>
+              )}
             </button>
           )
         })}

@@ -1,4 +1,7 @@
 """What the tests use in place of the real picture model: one that only sees the colour of a picture."""
+import base64
+import io
+
 import numpy as np
 from PIL import Image
 
@@ -26,3 +29,17 @@ class ColourEmbedder:
 def picture(folder, name, colour):
     folder.mkdir(parents=True, exist_ok=True)
     Image.new("RGB", (64, 48), COLOURS[colour]).save(folder / name)
+
+
+def shot(media, colour, name=None, stamp="1"):
+    """A picture as a phone sends it: its own name for it, and a small copy as text."""
+    data = io.BytesIO()
+    Image.new("RGB", (64, 48), COLOURS[colour]).save(data, "JPEG")
+    return {"id": media, "stamp": stamp, "name": name or f"IMG_{media}.jpg", "taken": 1_700_000_000_000, "jpeg": base64.b64encode(data.getvalue()).decode()}
+
+
+def certificate_in(folder):
+    """Puts in a folder a certificate that only has to be there: the tests do not make a real one."""
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "certificate.pem").write_text("-----BEGIN CERTIFICATE-----\n" + base64.b64encode(b"a certificate").decode() + "\n-----END CERTIFICATE-----\n")
+    (folder / "key.pem").write_text("a key")

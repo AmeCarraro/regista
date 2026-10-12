@@ -1,16 +1,17 @@
 // What the chat knows that is not drawing: how the events of a reply become
 // what is on screen, and what of a conversation is sent back to the model.
-import type { ChatEvent, Found, Job, Message, ModelInfo, Models, Proposal } from './api.ts'
+import type { ChatEvent, Found, Job, Message, ModelInfo, Models, Place, Proposal } from './api.ts'
 
 /**
  * A change the app proposed, and what became of it. It waits ("asked") until
- * the user answers; "working" while it is carried out; then it is "done",
+ * the user answers; "working" while it is carried out; "waiting" while a phone
+ * has been asked for pictures that have not all arrived; then it is "done",
  * "declined", or "undone" when it was done and then taken back.
  */
 export type Proposed = {
   kind: 'proposal'
   proposal: Proposal
-  state: 'asked' | 'working' | 'done' | 'declined' | 'undone'
+  state: 'asked' | 'working' | 'waiting' | 'done' | 'declined' | 'undone'
   /** The pictures still ticked: the user can leave some out before saying yes. */
   picked: string[]
   /** The folder of a copy, as the user may have rewritten it. */
@@ -21,12 +22,14 @@ export type Proposed = {
   problem: string
   /** The name of the change once done, to take it back. */
   entry: string
+  /** The name of the request to a phone, while its pictures are awaited. */
+  transfer: string
 }
 
 /** A piece of a reply, in the order it arrived. */
 export type Part =
   | { kind: 'text'; text: string }
-  | { kind: 'search'; description: string }
+  | { kind: 'search'; description: string; place: Place }
   | ({ kind: 'photos' } & Found)
   | Proposed
 
@@ -76,7 +79,7 @@ export function apply(reply: Reply, event: ChatEvent): Reply {
         // only a search has something to show; other tools speak through the text that follows
         parts:
           event.tool === 'find_photos'
-            ? [...reply.parts, { kind: 'search', description: String(event.arguments.description ?? '') }]
+            ? [...reply.parts, { kind: 'search', description: String(event.arguments.description ?? ''), place: event.arguments.place === 'phone' ? 'phone' : 'computer' }]
             : reply.parts,
       }
     case 'photos': {
@@ -95,6 +98,7 @@ export function apply(reply: Reply, event: ChatEvent): Reply {
         note: '',
         problem: '',
         entry: '',
+        transfer: '',
       }
       return { ...reply, parts: [...reply.parts, asked] }
     }
@@ -166,7 +170,7 @@ export function lapse(turns: Turn[]): Turn[] {
 export function missing(proposed: Proposed): string {
   if (proposed.proposal.action === 'undo') return ''
   if (proposed.picked.length === 0) return 'Non è rimasta nessuna foto selezionata.'
-  if (proposed.proposal.action === 'copy' && !proposed.folder.trim()) return 'Scrivi prima il nome della cartella nella scheda qui sopra.'
+  if (proposed.proposal.action !== 'trash' && !proposed.folder.trim()) return 'Scrivi prima il nome della cartella nella scheda qui sopra.'
   return ''
 }
 

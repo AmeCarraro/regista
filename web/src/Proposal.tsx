@@ -37,12 +37,21 @@ function wording(proposed: Proposed): { icon: ReactNode; title: string; hint: st
         hint: 'Gli originali restano dove sono.',
         yes: count === 1 ? 'Copia 1 foto' : `Copia ${count} foto`,
       }
+    case 'fetch':
+      return {
+        icon: <icons.Phone />,
+        title: 'Copia dal telefono al computer',
+        hint: 'Sul telefono restano dove sono.',
+        yes: count === 1 ? 'Copia 1 foto dal telefono' : `Copia ${count} foto dal telefono`,
+      }
     case 'undo': {
       const at = clock(proposal.when)
       const what =
         proposal.undoes === 'trash'
           ? `${proposal.count} foto spostate nel cestino`
-          : `${proposal.count} foto copiate in «${proposal.folder}»`
+          : proposal.undoes === 'receive'
+            ? `${proposal.count} foto arrivate dal telefono in «${proposal.folder}»`
+            : `${proposal.count} foto copiate in «${proposal.folder}»`
       return {
         icon: <icons.Undo />,
         title: "Annulla l'ultima modifica",
@@ -81,6 +90,19 @@ export default function ProposalCard({ proposed, answers }: { proposed: Proposed
       </p>
     )
   }
+  if (state === 'waiting') {
+    // a phone has been asked: the pictures arrive when its app is open, which can be much later
+    return (
+      <p className="outcome" role="status">
+        <span className="dots">
+          <i />
+          <i />
+          <i />
+        </span>
+        <span>{proposed.note}</span>
+      </p>
+    )
+  }
 
   const words = wording(proposed)
   const working = state === 'working'
@@ -95,7 +117,7 @@ export default function ProposalCard({ proposed, answers }: { proposed: Proposed
         </div>
       </header>
 
-      {proposal.action === 'copy' && (
+      {(proposal.action === 'copy' || proposal.action === 'fetch') && (
         <label className="folder-name">
           <icons.Folder />
           <span>Cartella</span>

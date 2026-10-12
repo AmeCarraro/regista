@@ -49,7 +49,8 @@ function PartView({ part, answers }: { part: Part; answers: Answers }) {
     case 'search':
       return (
         <p className="step">
-          <icons.Search /> Cerco nelle foto: <q>{part.description}</q>
+          {part.place === 'phone' ? <icons.Phone /> : <icons.Search />}
+          {part.place === 'phone' ? 'Cerco nelle foto del telefono:' : 'Cerco nelle foto:'} <q>{part.description}</q>
         </p>
       )
     case 'photos':

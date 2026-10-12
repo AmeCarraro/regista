@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- the mark of the app as a picture: a rounded tile with the spark on it -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape>
+            <gradient android:angle="315" android:centerColor="#E052A0" android:endColor="#7A5CFF" android:startColor="#FF8A5B" />
+            <corners android:radius="24dp" />
+        </shape>
+    </item>
+    <item android:drawable="@drawable/spark" />
+</layer-list>

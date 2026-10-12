@@ -5,10 +5,17 @@ services:
     build: .
     image: regista
     ports:
-      # only this PC can reach it: nothing on the network can, until there is a way to say who may
+      # this computer's door: only this PC can reach it
       - "127.0.0.1:8090:8000"
+      # the door of the phones: encrypted, and it lets in only a phone that was paired from
+      # this PC. Closed to the network unless the app is started with .\run.ps1 -Phone
+      - "${PHONE_BIND:-127.0.0.1}:8443:8443"
     environment:
       OLLAMA_URL: http://host.docker.internal:11434
+      PHONE_OPEN: ${PHONE_OPEN:-0}
+      # where a phone finds this PC on the network, and what the PC is called
+      HOST_ADDRESSES: ${HOST_ADDRESSES:-}
+      HOST_NAME: ${HOST_NAME:-}
       HOST_GPU_NAME: ${HOST_GPU_NAME:-}
       HOST_GPU_MB: ${HOST_GPU_MB:-0}
       HOST_RAM_MB: ${HOST_RAM_MB:-0}
