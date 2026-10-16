@@ -5,6 +5,7 @@ import android.app.AlertDialog
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
+import android.net.http.SslCertificate
 import android.net.http.SslError
 import android.os.Build
 import android.os.Bundle
@@ -21,7 +22,11 @@ import android.widget.EditText
 import android.widget.TextView
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayInputStream
 import java.io.IOException
+import java.security.cert.CertificateException
+import java.security.cert.CertificateFactory
+import java.security.cert.X509Certificate
 import javax.net.ssl.SSLException
 import kotlin.concurrent.thread
 
@@ -190,7 +195,7 @@ class MainActivity : Activity() {
             // the computer's certificate is its own, so Android does not know it: it is let through
             // only if it is the one whose fingerprint was in the code this phone was paired with
             override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
-                val shown = error.certificate?.x509Certificate?.let(::fingerprintOf)
+                val shown = certificateOf(error)?.let(::fingerprintOf)
                 if (shown != null && shown.equals(memory.fingerprint, ignoreCase = true)) handler.proceed() else handler.cancel()
             }
 
@@ -200,6 +205,18 @@ class MainActivity : Activity() {
                 val there = request.url
                 return !(there.scheme == "https" && here.scheme == "https" && there.host == here.host && there.port == here.port)
             }
+        }
+    }
+
+    /** The certificate a page shows. Android 10 hands it over as it is; before, it is read out of what Android keeps of it. */
+    private fun certificateOf(error: SslError): X509Certificate? {
+        val shown = error.certificate ?: return null
+        if (Build.VERSION.SDK_INT >= 29) return shown.x509Certificate
+        val bytes = SslCertificate.saveState(shown).getByteArray("x509-certificate") ?: return null
+        return try {
+            CertificateFactory.getInstance("X.509").generateCertificate(ByteArrayInputStream(bytes)) as? X509Certificate
+        } catch (wrong: CertificateException) {
+            null
         }
     }
 

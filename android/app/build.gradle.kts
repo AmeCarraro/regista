@@ -11,8 +11,9 @@ android {
 
     defaultConfig {
         applicationId = "app.regista"
-        // Android 10: the first with the calls this app uses to read small copies of pictures
-        minSdk = 29
+        // Android 7: what older Android lacks (small copies, the original of a picture, its own trash, ...)
+        // is done another way, or said to the user; moving pictures to the trash needs Android 11
+        minSdk = 24
         targetSdk = 35
         versionCode = 2
         versionName = "0.2"

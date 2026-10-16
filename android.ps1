@@ -92,8 +92,13 @@ switch ($What) {
                 if (-not $rest -or -not (Test-Path $rest[0] -PathType Container)) { Stop-Run 'give the folder with the pictures' }
                 & $adb shell mkdir -p "'/sdcard/Pictures/Regista prova'"
                 Get-ChildItem $rest[0] -File | ForEach-Object { & $adb push $_.FullName "/sdcard/Pictures/Regista prova/$($_.Name)" | Out-Null }
-                & $adb shell content call --uri content://media/ --method scan_volume --arg external_primary | Out-Null
-                Write-Host 'Pictures copied into the album «Regista prova» of the device.' -ForegroundColor Green
+                # then Android is told to look: Android 10 and later at the whole storage, older ones file by file
+                if ([int](& $adb shell getprop ro.build.version.sdk) -ge 29) {
+                    & $adb shell content call --uri content://media/ --method scan_volume --arg external_primary | Out-Null
+                } else {
+                    Get-ChildItem $rest[0] -File | ForEach-Object { & $adb shell am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d "'file:///sdcard/Pictures/Regista prova/$($_.Name)'" | Out-Null }
+                }
+                Write-Host 'Pictures copied into the album "Regista prova" of the device.' -ForegroundColor Green
             }
             'pair' { & $adb shell am start -a android.intent.action.VIEW -d "'$($rest[0])'" app.regista }
             'screen' {

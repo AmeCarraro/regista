@@ -6,6 +6,8 @@
     <!-- to read the pictures: asked to the user when the app is first paired. Its name changed with Android 13 -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <!-- before Android 10, to keep the pictures that arrive from the computer: they are written as files of their own -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
     <!-- to read where a picture was taken: without it Android hands pictures over with the place taken out -->
     <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />
 

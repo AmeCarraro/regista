@@ -8,6 +8,8 @@ export default defineConfig({
   plugins: [react()],
   base: './',
   build: {
+    // an old phone or tablet has an old browser inside: the page is written for one of 2019
+    target: ['chrome73'],
     outDir: 'dist-telefono',
     emptyOutDir: true,
     rollupOptions: { input: resolve(import.meta.dirname, 'telefono.html') },

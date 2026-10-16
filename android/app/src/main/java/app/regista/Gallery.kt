@@ -6,18 +6,25 @@ import android.content.ContentValues
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.media.ExifInterface
+import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Size
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.io.IOException
 import java.io.InputStream
 import java.security.MessageDigest
-import java.time.Instant
-import java.time.ZoneId
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import kotlin.math.max
+import kotlin.math.roundToInt
 
 /**
  * A picture of the phone: the phone's own number for it, its file name, a stamp that changes
@@ -35,6 +42,11 @@ class Notes(val day: String, val latitude: Double?, val longitude: Double?)
  */
 class Gallery(private val context: Context) {
     private val pictures: Uri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+
+    private companion object {
+        // the long side of a small copy, in pixels
+        const val SMALL = 384
+    }
 
     /** The permission Android asks the user for before an app can see the pictures. Its name changed with Android 13. */
     val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
@@ -60,7 +72,7 @@ class Gallery(private val context: Context) {
                     name = rows.getString(1) ?: "foto.jpg",
                     stamp = "$modified-${rows.getLong(4)}",
                     // the day as this phone's clock and calendar say it, like "2024-08-15": the computer could not know where the phone was
-                    day = Instant.ofEpochMilli(taken).atZone(ZoneId.systemDefault()).toLocalDate().toString(),
+                    day = SimpleDateFormat("yyyy-MM-dd", Locale.ROOT).format(Date(taken)),
                 )
             }
         }
@@ -70,8 +82,16 @@ class Gallery(private val context: Context) {
     private fun address(id: Long): Uri = ContentUris.withAppendedId(pictures, id)
 
     /** The permissions the app still lacks: to see the pictures, and to see where each was taken. Android asks the user for both at once. */
-    fun missing(): Array<String> =
-        arrayOf(permission, Manifest.permission.ACCESS_MEDIA_LOCATION).filter { context.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }.toTypedArray()
+    fun missing(): Array<String> {
+        val wanted = if (Build.VERSION.SDK_INT >= 29) {
+            listOf(permission, Manifest.permission.ACCESS_MEDIA_LOCATION)
+        } else {
+            // before Android 10 the place is in the picture for whoever may read it, and the pictures that
+            // arrive from the computer are written as files: Android asks once for both
+            listOf(permission, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        }
+        return wanted.filter { context.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }.toTypedArray()
+    }
 
     /**
      * What a picture says about itself: the day it was taken and, if its camera knew, where.
@@ -86,7 +106,7 @@ class Gallery(private val context: Context) {
     fun notes(photo: Photo): Notes {
         for (whole in listOf(true, false)) {
             try {
-                val picture = if (whole) MediaStore.setRequireOriginal(address(photo.id)) else address(photo.id)
+                val picture = if (whole && Build.VERSION.SDK_INT >= 29) MediaStore.setRequireOriginal(address(photo.id)) else address(photo.id)
                 context.contentResolver.openInputStream(picture)?.use { stream ->
                     val written = ExifInterface(stream)
                     val moment = written.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL) ?: written.getAttribute(ExifInterface.TAG_DATETIME)
@@ -105,12 +125,35 @@ class Gallery(private val context: Context) {
         return Notes(photo.day, null, null)
     }
 
-    /** A small copy of a picture, as a JPEG: what the computer needs to know what the picture shows. */
+    /** A small copy of a picture, as a JPEG: what the computer, and the phone's own model, need to know what the picture shows. */
     fun small(id: Long): ByteArray? = try {
-        val bitmap = context.contentResolver.loadThumbnail(address(id), Size(384, 384), null)
-        ByteArrayOutputStream().also { bitmap.compress(Bitmap.CompressFormat.JPEG, 80, it) }.toByteArray()
+        val bitmap = if (Build.VERSION.SDK_INT >= 29) context.contentResolver.loadThumbnail(address(id), Size(SMALL, SMALL), null) else smallBefore10(id)
+        bitmap?.let { ByteArrayOutputStream().also { out -> it.compress(Bitmap.CompressFormat.JPEG, 80, out) }.toByteArray() }
     } catch (problem: IOException) {
         null
+    } catch (problem: SecurityException) {
+        null
+    }
+
+    /** Before Android 10 there is no call for a small copy: the picture is read at a fraction of its size, and turned as its camera says. */
+    private fun smallBefore10(id: Long): Bitmap? {
+        val resolver = context.contentResolver
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        resolver.openInputStream(address(id))?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        var sample = 1
+        while (max(bounds.outWidth, bounds.outHeight) / (sample * 2) >= SMALL) sample *= 2
+        val decoded = resolver.openInputStream(address(id))?.use { BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample }) } ?: return null
+        val scale = SMALL.toFloat() / max(decoded.width, decoded.height)
+        val sized = if (scale < 1) Bitmap.createScaledBitmap(decoded, (decoded.width * scale).roundToInt(), (decoded.height * scale).roundToInt(), true) else decoded
+        val turn = resolver.openInputStream(address(id))?.use { ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL) }
+        val degrees = when (turn) {
+            ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+            ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+            ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+            else -> 0f
+        }
+        return if (degrees == 0f) sized else Bitmap.createBitmap(sized, 0, 0, sized.width, sized.height, Matrix().apply { postRotate(degrees) }, true)
     }
 
     /**
@@ -120,6 +163,8 @@ class Gallery(private val context: Context) {
      * phone: a copy with something missing is not the copy to keep.
      */
     fun source(id: Long, whole: Boolean): Uri? {
+        // before Android 10 a picture is handed over as it is, place included
+        if (Build.VERSION.SDK_INT < 29) return address(id).takeIf { readable(it) }
         val written = MediaStore.setRequireOriginal(address(id))
         if (readable(written)) return written
         return address(id).takeIf { !whole && readable(it) }
@@ -169,6 +214,7 @@ class Gallery(private val context: Context) {
      */
     fun save(name: String, album: String, source: InputStream, expected: String): Boolean {
         val folder = album.replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), " ").trim().ifEmpty { "Dal computer" }
+        if (Build.VERSION.SDK_INT < 29) return saveBefore10(name, folder, source, expected)
         val values = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, name)
             put(MediaStore.Images.Media.MIME_TYPE, kindOf(name))
@@ -199,6 +245,42 @@ class Gallery(private val context: Context) {
             resolver.delete(made, null, null)
             return false
         }
+    }
+
+    /** Before Android 10 a picture is a file in the folder of pictures, which Android is then told to look at. */
+    @Suppress("DEPRECATION")
+    private fun saveBefore10(name: String, folder: String, source: InputStream, expected: String): Boolean {
+        val directory = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "Regista/$folder")
+        if (!directory.isDirectory && !directory.mkdirs()) return false
+        val safe = name.replace(Regex("[\\\\/:*?\"<>|]"), " ").trim().ifEmpty { "foto.jpg" }
+        // never over a picture that is there: "rosa (2).jpg"
+        var target = File(directory, safe)
+        var number = 2
+        while (target.exists()) target = File(directory, "${safe.substringBeforeLast('.')} ($number).${safe.substringAfterLast('.', "jpg")}").also { number += 1 }
+        val partial = File(directory, ".${target.name}.part")
+        val digest = MessageDigest.getInstance("SHA-256")
+        try {
+            partial.outputStream().use { out ->
+                source.use { input ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        digest.update(buffer, 0, read)
+                        out.write(buffer, 0, read)
+                    }
+                }
+            }
+        } catch (problem: IOException) {
+            partial.delete()
+            return false
+        }
+        if (!digest.digest().joinToString("") { "%02x".format(it) }.equals(expected, ignoreCase = true) || !partial.renameTo(target)) {
+            partial.delete()
+            return false
+        }
+        MediaScannerConnection.scanFile(context, arrayOf(target.path), arrayOf(kindOf(target.name)), null)
+        return true
     }
 
     private fun kindOf(name: String) = when (name.substringAfterLast('.').lowercase()) {
