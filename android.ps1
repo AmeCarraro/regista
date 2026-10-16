@@ -103,9 +103,10 @@ switch ($What) {
             'pair' { & $adb shell am start -a android.intent.action.VIEW -d "'$($rest[0])'" app.regista }
             'screen' {
                 $target = if ($rest) { $rest[0] } else { 'tablet.png' }
-                & $adb shell screencap -p /sdcard/regista-screen.png
-                & $adb pull /sdcard/regista-screen.png $target | Out-Null
-                & $adb shell rm /sdcard/regista-screen.png
+                # not in the shared storage, where the gallery would take it for a picture
+                & $adb shell screencap -p /data/local/tmp/regista-screen.png
+                & $adb pull /data/local/tmp/regista-screen.png $target | Out-Null
+                & $adb shell rm /data/local/tmp/regista-screen.png
                 Write-Host "Saved $target" -ForegroundColor Green
             }
             'adb' { & $adb @rest }
