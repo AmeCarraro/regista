@@ -34,6 +34,13 @@ services:
         read_only: ${PHOTOS_READ_ONLY:-false}
       # fingerprints of the pictures, small copies for the page, results of the model tests
       - index:/data
+      # the models the phone app runs by itself, for a paired phone to take: read only
+      - type: bind
+        source: ./models
+        target: /models
+        read_only: true
+        bind:
+          create_host_path: true
 
 volumes:
   index:

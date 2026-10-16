@@ -11,6 +11,13 @@ export type State = { paired: boolean; computer: string; reachable: boolean; wai
 /** How far the app is in reading the day and the place of the pictures, and whether it may see them at all. */
 export type Reading = { allowed: boolean; done: number; total: number }
 
+/**
+ * Whether the phone can see what pictures show: its own models are here (ready), or were asked
+ * for (wanted) and are arriving from the computer (got of size bytes); and how many pictures it
+ * has looked at, of how many.
+ */
+export type Sight = { ready: boolean; wanted: boolean; got: number; size: number; seen: number; unseen: number }
+
 export type App = {
   pictures(): Picture[]
   reading(): Reading
@@ -22,6 +29,11 @@ export type App = {
   open(id: string): void
   /** Puts pictures in line to go to the computer: now if it answers, as soon as it does otherwise. */
   send(ids: string[]): { queued: number }
+  sight(): Sight
+  /** Asks for the models: they come from the computer as soon as it answers. */
+  wantSight(): void
+  /** How close each picture the phone has looked at is to a sentence; null while it has no models. */
+  scores(sentence: string): Record<string, number> | null
 }
 
 /** What the app offers the page: every answer is text, as JSON. */
@@ -33,6 +45,9 @@ type Native = {
   city(written: string): string
   open(id: string): void
   send(ids: string): string
+  sight(): string
+  wantSight(): void
+  scores(sentence: string): string
 }
 
 declare global {
@@ -56,6 +71,9 @@ export function connect(): App {
     thumb: (id) => `/thumb/${encodeURIComponent(id)}`,
     open: (id) => native.open(id),
     send: (ids) => parse<{ queued: number }>(native.send(JSON.stringify(ids))),
+    sight: () => parse<Sight>(native.sight()),
+    wantSight: () => native.wantSight(),
+    scores: (sentence) => parse<Record<string, number> | null>(native.scores(sentence)),
   }
 }
 
@@ -99,5 +117,8 @@ function pretend(): App {
     },
     open: () => {},
     send: (ids) => ({ queued: ids.length }),
+    sight: () => ({ ready: false, wanted: false, got: 0, size: 0, seen: 0, unseen: pictures.length }),
+    wantSight: () => {},
+    scores: () => null,
   }
 }

@@ -169,7 +169,16 @@ class Memory(context: Context) {
             .apply()
     }
 
-    fun forget() = kept.edit().clear().apply()
+    /** Forgets the computer. What the user asked of the phone itself stays: the models, if they were wanted. */
+    fun forget() {
+        val sight = wantsSight
+        kept.edit().clear().putBoolean("sight", sight).apply()
+    }
+
+    /** Whether the user asked for the models with which the phone looks at pictures by itself: they come from the computer. */
+    var wantsSight: Boolean
+        get() = kept.getBoolean("sight", false)
+        set(value) = kept.edit().putBoolean("sight", value).apply()
 
     /** The pictures the user chose on this phone to go to the computer, by the phone's numbers for them, until the computer takes them. */
     fun offers(): List<String> {

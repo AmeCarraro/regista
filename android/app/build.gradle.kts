@@ -14,8 +14,12 @@ android {
         // Android 10: the first with the calls this app uses to read small copies of pictures
         minSdk = 29
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1"
+        versionCode = 2
+        versionName = "0.2"
+        // the phones this app is built for: almost every phone and tablet (64 and 32 bit), and the emulator
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+        }
     }
 
     signingConfigs {
@@ -49,4 +53,9 @@ android {
         abortOnError = false
         checkReleaseBuilds = false
     }
+}
+
+dependencies {
+    // the engine that runs the two models with which the phone looks at pictures by itself (Microsoft, MIT licence)
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.29.0")
 }

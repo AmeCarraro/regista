@@ -36,6 +36,7 @@ class MainActivity : Activity() {
     private lateinit var gallery: Gallery
     private lateinit var places: Places
     private lateinit var library: Library
+    private lateinit var sight: Sight
     private var link: Link? = null
 
     /** The computer, when it answered last; null while it cannot be reached. */
@@ -58,7 +59,8 @@ class MainActivity : Activity() {
         memory = Memory(this)
         gallery = Gallery(this)
         places = Places(this)
-        library = Library(this, gallery, places)
+        sight = Sight(this)
+        library = Library(this, gallery, places, sight)
         setContentView(R.layout.main)
         // the table of places takes a few seconds to read on an old phone: it is read now, in the background
         thread(name = "places") { places.ready() }
@@ -139,6 +141,18 @@ class MainActivity : Activity() {
         }
     }
 
+    /** The user asked for the models on the phone's page: they come from the computer as soon as it answers. */
+    fun sightWanted() {
+        say(
+            when {
+                !memory.paired -> "Il modello arriva dal computer: collegalo dalla scheda «Computer»."
+                reached != null -> "Prendo il modello dal computer…"
+                else -> "Prendo il modello dal computer appena lo raggiungo."
+            },
+        )
+        link?.refresh()
+    }
+
     /** Pictures were put in line for the computer on the phone's page: they go as soon as it answers. */
     fun offered(count: Int) {
         say(if (reached != null) "Mando $count foto al computer…" else "$count foto in fila per il computer: le mando appena lo raggiungo.")
@@ -152,7 +166,7 @@ class MainActivity : Activity() {
         page.settings.domStorageEnabled = true
         page.settings.allowFileAccess = false
         page.settings.allowContentAccess = false
-        val phone = Phone(this, library, places, gallery, memory)
+        val phone = Phone(this, library, places, gallery, memory, sight)
         // the page calls the app through this, and only this page can: it is the app's own, and nothing else opens in here
         page.addJavascriptInterface(phone, "Regista")
         page.webViewClient = object : WebViewClient() {
@@ -201,6 +215,7 @@ class MainActivity : Activity() {
         link = Link(
             memory,
             gallery,
+            sight,
             found = { computer ->
                 reached = computer
                 runOnUiThread { open(computer) }

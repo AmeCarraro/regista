@@ -18,7 +18,12 @@ android/.kotlin/
 android/build/
 android/app/build/
 android/.keys/
+# Google's adb for Windows, to reach a real phone through its cable (android.ps1 tablet)
+android/.tools/
 # copied in by android.ps1 at every build: the phone's screen, built from web/, and the table of places
 android/app/src/main/assets/telefono/
 android/app/src/main/assets/places/
 android/local.properties
+
+# the models the phone app runs by itself: downloaded once from Hugging Face, too large for the repository
+models/

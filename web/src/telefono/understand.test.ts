@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest'
 import { iso } from './period.ts'
 import type { Day } from './period.ts'
-import { select } from './select.ts'
+import { select, sentence } from './select.ts'
 import type { Picture } from './select.ts'
 import { understand } from './understand.ts'
 import type { Places } from './understand.ts'
@@ -101,12 +101,33 @@ test('without a request the newest pictures are shown', () => {
   expect(found.words).toBe('Le foto più recenti di questo telefono.')
 })
 
-test('what the pictures should show cannot be looked for without the computer, and the words say so', () => {
+test('what the pictures should show cannot be looked for without the model, and the words say so', () => {
   expect(ask('un cane nero')).toEqual({
     pictures: [],
-    words: 'Senza il computer, per ora cerco per data e per luogo: per esempio «le foto di agosto» o «le foto di Parigi». Per cercare «cane nero» usa la scheda Computer.',
+    words: 'Per cercare cosa mostrano le foto, come «cane nero», mi serve il modello: intanto cerco per data e per luogo, per esempio «le foto di agosto» o «le foto di Parigi».',
+    sure: 0,
   })
   const narrowed = ask('le foto con un cane a Roma')
   expect(narrowed.pictures.map((picture) => picture.id)).toEqual(['5'])
-  expect(narrowed.words).toBe('Ho trovato 1 foto scattata a Roma. Senza il computer non so ancora cercare «cane»: te la mostro.')
+  expect(narrowed.words).toBe('Ho trovato 1 foto scattata a Roma. Per cercare «cane» mi serve il modello: te la mostro.')
+})
+
+test('with the model, what the pictures show is looked for, the closest first, together with the place', () => {
+  const scores = { '1': 0.3, '2': 0.25, '3': 0.27, '4': 0.1, '5': 0.29, '6': 0.2 }
+  const look = (text: string) => select(pictures, understand(text, TODAY, places), scores)
+
+  const found = look('un cane')
+  // sure above 0.26, maybe above 0.24, nothing below
+  expect(found.pictures.map((picture) => picture.id)).toEqual(['1', '5', '3', '2'])
+  expect(found.sure).toBe(3)
+  expect(found.words).toBe('Ho trovato 3 foto. Ce n’è un’altra che potrebbe andare bene.')
+  expect(look('un cane in Giappone').words).toBe('Ho trovato 1 foto scattata in Giappone. Ce n’è un’altra che potrebbe andare bene.')
+  expect(look('un cane a Roma').pictures.map((picture) => picture.id)).toEqual(['5'])
+  expect(look('un cane negli Stati Uniti').words).toBe('Tra le foto scattate negli Stati Uniti non ho trovato niente del genere.')
+  expect(select(pictures, understand('un cane', TODAY, places), {}).words).toBe('Non ho trovato niente del genere tra le foto che ho guardato.')
+  expect(select(pictures, understand('un cane', TODAY, places), { '2': 0.25 }).words).toBe('Non sono sicuro di averne trovate. Questa è la più vicina.')
+})
+
+test('the model is given what the pictures should show, as a sentence it reads best', () => {
+  expect(sentence(understand('trovami le foto con un cane nero a Roma', TODAY, places).rest)).toBe('una foto di cane nero')
 })

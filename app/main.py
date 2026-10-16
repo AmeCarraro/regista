@@ -41,6 +41,10 @@ PHONE_PORT = int(os.getenv("PHONE_PORT", "8443"))
 PHONE_OPEN = os.getenv("PHONE_OPEN", "") == "1"
 # the largest picture a phone may send
 LARGEST = 400 * 1024 * 1024
+# The two models with which a phone looks at pictures by itself, and what they need: downloaded once
+# into models/phone on this computer, the phone takes them from here. Nothing else in that folder is given.
+PHONE_MODELS = Path(os.getenv("PHONE_MODELS", "/models/phone"))
+MODEL_FILES = ("text.onnx", "vision.onnx", "vocab.txt", "dense.safetensors")
 # The most any other request may carry. Without a limit, whoever reaches a door could fill this
 # computer's memory with one endless request; at the door of the phones that is anyone on the
 # network, since the request that lets a phone in is heard before any key is shown.
@@ -661,6 +665,40 @@ def picture_for_the_phone(sending: str, identifier: str, request: Request):
 def taken_by_the_phone(sending: str, body: Received, request: Request):
     """A phone says which of the pictures prepared for it it took, and which it could not."""
     return {"noted": phones.delivered(sending, request.state.device, body.ids, body.missing) is not None or bool(phones.sending(sending))}
+
+
+# what each model file is, worked out once: they are hundreds of MB
+_fingerprints: dict[tuple, str] = {}
+
+
+def _fingerprint(path: Path) -> str:
+    known = (path.name, path.stat().st_size, path.stat().st_mtime)
+    if known not in _fingerprints:
+        seen = hashlib.sha256()
+        with path.open("rb") as file:
+            for chunk in iter(lambda: file.read(1 << 20), b""):
+                seen.update(chunk)
+        _fingerprints[known] = seen.hexdigest()
+    return _fingerprints[known]
+
+
+@app.get("/phone/models")
+def models_for_the_phone():
+    """The models a phone can take from this computer to look at pictures by itself: each with its size and what it is.
+    None when this computer does not have all of them."""
+    paths = [PHONE_MODELS / name for name in MODEL_FILES]
+    if not all(path.is_file() for path in paths):
+        return {"models": []}
+    return {"models": [{"name": path.name, "size": path.stat().st_size, "sha256": _fingerprint(path)} for path in paths]}
+
+
+@app.get("/phone/models/{name}")
+def model_for_the_phone(name: str):
+    """One of those models, with what it is, for the phone to check what arrives."""
+    path = PHONE_MODELS / name
+    if name not in MODEL_FILES or not path.is_file():
+        raise HTTPException(status_code=404, detail="no such model")
+    return FileResponse(path, headers={"X-Regista-Sha256": _fingerprint(path), "Cache-Control": "no-store"})
 
 
 @app.post("/phone/offer")

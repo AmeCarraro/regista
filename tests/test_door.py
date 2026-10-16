@@ -362,6 +362,30 @@ def test_a_phone_can_ask_the_computer_to_take_some_of_its_pictures(home):
     assert client.post("/phone/offer", json={"media": ["41"]}).status_code == 404
 
 
+def test_a_phone_takes_the_models_it_looks_at_pictures_with_from_here_and_nothing_else(home, tmp_path, monkeypatch):
+    folder = tmp_path / "models"
+    folder.mkdir()
+    monkeypatch.setattr(main, "PHONE_MODELS", folder)
+    phone, key, _ = let_in()
+
+    # until all of them are here, there are none to take
+    (folder / "text.onnx").write_bytes(b"text model")
+    assert phone.get("/phone/models", headers=key).json() == {"models": []}
+    for name in ("vision.onnx", "vocab.txt", "dense.safetensors"):
+        (folder / name).write_bytes(name.encode())
+    (folder / "secret.txt").write_bytes(b"not for phones")
+
+    listed = phone.get("/phone/models", headers=key).json()["models"]
+    assert [model["name"] for model in listed] == ["text.onnx", "vision.onnx", "vocab.txt", "dense.safetensors"]
+    assert listed[0] == {"name": "text.onnx", "size": 10, "sha256": hashlib.sha256(b"text model").hexdigest()}
+    taken = phone.get("/phone/models/text.onnx", headers=key)
+    assert taken.content == b"text model" and taken.headers["x-regista-sha256"] == listed[0]["sha256"]
+    # only those files, only to a paired phone, only at its door
+    assert phone.get("/phone/models/secret.txt", headers=key).status_code == 404
+    assert a_phone().get("/phone/models/text.onnx").status_code == 401
+    assert client.get("/phone/models/text.onnx").status_code == 404
+
+
 def test_a_picture_the_phone_cannot_send_ends_the_wait(home):
     phones, _ = home
     phone, key, _ = let_in()

@@ -7,6 +7,8 @@
 #        .\android.ps1 screen out.png            saves what the pretend phone is showing
 #        .\android.ps1 adb ...     any adb command on the pretend phone
 #        .\android.ps1 stop        turns the pretend phone off
+#        .\android.ps1 tablet [info|install|pictures <folder>|pair "<link>"|screen <file>|adb ...]
+#                                  the same on a real phone or tablet through its cable, with USB debugging on
 # The first time it builds the image with the tools (android\tools\Dockerfile): about 1.3 GB to download.
 # The pretend phone reaches Regista's door for the phones at 10.0.2.2, port 8443.
 param([Parameter(Position = 0)][string]$What = 'build', [Parameter(Position = 1, ValueFromRemainingArguments)][string[]]$More = @())
@@ -72,5 +74,38 @@ switch ($What) {
     }
     'adb' { docker exec regista-phone adb @More }
     'stop' { docker rm -f regista-phone | Out-Null }
-    default { Stop-Run "unknown command '$What': build, phone, install, pictures, pair, screen, adb, stop" }
+    'tablet' {
+        # A real device, through its cable. The adb of the pretend phone lives in Docker, which cannot see
+        # USB: this is Google's adb for Windows (platform-tools), downloaded once into android\.tools.
+        $adb = Join-Path $project '.tools\platform-tools\adb.exe'
+        if (-not (Test-Path $adb)) { Stop-Run "Google's platform-tools for Windows are not in android\.tools" }
+        $action = if ($More) { $More[0] } else { 'info' }
+        $rest = @($More | Select-Object -Skip 1)
+        switch ($action) {
+            'info' {
+                & $adb devices -l
+                Write-Host "Android $(& $adb shell getprop ro.build.version.release), $(& $adb shell getprop ro.product.manufacturer) $(& $adb shell getprop ro.product.model), $(& $adb shell getprop ro.product.cpu.abi)"
+            }
+            'install' { & $adb install -r (Join-Path $project 'app\build\outputs\apk\release\app-release.apk') }
+            'pictures' {
+                # into an album of their own: what a trial touches is never one of the owner's pictures
+                if (-not $rest -or -not (Test-Path $rest[0] -PathType Container)) { Stop-Run 'give the folder with the pictures' }
+                & $adb shell mkdir -p "'/sdcard/Pictures/Regista prova'"
+                Get-ChildItem $rest[0] -File | ForEach-Object { & $adb push $_.FullName "/sdcard/Pictures/Regista prova/$($_.Name)" | Out-Null }
+                & $adb shell content call --uri content://media/ --method scan_volume --arg external_primary | Out-Null
+                Write-Host 'Pictures copied into the album «Regista prova» of the device.' -ForegroundColor Green
+            }
+            'pair' { & $adb shell am start -a android.intent.action.VIEW -d "'$($rest[0])'" app.regista }
+            'screen' {
+                $target = if ($rest) { $rest[0] } else { 'tablet.png' }
+                & $adb shell screencap -p /sdcard/regista-screen.png
+                & $adb pull /sdcard/regista-screen.png $target | Out-Null
+                & $adb shell rm /sdcard/regista-screen.png
+                Write-Host "Saved $target" -ForegroundColor Green
+            }
+            'adb' { & $adb @rest }
+            default { Stop-Run "unknown tablet command '$action': info, install, pictures, pair, screen, adb" }
+        }
+    }
+    default { Stop-Run "unknown command '$What': build, phone, install, pictures, pair, screen, adb, stop, tablet" }
 }

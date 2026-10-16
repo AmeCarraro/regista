@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import * as icons from '../icons.tsx'
 import { connect } from './bridge.ts'
 import type { State } from './bridge.ts'
 import type { Day } from './period.ts'
-import { select } from './select.ts'
+import { select, sentence } from './select.ts'
 import { understand } from './understand.ts'
 
 // how many pictures are shown at first, and how many more at each "Mostrane altre"
@@ -16,6 +16,7 @@ function today(): Day {
 }
 
 const count = (number: number) => (number === 1 ? '1 foto' : `${number} foto`)
+const megabytes = (bytes: number) => Math.round(bytes / 1_000_000)
 
 function linked(state: State): string {
   if (!state.paired) return 'Nessun computer collegato'
@@ -24,13 +25,15 @@ function linked(state: State): string {
 
 /**
  * The phone's own screen: it looks for the pictures of this phone by when and where they were
- * taken, with no computer and no internet, and puts the ones chosen in line for the computer.
+ * taken and, once the phone has its own models, by what they show, with no computer and no
+ * internet; and it puts the ones chosen in line for the computer.
  */
 export default function Telefono() {
   const app = useMemo(() => connect(), [])
   const [pictures, setPictures] = useState(() => app.pictures())
   const [reading, setReading] = useState(() => app.reading())
   const [state, setState] = useState(() => app.state())
+  const [sight, setSight] = useState(() => app.sight())
   const [request, setRequest] = useState('')
   // the request the pictures on screen are the answer to
   const [asked, setAsked] = useState('')
@@ -50,11 +53,20 @@ export default function Telefono() {
       }
       setReading(now)
       setState(app.state())
+      setSight(app.sight())
     }, 2000)
     return () => clearInterval(timer)
   }, [app])
 
-  const found = useMemo(() => select(pictures, understand(asked, today(), app.places)), [pictures, asked, app])
+  const understood = useMemo(() => understand(asked, today(), app.places), [asked, app])
+  // what the pictures should show, asked of the phone's own model; again as it looks at more of them
+  const scores = useMemo(
+    () => (understood.rest.length > 0 && sight.ready ? app.scores(sentence(understood.rest)) : null),
+    // sight.seen is not read here, and is what makes the answer change: the app has looked at more pictures
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [understood, sight.ready, sight.seen, app],
+  )
+  const found = useMemo(() => select(pictures, understood, scores), [pictures, understood, scores])
   const visible = found.pictures.slice(0, shown)
 
   function ask(text: string) {
@@ -138,6 +150,33 @@ export default function Telefono() {
           Sto leggendo date e luoghi delle foto: {reading.done} di {reading.total}. Intanto cerco tra quelle già lette.
         </p>
       )}
+      {sight.ready && sight.unseen > 0 && (
+        <p className="fine">
+          Sto guardando cosa mostrano le foto: {sight.seen} di {sight.seen + sight.unseen}. Intanto cerco tra quelle già viste.
+        </p>
+      )}
+      {!sight.ready && (
+        <section className="card">
+          <b>Cercare cosa mostrano le foto, anche senza computer</b>
+          {sight.wanted && sight.size > 0 ? (
+            <p>
+              Prendo il modello dal computer: {megabytes(sight.got)} di {megabytes(sight.size)} MB.
+            </p>
+          ) : sight.wanted ? (
+            <p>{state.paired ? 'Prendo il modello dal computer appena lo raggiungo.' : 'Il modello arriva dal computer: collegalo dalla scheda «Computer».'}</p>
+          ) : (
+            <>
+              <p>Per trovare «un cane» o «il mare» qui sul telefono serve un modello di circa 220 MB. Lo prendo una volta dal tuo computer, poi funziona da solo.</p>
+              <button type="button" className="go wide" onClick={() => {
+                app.wantSight()
+                setSight(app.sight())
+              }}>
+                Prendi il modello
+              </button>
+            </>
+          )}
+        </section>
+      )}
 
       <p className="words" role="status">
         {found.words}
@@ -149,8 +188,10 @@ export default function Telefono() {
       )}
 
       <ul className="grid">
-        {visible.map((picture) => (
-          <li key={picture.id}>
+        {visible.map((picture, index) => (
+          <Fragment key={picture.id}>
+            {index === found.sure && index > 0 && <li className="divider">Forse anche queste</li>}
+            <li>
             <button
               type="button"
               className={choosing && !choosing.has(picture.id) ? 'tile off' : 'tile'}
@@ -165,7 +206,8 @@ export default function Telefono() {
                 </span>
               )}
             </button>
-          </li>
+            </li>
+          </Fragment>
         ))}
       </ul>
       {found.pictures.length > shown && (

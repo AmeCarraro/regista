@@ -113,6 +113,14 @@ if (-not $Phone) {
 }
 $door = if ($Phone -eq 'yes') { ' -Phone' } else { '' }
 
+# the phone can also find pictures by what they show with no computer, with two models it takes from here
+if ($Phone -eq 'yes' -and -not (Test-Path (Join-Path $here 'models\phone\vision.onnx'))) {
+    if (Confirm-Step "Vuoi che il telefono trovi «un cane» o «il mare» anche senza computer? Scarico i due modelli che prende da qui (circa 230 MB, da Hugging Face).") {
+        & (Join-Path $here 'tools\phone-models.ps1')
+        if ($LASTEXITCODE -ne 0) { Say 'I modelli per il telefono non sono arrivati: il telefono cercherà per data e per luogo. Riprova con tools\phone-models.ps1.' 'Yellow' }
+    }
+}
+
 # ---- an icon to start it again, and the first start
 
 # A file that starts Regista on that folder and opens its page: the icon on the desktop points to it.

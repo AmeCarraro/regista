@@ -18,6 +18,7 @@ import java.io.IOException
 class Link(
     private val memory: Memory,
     private val gallery: Gallery,
+    private val sight: Sight,
     /** The computer answered: its page can be shown. */
     private val found: (Computer) -> Unit,
     /** The computer no longer answers. */
@@ -68,6 +69,7 @@ class Link(
                 }
                 // once the computer knows the pictures, the ones the user chose on the phone can go
                 askToTake(reached)
+                if (memory.wantsSight && !sight.ready) takeSight(reached)
                 if (!send(reached)) pause(3000)
             } catch (refused: Refused) {
                 if (refused.status == 401) {
@@ -145,6 +147,41 @@ class Link(
         computer.ask("POST", "/phone/library/done", JSONObject())
         tell(if (photos.isEmpty()) "Su questo telefono non trovo foto." else "Il computer conosce le ${photos.size} foto di questo telefono.")
         return true
+    }
+
+    /** Takes from the computer the two models with which this phone looks at pictures by itself. Each file is checked as it arrives. */
+    private fun takeSight(computer: Computer) {
+        val listed = computer.ask("GET", "/phone/models").getJSONArray("models")
+        if (listed.length() == 0) {
+            memory.wantsSight = false
+            tell("Il computer non ha il modello da darmi: va scaricato prima sul computer.")
+            return
+        }
+        val files = (0 until listed.length()).map { listed.getJSONObject(it) }
+        sight.size = files.sumOf { it.getLong("size") }
+        sight.got = files.filter { sight.has(it.getString("name"), it.getLong("size")) }.sumOf { it.getLong("size") }
+        var told = 0L
+        for (file in files) {
+            val name = file.getString("name")
+            if (sight.has(name, file.getLong("size"))) continue
+            val kept = computer.fetch("/phone/models/$name") { stream, fingerprint ->
+                sight.keep(name, stream, fingerprint) { read ->
+                    sight.got += read
+                    if (sight.got - told > 4_000_000) {
+                        told = sight.got
+                        tell("Prendo dal computer il modello per guardare le foto: ${sight.got / 1_000_000} di ${sight.size / 1_000_000} MB")
+                    }
+                }
+            }
+            if (!kept) {
+                tell("Il modello non è arrivato intero: riprovo.")
+                return
+            }
+        }
+        if (sight.ready) {
+            tell("Il modello è sul telefono: ora guardo le foto, una alla volta.")
+            changed()
+        }
     }
 
     /** Asks the computer to take the pictures the user chose on this phone. Those it does not know yet wait for the next round. */

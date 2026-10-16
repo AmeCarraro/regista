@@ -19,6 +19,7 @@ class Phone(
     private val places: Places,
     private val gallery: Gallery,
     private val memory: Memory,
+    private val sight: Sight,
 ) {
     @JavascriptInterface
     fun pictures(): String = library.json()
@@ -28,6 +29,31 @@ class Phone(
 
     @JavascriptInterface
     fun state(): String = app.state().toString()
+
+    /** Whether the phone can see what pictures show: its models, how much of them has arrived, how many pictures it has looked at. */
+    @JavascriptInterface
+    fun sight(): String = JSONObject()
+        .put("ready", sight.ready)
+        .put("wanted", memory.wantsSight)
+        .put("got", sight.got)
+        .put("size", sight.size)
+        .put("seen", library.seen)
+        .put("unseen", library.unseen)
+        .toString()
+
+    /** The user wants the models: they come from the computer, as soon as it answers. */
+    @JavascriptInterface
+    fun wantSight() {
+        memory.wantsSight = true
+        app.runOnUiThread { app.sightWanted() }
+    }
+
+    /** How close each picture is to a sentence, {"id": score}; null while the phone has no models. */
+    @JavascriptInterface
+    fun scores(sentence: String): String {
+        if (!sight.ready || sentence.isBlank()) return "null"
+        return library.scores(sight.sentence(sentence.take(500)))
+    }
 
     @JavascriptInterface
     fun country(name: String): String = places.country(name)?.toString() ?: "null"
