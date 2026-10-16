@@ -2,6 +2,7 @@ package app.regista
 
 import android.content.Context
 import android.net.Uri
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 import java.io.InputStream
@@ -116,6 +117,23 @@ class Computer(val address: String, private val port: Int, private val fingerpri
         return answer(connection)
     }
 
+    /** Takes a file from the computer, with the fingerprint the computer gives of it, and hands both to `take`. */
+    fun fetch(path: String, take: (InputStream, String) -> Boolean): Boolean {
+        val connection = open("GET", path)
+        connection.readTimeout = 180000
+        try {
+            val status = connection.responseCode
+            if (status >= 400) {
+                val said = runCatching { JSONObject(connection.errorStream?.bufferedReader()?.readText() ?: "") }.getOrDefault(JSONObject())
+                throw Refused(status, said.optString("detail", "errore $status"))
+            }
+            val fingerprint = connection.getHeaderField("X-Regista-Sha256") ?: throw IOException("the computer did not say what the file is")
+            return take(connection.inputStream, fingerprint)
+        } finally {
+            connection.disconnect()
+        }
+    }
+
     /** Sends a file as it is, without holding it all in memory, with the fingerprint the computer checks it against. */
     fun send(path: String, length: Long, source: InputStream, fingerprint: String): JSONObject {
         val connection = open("PUT", path)
@@ -152,6 +170,23 @@ class Memory(context: Context) {
     }
 
     fun forget() = kept.edit().clear().apply()
+
+    /** The pictures the user chose on this phone to go to the computer, by the phone's numbers for them, until the computer takes them. */
+    fun offers(): List<String> {
+        val list = runCatching { JSONArray(kept.getString("offers", "[]")) }.getOrDefault(JSONArray())
+        return (0 until list.length()).map { list.getString(it) }
+    }
+
+    @Synchronized
+    fun offer(media: List<String>) {
+        kept.edit().putString("offers", JSONArray((offers() + media).distinct()).toString()).apply()
+    }
+
+    @Synchronized
+    fun offered(media: List<String>) {
+        val sent = media.toSet()
+        kept.edit().putString("offers", JSONArray(offers().filter { it !in sent }).toString()).apply()
+    }
 
     /** The computer at each of its addresses, to be tried in turn. */
     fun ways(): List<Computer> = addresses.map { Computer(it, kept.getInt("port", 8443), fingerprint, kept.getString("key", "") ?: "") }

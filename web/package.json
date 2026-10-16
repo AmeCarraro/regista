@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:telefono": "tsc -b && vite build --config vite.telefono.config.ts",
     "typecheck": "tsc -b",
     "lint": "oxlint",
     "test": "vitest run",

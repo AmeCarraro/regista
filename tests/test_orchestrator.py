@@ -597,6 +597,70 @@ def test_what_taking_pictures_off_a_phone_becomes_in_words():
     )
 
 
+@pytest.mark.parametrize("request_text, there", [
+    ("mandami sul telefono le foto del mare", True),
+    ("copia sul tablet le foto della neve", True),
+    ("mettile nel mio cellulare", True),
+    # where they come from, not where they go
+    ("prendi dal telefono le foto del mare e salvale sul computer", False),
+    ("trovami le foto del mare", False),
+])
+def test_a_request_names_the_phone_as_where_pictures_go_or_does_not(request_text, there):
+    goes = bool(orchestrator.TO_PHONE.search(request_text)) and not orchestrator.FROM_PHONE.search(request_text)
+    assert goes is there
+
+
+def test_sending_pictures_of_the_computer_to_the_phone_is_proposed(monkeypatch, phones):
+    script(monkeypatch, [form("copy_photos", "the sea on the phone")])
+
+    events, photos = ask("mandami sul telefono le foto del mare", phones=phones, actions=Changes())
+
+    # searched among the computer's pictures, with what the model left about the phone taken out
+    assert photos.asked == ["the sea"]
+    plan = proposed(events)
+    assert (plan["action"], plan["folder"]) == ("send", "Dal computer") and [photo["id"] for photo in plan["photos"]] == ["p0", "p1"]
+    assert said(events) == "Mando sul telefono queste 2 foto, nell'album «Dal computer»? Sul computer restano dove sono."
+    assert 'send them to the phone, into the album "Dal computer"' in events[-1]["memory"]
+
+
+def test_a_verb_that_moves_pictures_to_the_phone_sends_them_even_when_the_model_took_it_for_a_search(monkeypatch, phones):
+    script(monkeypatch, [find("Paris")])
+
+    events, photos = ask("mettimi sul telefono le foto di Parigi", phones=phones, actions=Changes())
+
+    assert photos.asked == ["Paris"] and proposed(events)["action"] == "send"
+
+
+def test_a_search_on_the_phone_stays_a_search(monkeypatch, phones):
+    script(monkeypatch, [find("the sea")])
+
+    events, photos = ask("trovami sul telefono le foto del mare", phones=phones, actions=Changes())
+
+    assert proposed(events) is None and photos.asked == [] and events[2]["place"] == "phone"
+
+
+def test_the_ones_on_screen_go_to_the_phone_and_the_album_can_be_named(monkeypatch, phones):
+    script(monkeypatch, [form("copy_photos", "", "Vacanze")])
+
+    events, _ = ask("salvale sul tablet nell'album Vacanze", phones=phones, actions=Changes(), selection=["p3"])
+
+    assert proposed(events) == {"type": "proposal", "action": "send", "folder": "Vacanze", "photos": [{"id": "p3", "name": "p3.jpg"}]}
+
+
+def test_pictures_already_on_the_phone_are_not_sent_to_it(monkeypatch, phones):
+    script(monkeypatch, [form("copy_photos", "")])
+
+    events, _ = ask("mettile sul telefono", phones=phones, actions=Changes(), selection=[phones.photos[0]["id"]])
+
+    assert said(events) == orchestrator.ALREADY_THERE and proposed(events) is None
+
+
+def test_what_sending_to_the_phone_becomes_in_words():
+    assert orchestrator.delivered_in_words(3, 0, "Mare")[0] == "Fatto: 3 foto sul telefono, nell'album «Mare»."
+    assert orchestrator.delivered_in_words(2, 1, "Mare")[0] == "Fatto: 2 foto sul telefono, nell'album «Mare». 1 foto non è arrivata: forse sul computer non c'era più."
+    assert orchestrator.delivered_in_words(0, 2, "Mare")[0] == "Sul telefono non è arrivata nessuna foto. 2 foto non sono arrivate: forse sul computer non c'erano più."
+
+
 def test_what_a_request_to_the_phone_becomes_in_words():
     assert orchestrator.asked_in_words(12, "Mare")[0] == "Ho chiesto al telefono 12 foto. Arrivano quando Regista è aperto sul telefono."
     assert orchestrator.received_in_words(12, 0, "Mare")[0] == "Fatto: 12 foto arrivate dal telefono, nella cartella «Mare»."

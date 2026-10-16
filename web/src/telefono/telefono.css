@@ -1,0 +1,318 @@
+/* The phone's own screen: one column, made for a thumb. Colours and type come from index.css. */
+
+body {
+  overflow: auto;
+  background:
+    radial-gradient(120% 60% at 100% 0%, rgba(224, 82, 160, 0.18), transparent 60%),
+    radial-gradient(90% 50% at 0% 10%, rgba(122, 92, 255, 0.16), transparent 60%),
+    var(--bg);
+  min-height: 100vh;
+}
+
+.phone {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 14px 16px 120px;
+}
+
+/* ---- top ---- */
+
+.top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0 14px;
+}
+
+.top .logo {
+  width: 34px;
+  height: 34px;
+  flex: none;
+}
+
+.top .name {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+}
+
+.top .name b {
+  font-family: var(--display);
+  font-size: 1.12rem;
+}
+
+.top .name span {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.top .link {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.74rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 55%;
+}
+
+.top .link i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--faint);
+  flex: none;
+}
+
+.top .link.on i {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px rgba(74, 222, 154, 0.18);
+}
+
+/* ---- the request ---- */
+
+.ask {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 6px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--card);
+  backdrop-filter: blur(12px);
+}
+
+.ask svg {
+  width: 19px;
+  height: 19px;
+  color: var(--muted);
+  flex: none;
+}
+
+.ask input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 1rem;
+  padding: 8px 0;
+}
+
+.ask input::placeholder {
+  color: var(--faint);
+}
+
+.go {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  box-shadow: var(--glow);
+  cursor: pointer;
+}
+
+.ask .go {
+  width: 42px;
+  height: 42px;
+  flex: none;
+}
+
+.ask .go svg {
+  color: #fff;
+}
+
+.go:disabled {
+  opacity: 0.45;
+  box-shadow: none;
+}
+
+.examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.examples button {
+  padding: 8px 13px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--raised);
+  color: var(--text);
+  font-size: 0.86rem;
+  cursor: pointer;
+}
+
+/* ---- what was found ---- */
+
+.words {
+  margin: 16px 2px 12px;
+  font-size: 0.98rem;
+  line-height: 1.5;
+}
+
+.fine {
+  margin: 12px 2px 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.fine.center {
+  text-align: center;
+}
+
+.notice {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: var(--radius-small);
+  background: rgba(255, 107, 129, 0.1);
+  color: var(--bad);
+  font-size: 0.9rem;
+}
+
+.note {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 0 2px 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-small);
+  background: rgba(74, 222, 154, 0.09);
+  color: var(--ok);
+  font-size: 0.88rem;
+}
+
+.note svg {
+  width: 17px;
+  height: 17px;
+  flex: none;
+  margin-top: 2px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+}
+
+@media (min-width: 560px) {
+  .grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+.tile {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--raised);
+  cursor: pointer;
+}
+
+.tile img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.tile.off img {
+  opacity: 0.3;
+  filter: grayscale(0.7);
+}
+
+.tile .tick {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+}
+
+.tile.off .tick {
+  background: rgba(0, 0, 0, 0.55);
+  color: transparent;
+  border: 1.5px solid rgba(255, 255, 255, 0.7);
+}
+
+.tile .tick svg {
+  width: 15px;
+  height: 15px;
+}
+
+.more {
+  display: block;
+  margin: 14px auto 0;
+  padding: 9px 16px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--raised);
+  color: var(--text);
+  cursor: pointer;
+}
+
+/* ---- what to do with them: always at hand, at the bottom ---- */
+
+.actions {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+  background: linear-gradient(transparent, var(--bg) 35%);
+}
+
+.actions .wide {
+  padding: 13px 20px;
+  font-size: 0.98rem;
+}
+
+.actions .wide svg {
+  width: 18px;
+  height: 18px;
+}
+
+.actions .quiet {
+  padding: 12px 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--card-solid);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.actions .fine {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 999px;
+  background: var(--card-solid);
+}

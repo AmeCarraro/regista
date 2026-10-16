@@ -1,0 +1,200 @@
+import { useEffect, useMemo, useRef, useState } from 'react'
+import * as icons from '../icons.tsx'
+import { connect } from './bridge.ts'
+import type { State } from './bridge.ts'
+import type { Day } from './period.ts'
+import { select } from './select.ts'
+import { understand } from './understand.ts'
+
+// how many pictures are shown at first, and how many more at each "Mostrane altre"
+const PAGE = 120
+const EXAMPLES = ['Le foto di questo mese', "Le foto dell'anno scorso", "Le foto dell'Italia"]
+
+function today(): Day {
+  const now = new Date()
+  return { year: now.getFullYear(), month: now.getMonth() + 1, day: now.getDate() }
+}
+
+const count = (number: number) => (number === 1 ? '1 foto' : `${number} foto`)
+
+function linked(state: State): string {
+  if (!state.paired) return 'Nessun computer collegato'
+  return state.reachable ? `Collegato a ${state.computer || 'il computer'}` : 'Computer non raggiungibile'
+}
+
+/**
+ * The phone's own screen: it looks for the pictures of this phone by when and where they were
+ * taken, with no computer and no internet, and puts the ones chosen in line for the computer.
+ */
+export default function Telefono() {
+  const app = useMemo(() => connect(), [])
+  const [pictures, setPictures] = useState(() => app.pictures())
+  const [reading, setReading] = useState(() => app.reading())
+  const [state, setState] = useState(() => app.state())
+  const [request, setRequest] = useState('')
+  // the request the pictures on screen are the answer to
+  const [asked, setAsked] = useState('')
+  const [shown, setShown] = useState(PAGE)
+  // the pictures ticked to go to the computer, while the user is choosing them
+  const [choosing, setChoosing] = useState<Set<string> | null>(null)
+  const [note, setNote] = useState('')
+  const read = useRef(reading.done)
+
+  // the app reads the pictures in its own time, and the computer comes and goes: both are asked again now and then
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const now = app.reading()
+      if (now.done !== read.current) {
+        read.current = now.done
+        setPictures(app.pictures())
+      }
+      setReading(now)
+      setState(app.state())
+    }, 2000)
+    return () => clearInterval(timer)
+  }, [app])
+
+  const found = useMemo(() => select(pictures, understand(asked, today(), app.places)), [pictures, asked, app])
+  const visible = found.pictures.slice(0, shown)
+
+  function ask(text: string) {
+    setRequest(text)
+    setAsked(text.trim())
+    setShown(PAGE)
+    setChoosing(null)
+    setNote('')
+  }
+
+  function toggle(id: string) {
+    setChoosing((before) => {
+      const after = new Set(before)
+      if (after.has(id)) after.delete(id)
+      else after.add(id)
+      return after
+    })
+  }
+
+  function send() {
+    if (!choosing) return
+    const { queued } = app.send([...choosing])
+    setNote(
+      queued
+        ? `Mando al computer ${count(queued)}, nella cartella «Dal telefono». ${state.reachable ? 'Comincio ora.' : 'Ora non lo raggiungo: lo faccio appena posso.'}`
+        : 'Non sono riuscito a metterle in fila per il computer.',
+    )
+    setChoosing(null)
+  }
+
+  return (
+    <main className="phone">
+      <header className="top">
+        <icons.Logo className="logo" />
+        <div className="name">
+          <b>Regista</b>
+          <span>sul telefono</span>
+        </div>
+        <span className={state.reachable ? 'link on' : 'link'}>
+          <i />
+          {linked(state)}
+        </span>
+      </header>
+
+      <form
+        className="ask"
+        onSubmit={(event) => {
+          event.preventDefault()
+          ask(request)
+          // the keyboard goes away, so that the pictures found can be seen
+          if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
+        }}
+      >
+        <icons.Search />
+        <input
+          value={request}
+          onChange={(event) => setRequest(event.target.value)}
+          placeholder="Cerca tra le foto di questo telefono"
+          aria-label="La tua richiesta"
+          enterKeyHint="search"
+          autoComplete="off"
+        />
+        <button type="submit" className="go" aria-label="Cerca">
+          <icons.Arrow />
+        </button>
+      </form>
+
+      {!asked && (
+        <div className="examples">
+          {EXAMPLES.map((example) => (
+            <button type="button" key={example} onClick={() => ask(example)}>
+              {example}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {!reading.allowed && <p className="notice">Per cercare tra le foto mi serve il permesso di vederle: chiudi e riapri l'app, e dimmi di sì.</p>}
+      {reading.allowed && reading.done < reading.total && (
+        <p className="fine">
+          Sto leggendo date e luoghi delle foto: {reading.done} di {reading.total}. Intanto cerco tra quelle già lette.
+        </p>
+      )}
+
+      <p className="words" role="status">
+        {found.words}
+      </p>
+      {note && (
+        <p className="note">
+          <icons.Check /> {note}
+        </p>
+      )}
+
+      <ul className="grid">
+        {visible.map((picture) => (
+          <li key={picture.id}>
+            <button
+              type="button"
+              className={choosing && !choosing.has(picture.id) ? 'tile off' : 'tile'}
+              aria-label={picture.name}
+              aria-pressed={choosing ? choosing.has(picture.id) : undefined}
+              onClick={() => (choosing ? toggle(picture.id) : app.open(picture.id))}
+            >
+              <img src={app.thumb(picture.id)} alt="" loading="lazy" />
+              {choosing && (
+                <span className="tick">
+                  <icons.Check />
+                </span>
+              )}
+            </button>
+          </li>
+        ))}
+      </ul>
+      {found.pictures.length > shown && (
+        <button type="button" className="more" onClick={() => setShown(shown + PAGE)}>
+          Mostrane altre ({found.pictures.length - shown})
+        </button>
+      )}
+
+      {visible.length > 0 && (
+        <footer className="actions">
+          {!state.paired ? (
+            <p className="fine">Per mandare le foto al computer, collegalo dalla scheda «Computer».</p>
+          ) : choosing ? (
+            <>
+              <button type="button" className="go wide" disabled={choosing.size === 0} onClick={send}>
+                Manda {count(choosing.size)} al computer
+              </button>
+              <button type="button" className="quiet" onClick={() => setChoosing(null)}>
+                Lascia stare
+              </button>
+            </>
+          ) : (
+            <button type="button" className="go wide" onClick={() => setChoosing(new Set(visible.map((picture) => picture.id)))}>
+              <icons.Send /> Manda al computer
+            </button>
+          )}
+        </footer>
+      )}
+      {choosing && <p className="fine center">Tocca una foto per lasciarla fuori.</p>}
+    </main>
+  )
+}

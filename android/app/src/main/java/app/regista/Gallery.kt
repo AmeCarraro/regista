@@ -2,12 +2,14 @@ package app.regista
 
 import android.Manifest
 import android.content.ContentUris
+import android.content.ContentValues
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.media.ExifInterface
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
 import android.provider.MediaStore
 import android.util.Size
 import java.io.ByteArrayOutputStream
@@ -28,7 +30,8 @@ class Notes(val day: String, val latitude: Double?, val longitude: Double?)
 
 /**
  * The pictures of this phone, read through Android's own list of them. Nothing here changes a
- * picture: moving some to the phone's trash is asked of Android, which asks the user (MainActivity).
+ * picture that is there: it can add new ones, the ones the computer sends, and moving some to
+ * the phone's trash is asked of Android, which asks the user (MainActivity).
  */
 class Gallery(private val context: Context) {
     private val pictures: Uri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
@@ -157,6 +160,53 @@ class Gallery(private val context: Context) {
         } catch (problem: IOException) {
             null
         }
+    }
+
+    /**
+     * Keeps a picture that arrives from the computer, in the album Pictures/Regista/<album>: a new
+     * picture of this phone. Android keeps it hidden until all of it is there and it is what the
+     * computer said it is; if it is not, it is not kept. Says whether it was.
+     */
+    fun save(name: String, album: String, source: InputStream, expected: String): Boolean {
+        val folder = album.replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), " ").trim().ifEmpty { "Dal computer" }
+        val values = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, name)
+            put(MediaStore.Images.Media.MIME_TYPE, kindOf(name))
+            put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/Regista/$folder")
+            put(MediaStore.Images.Media.IS_PENDING, 1)
+        }
+        val resolver = context.contentResolver
+        val made = resolver.insert(pictures, values) ?: return false
+        try {
+            val digest = MessageDigest.getInstance("SHA-256")
+            val out = resolver.openOutputStream(made) ?: throw IOException("no place to write")
+            out.use { target ->
+                source.use { input ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        digest.update(buffer, 0, read)
+                        target.write(buffer, 0, read)
+                    }
+                }
+            }
+            if (!digest.digest().joinToString("") { "%02x".format(it) }.equals(expected, ignoreCase = true)) throw IOException("not what the computer sent")
+            resolver.update(made, ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }, null, null)
+            return true
+        } catch (problem: IOException) {
+            // what did not arrive whole is not a picture: the app's own unfinished file does not stay
+            resolver.delete(made, null, null)
+            return false
+        }
+    }
+
+    private fun kindOf(name: String) = when (name.substringAfterLast('.').lowercase()) {
+        "png" -> "image/png"
+        "webp" -> "image/webp"
+        "gif" -> "image/gif"
+        "heic", "heif" -> "image/heic"
+        else -> "image/jpeg"
     }
 
     /** The name Android knows a picture by, for the question that moves it to the trash. */

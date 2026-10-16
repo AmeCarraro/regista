@@ -6,6 +6,10 @@ small copy of each of its pictures. The computer reads them as it reads its own,
 can be searched here; the pictures themselves stay on the phone until the user asks for
 some. Then the computer asks, and the phone sends the originals.
 
+Pictures go the other way too: the computer prepares some of its own for a phone, and the
+phone takes them into an album of its own when its app is open, checking each against what
+the computer says it is. And a phone can ask the computer to take some of its pictures.
+
 The user can also ask to take pictures off the phone. Then the originals come here first,
 each checked against what the phone says it sent, and only the ones that arrived whole are
 named to the phone as pictures it may move to its own trash. Whether it does is for the
@@ -83,6 +87,8 @@ class Phones:
         self.photos: list[dict] = []
         self.vectors = np.zeros((0, 0), dtype=np.float32)
         self.transfers: list[dict] = self._read("transfers.json", [])
+        # pictures of this computer on their way to a phone
+        self.sends: list[dict] = self._read("sends.json", [])
         listing, vectors = self.folder / "photos.json", self.folder / "vectors.npy"
         if listing.exists() and vectors.exists():
             saved = json.loads(listing.read_text())
@@ -176,11 +182,12 @@ class Phones:
                 return False
             self.devices = [known for known in self.devices if known["id"] != device]
             self._drop({photo["id"] for photo in self.photos if photo["device"] == device})
-            for transfer in self.transfers:
+            for transfer in self.transfers + self.sends:
                 if transfer["device"] == device and transfer["state"] != "done":
                     transfer["state"] = "done"
             self._write("devices.json", self.devices)
             self._write("transfers.json", self.transfers)
+            self._write("sends.json", self.sends)
             self.save()
             return True
 
@@ -194,7 +201,9 @@ class Phones:
                     "paired": device["paired"],
                     "seen": device["seen"],
                     "photos": sum(1 for photo in self.photos if photo["device"] == device["id"]),
-                    "waiting": sum(len(self._left(transfer)) for transfer in self.transfers if transfer["device"] == device["id"] and transfer["state"] == "waiting"),
+                    # pictures waited for from the phone, and pictures that wait for it here
+                    "waiting": sum(len(self._left(transfer)) for transfer in self.transfers if transfer["device"] == device["id"] and transfer["state"] == "waiting")
+                    + sum(len(self._undelivered(one)) for one in self.sends if one["device"] == device["id"] and one["state"] == "waiting"),
                 }
                 for device in self.devices
             ]
@@ -408,6 +417,72 @@ class Phones:
             self._write("transfers.json", self.transfers)
             self.save()
             return found
+
+    # ---- pictures of this computer sent to a phone
+
+    def receiver(self) -> dict | None:
+        """The phone pictures are sent to: the one seen last, if more than one was let in."""
+        with self._lock:
+            return max(self.devices, key=lambda device: device["seen"], default=None)
+
+    def send(self, device: str, pictures: list[dict], folder: str) -> dict:
+        """Prepares pictures of this computer for a phone, which takes them into an album when its app is open.
+
+        `pictures` holds, for each, its short name here and the name of its file. Nothing
+        leaves now, and nothing here changes.
+        """
+        with self._lock:
+            sending = {
+                "id": secrets.token_hex(6),
+                "device": device,
+                "folder": folder,
+                "photos": [picture["id"] for picture in pictures],
+                "names": {picture["id"]: file_name(picture["name"]) for picture in pictures},
+                # the pictures the phone took, and the ones it could not
+                "received": [],
+                "missing": [],
+                "state": "waiting",
+                "asked": _now(),
+            }
+            self.sends.append(sending)
+            self._write("sends.json", self.sends)
+            return sending
+
+    def sending(self, identifier: str) -> dict | None:
+        return next((one for one in self.sends if one["id"] == identifier), None)
+
+    @staticmethod
+    def _undelivered(sending: dict) -> list[str]:
+        return [identifier for identifier in sending["photos"] if identifier not in sending["received"] and identifier not in sending["missing"]]
+
+    def incoming(self, device: str) -> list[dict]:
+        """What a phone is to take from this computer: for every sending still open, the pictures it has not taken yet."""
+        with self._lock:
+            return [
+                {"id": one["id"], "folder": one["folder"], "photos": [{"id": identifier, "name": one["names"][identifier]} for identifier in self._undelivered(one)]}
+                for one in self.sends
+                if one["device"] == device and one["state"] == "waiting"
+            ]
+
+    def offered(self, sending: str, device: str, identifier: str) -> bool:
+        """Whether a phone may take a picture: it was sent to that phone, and it has not taken it yet."""
+        with self._lock:
+            found = self.sending(sending)
+            return found is not None and found["device"] == device and found["state"] == "waiting" and identifier in self._undelivered(found)
+
+    def delivered(self, sending: str, device: str, received: list[str], missing: list[str]) -> dict | None:
+        """Notes which pictures a phone took, and which it could not. Returns the sending, if this ended it."""
+        with self._lock:
+            found = self.sending(sending)
+            if found is None or found["device"] != device or found["state"] != "waiting":
+                return None
+            left = set(self._undelivered(found))
+            found["received"] += [identifier for identifier in dict.fromkeys(received) if identifier in left]
+            found["missing"] += [identifier for identifier in dict.fromkeys(missing) if identifier in left and identifier not in found["received"]]
+            if not self._undelivered(found):
+                found["state"] = "done"
+            self._write("sends.json", self.sends)
+            return found if found["state"] == "done" else None
 
     def close(self, transfer: str, entry: str) -> None:
         """Writes on a finished request the name its pictures have in the journal of changes."""

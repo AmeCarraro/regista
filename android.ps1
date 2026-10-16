@@ -22,6 +22,16 @@ if ($LASTEXITCODE -ne 0) {
 
 switch ($What) {
     'build' {
+        # The phone's own screen, built from web/, and the table of places: both travel inside the app,
+        # which then finds pictures by day and by place with no computer and no network.
+        & (Join-Path $PSScriptRoot 'npm.ps1') run build:telefono
+        if ($LASTEXITCODE -ne 0) { Stop-Run 'building the phone screen' }
+        $assets = Join-Path $project 'app\src\main\assets'
+        $screen = Join-Path $assets 'telefono'
+        if (Test-Path $screen) { Remove-Item -LiteralPath $screen -Recurse -Force }
+        New-Item -ItemType Directory -Force (Join-Path $assets 'places') | Out-Null
+        Copy-Item -Recurse (Join-Path $PSScriptRoot 'web\dist-telefono') $screen
+        Copy-Item (Join-Path $PSScriptRoot 'data\geonames\cities15000.zip') (Join-Path $assets 'places\cities15000.zip')
         # the key is made once and kept out of the repository: with a new key at each build a phone would refuse the update
         $script = 'mkdir -p .keys && { [ -f .keys/regista.keystore ] || keytool -genkeypair -keystore .keys/regista.keystore -storepass regista -keypass regista -alias regista -keyalg RSA -keysize 2048 -validity 10000 -dname CN=Regista; } && gradle --no-daemon -q assembleRelease'
         docker run --rm -v "${project}:/work" -v regista-gradle:/root/.gradle regista-android sh -c $script

@@ -44,6 +44,13 @@ function wording(proposed: Proposed): { icon: ReactNode; title: string; hint: st
         hint: 'Sul telefono restano dove sono.',
         yes: count === 1 ? 'Copia 1 foto dal telefono' : `Copia ${count} foto dal telefono`,
       }
+    case 'send':
+      return {
+        icon: <icons.Phone />,
+        title: 'Manda al telefono',
+        hint: 'Arrivano in un album del telefono. Sul computer restano dove sono.',
+        yes: count === 1 ? 'Manda 1 foto al telefono' : `Manda ${count} foto al telefono`,
+      }
     case 'clear':
       return {
         icon: <icons.Phone />,
@@ -124,10 +131,10 @@ export default function ProposalCard({ proposed, answers }: { proposed: Proposed
         </div>
       </header>
 
-      {(proposal.action === 'copy' || proposal.action === 'fetch') && (
+      {(proposal.action === 'copy' || proposal.action === 'fetch' || proposal.action === 'send') && (
         <label className="folder-name">
           <icons.Folder />
-          <span>Cartella</span>
+          <span>{proposal.action === 'send' ? 'Album' : 'Cartella'}</span>
           <input
             value={proposed.folder}
             placeholder="Come la chiamo?"

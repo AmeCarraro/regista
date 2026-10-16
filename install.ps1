@@ -14,11 +14,15 @@
 #        .\install.ps1 -Photos D:\Immagini   the picture folder, without asking
 #        .\install.ps1 -Yes                  yes to every download, without asking
 #        .\install.ps1 -Icon D:\Avvio        puts the icon in that folder instead of on the desktop
+#        .\install.ps1 -Phone yes            the app will be used from a phone too, without asking
+# Windows lets a .ps1 file run only when asked for that one time: install.cmd and the icon do it,
+# so nothing in the settings of Windows has to change.
 param(
     [string]$Photos = '',
     [switch]$Check,
     [switch]$Yes,
-    [string]$Icon = [Environment]::GetFolderPath('Desktop')
+    [string]$Icon = [Environment]::GetFolderPath('Desktop'),
+    [ValidateSet('', 'yes', 'no')][string]$Phone = ''
 )
 
 $here = $PSScriptRoot
@@ -101,6 +105,14 @@ if (-not $Photos) {
 if (-not (Test-Path $Photos -PathType Container)) { Stop-Here "La cartella $Photos non esiste." }
 $Photos = (Resolve-Path $Photos).Path
 
+# ---- from a phone too?
+
+if (-not $Phone) {
+    Say "`nUserai Regista anche dal telefono, con la sua app? Allora il computer apre una porta per i telefoni, cifrata, che fa entrare solo un telefono collegato da qui."
+    $Phone = if ((Read-Host 'Anche dal telefono? [s/N]') -match '^(s|si|sì|y|yes)$') { 'yes' } else { 'no' }
+}
+$door = if ($Phone -eq 'yes') { ' -Phone' } else { '' }
+
 # ---- an icon to start it again, and the first start
 
 # A file that starts Regista on that folder and opens its page: the icon on the desktop points to it.
@@ -108,7 +120,7 @@ $starter = Join-Path $here 'Regista.cmd'
 # in the alphabet cmd reads its files in, so that a folder with an accent in its name still works
 Set-Content -Path $starter -Encoding Oem -Value @(
     '@echo off',
-    "powershell -NoProfile -ExecutionPolicy Bypass -File `"%~dp0run.ps1`" -Photos `"$Photos`" -Open",
+    "powershell -NoProfile -ExecutionPolicy Bypass -File `"%~dp0run.ps1`" -Photos `"$Photos`"$door -Open",
     'if errorlevel 1 pause'
 )
 $shell = New-Object -ComObject WScript.Shell
@@ -120,5 +132,5 @@ $shortcut.Save()
 Say "`nHo messo l'icona «Regista» in $Icon`: da ora si avvia da lì." 'Green'
 
 Say "Avvio Regista. La prima volta costruisce l'app: scarica circa 3 GB e ci mette qualche minuto.`n" 'Cyan'
-& (Join-Path $here 'run.ps1') -Photos $Photos -Open
+if ($Phone -eq 'yes') { & (Join-Path $here 'run.ps1') -Photos $Photos -Phone -Open } else { & (Join-Path $here 'run.ps1') -Photos $Photos -Open }
 exit $LASTEXITCODE

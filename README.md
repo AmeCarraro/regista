@@ -9,6 +9,8 @@ What it does today:
 - **Finds them by where they were taken.** "Le foto del Giappone", "un cane a Roma", "le foto di Parigi di giugno". The place is the one the camera wrote in the picture, as a position; a table of the world's cities says which country and city that is.
 - **Puts them in order, without ever deleting one.** "Eliminale" moves the pictures to a trash folder; "copia le foto delle chiese in una cartella Chiese" copies them; "annulla" takes the last change back. Each of these is first proposed, with the pictures in front of you, and happens only after your yes.
 - **Reaches the pictures on your phone.** An Android app, paired with the computer by pointing the camera at a code, shows the same chat on the phone and lets the computer search the phone's pictures: "trovami sul telefono le foto del mare", "salvale sul computer in una cartella Mare". "Elimina dal telefono le foto di Parigi" copies them to the computer first and then has the phone move them to its own trash.
+- **Works on the phone by itself, too.** The app has a screen of its own that finds the phone's pictures by when and where they were taken with no computer and no network: "le foto di Parigi dal 10 al 12 giugno". From it, "Manda al computer" puts pictures in line for the computer: they go now if it answers, as soon as it does otherwise.
+- **Moves pictures both ways.** "Mandami sul telefono le foto del mare" prepares pictures of the computer for the phone, which takes them into an album of its own, `Pictures/Regista/<name>`.
 - **Answers questions**, with the local model you choose or with the one the app picks.
 - **Chooses the model for you.** It looks at the computer (graphics card or processor only, memory), at what each installed model can do, and, after a test you can start from the page, at how each model actually did on this machine. It also says which model the computer should have: with a graphics card the largest that fits in its memory, without one the smallest. If it is not installed, the page gives the command to get it; the app downloads nothing by itself.
 
@@ -20,11 +22,15 @@ You need Docker Desktop, and Ollama with at least one model that can use tools, 
 
 On a PC that has none of this, double-click `install.cmd`. It says what is there and what is missing, offers to install Docker Desktop and Ollama with winget and to download the model, asking before each download, asks which folder of pictures to work on, starts the app and leaves an icon on the desktop that starts it again. `.\install.ps1 -Check` only looks.
 
-On a PC that has it all:
+It also asks whether the app will be used from a phone, and if so the icon opens the door of the phones too.
+
+Windows runs a `.ps1` file only when asked for that one time: `install.cmd` and the icon do so, and nothing in the settings of Windows has to change. In a terminal of your own the same is:
 
 ```powershell
-.\run.ps1
+powershell -ExecutionPolicy Bypass -File .\run.ps1
 ```
+
+The commands below are written short, as `.\run.ps1`, for a terminal where scripts may run.
 
 Then open http://127.0.0.1:8090/ (or add `-Open`). The first start builds the image, which downloads PyTorch and the picture model: a few minutes. By default the app works on the pictures in `foto\`; to use another folder:
 
@@ -43,7 +49,7 @@ Stop it with `docker compose down`.
 .\android.ps1 build     # makes android\app\build\outputs\apk\release\app-release.apk
 ```
 
-Install the APK on the phone. On the page, under "Telefono", choose "Collega un telefono" and point the phone's camera at the code: the app opens, pairs, asks for the permission to see the pictures and where they were taken, and tells the computer what the phone has. From then on the phone finds the computer by itself whenever the app is open and both are on the same network. If the phone does not find the PC, Windows Firewall may be blocking port 8443 on that network.
+Install the APK on the phone. The app opens on its own screen, "Telefono", and asks for the permission to see the pictures and where they were taken: from then on it finds them by day and by place, with or without a computer. To pair it, on the computer's page, under "Telefono", choose "Collega un telefono" and point the phone's camera at the code: the app opens on its other screen, "Computer", pairs, and tells the computer what the phone has; that screen then shows the computer's page. From then on the phone finds the computer by itself whenever the app is open and both are on the same network. If the phone does not find the PC, Windows Firewall may be blocking port 8443 on that network.
 
 To reach the computer from elsewhere it needs an address that works from there, for example the one a private network such as Tailscale gives the PC: `.\run.ps1 -Phone -Address 100.x.y.z`, then pair again.
 
@@ -60,6 +66,8 @@ And on the phone:
 
 - **The phone app cannot delete a picture, and cannot move one to the trash by itself.** It can ask Android to, and Android asks you, on the phone, showing the pictures: only your yes there moves them, and to the phone's own trash, where they stay 30 days.
 - **A picture leaves the phone only after its copy is on the computer.** "Elimina dal telefono" first brings the originals to `Raccolte\Tolte dal telefono\`. The phone says what each picture is (the SHA-256 of its bytes) and the computer keeps only what arrives as that: the phone is told which pictures it may throw away only when they are all here, and only those. So it takes two yeses, one in the page and one to Android, and in between a copy that was checked. It needs Android 11 or later; on Android 10 the copies are made and the pictures stay.
+- **Pictures from the computer arrive checked.** The computer says what each picture is (its SHA-256); the phone writes it into a hidden file and shows it in the gallery only if all of it arrived as that.
+- **The phone's own screen is a page that travels inside the app**, shown from the app's files with no server and no network. It is the only page that can call the app, and it can only read what the app knows of the pictures, show one, and put some in line for the computer.
 - **That copy is the picture as the camera wrote it**, place included. For this the app asks Android for the original, which Android gives only with the permission to see where pictures were taken.
 - **The computer gets a small copy of each picture**, a few hundred pixels wide, to know what it shows, with the day and the position the camera wrote in it. The originals stay on the phone until you ask for some; then they arrive in `Raccolte\<name>\`, and that too can be taken back.
 - **The app asks before pairing**, showing the name and the address of the computer, and it refuses a computer that is not inside a private network. A pairing link can reach the app from any page or app, not only from your camera: without your yes nothing is paired, and a pairing that fails leaves the one there was.
@@ -74,13 +82,13 @@ And on the phone:
 | Periods | `app/period.py` | Reads a period of time in the words of a request, in Italian, and says it back. Not asked to the model: a small model gets dates wrong. |
 | Places | `app/places.py`, `data/geonames/` | Reads the position a camera wrote in a picture, and knows which country and city it is from a table of the cities with more than 15,000 inhabitants. The table is from [GeoNames](https://www.geonames.org/), under the licence CC BY 4.0; it is in the repository, so nothing is asked to the network. |
 | Changes | `app/actions.py` | The trash, the copies, the journal and the undo. Called only by the service, after a yes in the page, with pictures named by the index and never by a path. |
-| Phones | `app/phone.py` | Pairing, the certificate, what is known of the pictures of each phone, and the requests for originals. |
+| Phones | `app/phone.py` | Pairing, the certificate, what is known of the pictures of each phone, the requests for originals, and the pictures prepared for a phone. |
 | Models | `app/llm.py`, `app/catalog.py` | What Ollama has installed, what each model is for, whether it fits this computer, who gets each job, and which model is worth having here. A graphics card that is not NVIDIA is counted on only once a model was seen running on it. |
 | Model test | `app/selftest.py` | Gives every model the same requests and counts how often it does the right thing, and how fast. The choice of the director then rests on what was measured here. |
 | Pictures | `app/photos.py`, `app/embedder.py` | An index of the pictures of a folder, searched with a sentence (CLIP ViT-B/32, on the processor). |
 | Service | `app/main.py` | Two doors on one service: the PC's, which answers only to its own names, and the encrypted one of the phones, which answers only to a paired phone. |
 | Page | `web/` | TypeScript and React: the chat, the picture results, the proposals, the panel with the computer, the models, the pictures and the phones. |
-| Phone app | `android/` | Kotlin, with no libraries beyond Android's own. It pairs, shows the computer's page, tells the computer which pictures the phone has, sends the ones asked for, and asks Android to move to the trash the ones the user wanted off the phone. It works while it is open. |
+| Phone app | `android/` | Kotlin, with no libraries beyond Android's own, in two screens. "Telefono" is a page that travels inside the app (`web/src/telefono`, built by `android.ps1 build`): it reads the request on the phone, a period with the same rules as `app/period.py` and a place with the table of places the app carries, and chooses among the pictures the app has read (`Library.kt`, a small database of the day and the place of each). "Computer" pairs and shows the computer's page. Meanwhile the app tells the computer which pictures the phone has, sends the ones asked for, takes the ones prepared for it, and asks Android to move to the trash the ones the user wanted off the phone. It works while it is open. |
 | Installer | `install.cmd`, `install.ps1` | Checks what the app needs on a Windows PC, offers to get what is missing, and leaves an icon that starts the app. |
 
 The app runs in one container (`compose.yaml`). It cannot see the computer it runs on, so `run.ps1` measures it and passes it in.
@@ -125,8 +133,9 @@ The emulator reaches the door of the phones at `10.0.2.2`, so start the app with
 - The installer was tried on a PC that already had everything, and with the programs hidden from it up to the point where it would install them. Installing Docker Desktop and Ollama through it, on a PC without them, was not tried.
 - What protects the pictures was written, read again with an attacker's eye and tried by one author: nobody else has reviewed it. Tried on the running app: a stranger at the door of the phones gets nothing without a key, old encryption versions are refused, the PC's own door does not answer from the network, a request larger than it has reason to be is refused or cut off (before that, anyone on the network could fill the computer's memory through the request that pairs), and every answer forbids other pages to show this one inside themselves. The phone app is built as a release, not as a debug app, from which the key of the computer could be read with a cable. The key with which the app is signed is made on the PC that builds it, with a password written in the build file: fine for one's own phones, not for giving the app to others. A paired phone can do what the PC's page can, so a lost phone must be shut out from the page ("Scollega"); the small copies of the phone's pictures sit on the PC unencrypted, like the PC's own pictures.
 - The phone works for the computer only while the app is open in front. A search looks either at the computer or at the phone, not at both at once.
+- On its own, the phone finds pictures by day and by place, not yet by what they show: for "un cane" it says to use the "Computer" screen. Tried on the emulator with no computer: "foto del Giappone" found the 20 it should, "di Parigi dal 10 al 12 giugno" the 12, "di Venezia" the 6, "di luglio" the 20, "della Spagna" none. With the computer: 5 and then 7 pictures chosen on the phone arrived identical, the 7 after the computer had been off, by themselves when it came back; 3 pictures of the computer arrived in the phone's album, identical. The words of a request are understood by rules, not by a model: "foto di Natale" is not Natal, in Brazil, but a name the rules do not know is not a place either.
 - Reading the pictures takes about 18 per second on a laptop processor, once.
 
 ## Not there yet
 
-Using the phone away from home without setting up a private network, the phone app working by itself without the computer, pictures going from the computer to the phone, and models outside this computer.
+Using the phone away from home without setting up a private network, finding pictures on the phone by what they show without the computer, and models outside this computer.

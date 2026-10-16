@@ -36,13 +36,23 @@ CHANGES = ("trash_photos", "copy_photos", "undo")
 # "dal mio cellulare". This is read here, in the words of the user, and not asked to the model:
 # the model has enough to decide already. "Una foto con un telefono" is a picture of a phone, not this.
 ON_PHONE = re.compile(
-    r"\b(?:dal|sul|nel|del|al)\s+(?:mio\s+)?(?:telefono|telefonino|cellulare|smartphone)\b"
-    r"|\b(?:on|from|in)\s+(?:my|the)\s+(?:phone|smartphone)\b",
+    r"\b(?:dal|sul|nel|del|al)\s+(?:mio\s+)?(?:telefono|telefonino|cellulare|smartphone|tablet)\b"
+    r"|\b(?:on|from|in)\s+(?:my|the)\s+(?:phone|smartphone|tablet)\b",
     re.IGNORECASE,
 )
+# Where pictures go, when it is the phone: "mandale sul telefono", "copia sul tablet le foto del mare".
+# Then they come from the computer, unless the request also says they come from the phone.
+TO_PHONE = re.compile(
+    r"\b(?:sul|nel|al)\s+(?:mio\s+)?(?:telefono|telefonino|cellulare|smartphone|tablet)\b|\b(?:on|onto|to)\s+(?:my|the)\s+(?:phone|smartphone|tablet)\b",
+    re.IGNORECASE,
+)
+# A verb that moves pictures: with the phone as where they go, the request is to send them there, whatever
+# the model made of it. "Mettimi sul telefono le foto di Parigi" is sometimes taken for a search.
+SENDS = re.compile(r"\b(?:mand|mett|copi|salv|trasferisc|trasferi|port|caric|invi)\w*", re.IGNORECASE)
+FROM_PHONE = re.compile(r"\b(?:dal|dalla)\s+(?:mio\s+|mia\s+)?(?:telefono|telefonino|cellulare|smartphone|tablet)\b|\bfrom\s+(?:my|the)\s+(?:phone|smartphone|tablet)\b", re.IGNORECASE)
 ON_COMPUTER = re.compile(r"\b(?:dal|sul|nel|del|al)\s+(?:mio\s+)?(?:computer|pc)\b|\b(?:on|from|in)\s+(?:my|the)\s+(?:computer|pc)\b", re.IGNORECASE)
 # what a model may leave in a caption about the place, and that the pictures do not show
-PLACE_WORDS = re.compile(r"\b(?:on|from|in|of)\s+(?:my\s+|the\s+)?(?:phone|smartphone|cellphone|mobile|computer|pc)\b", re.IGNORECASE)
+PLACE_WORDS = re.compile(r"\b(?:on|onto|to|from|in|of)\s+(?:my\s+|the\s+)?(?:phone|smartphone|cellphone|mobile|tablet|computer|pc)\b", re.IGNORECASE)
 
 DECIDE = (
     "You decide what an assistant must do with the last message of the user. "
@@ -79,6 +89,7 @@ DECIDE = (
     'trovami le foto dal 20 maggio al 20 luglio -> {"action": "find_photos", "caption": "", "folder": ""}\n'
     'le foto del mare di agosto 2024 -> {"action": "find_photos", "caption": "the sea", "folder": ""}\n'
     'prendi dal telefono le foto della neve e salvale sul computer nella cartella Neve -> {"action": "copy_photos", "caption": "snow", "folder": "Neve"}\n'
+    'mandami sul telefono le foto del mare -> {"action": "copy_photos", "caption": "the sea", "folder": ""}\n'
     'ripensandoci, rimettile dove erano -> {"action": "undo", "caption": "", "folder": ""}\n'
     'elimina dal telefono le foto dei tramonti -> {"action": "trash_photos", "caption": "a sunset", "folder": ""}\n'
     'come si elimina una foto dal telefono? -> {"action": "answer", "caption": "", "folder": ""}'
@@ -117,6 +128,10 @@ NO_PHONE = "Non c'è nessun telefono collegato. Collegane uno dal pannello, alla
 PHONE_EMPTY = "Il telefono è collegato, ma non mi ha ancora mandato le sue foto: apri Regista sul telefono e lascialo finire."
 # where the copies of pictures taken off a phone are kept, among the collections
 REMOVED = "Tolte dal telefono"
+# the album on the phone for pictures of the computer, and the folder here for pictures a phone sends by itself
+FROM_COMPUTER = "Dal computer"
+FROM_THE_PHONE = "Dal telefono"
+ALREADY_THERE = "Quelle foto sono già sul telefono."
 
 
 def _photos(count: int) -> str:
@@ -168,6 +183,8 @@ def proposed_in_words(kind: str, count: int, folder: str, every: int = 0) -> str
         text = f"Sposto nel cestino {these}? Restano sul disco, e le riporto dov'erano quando vuoi."
     elif kind == "fetch":
         text = f"Copio dal telefono al computer {these}, {into} Sul telefono restano dove sono."
+    elif kind == "send":
+        text = f"Mando sul telefono {these}, nell'album «{folder}»? Sul computer restano dove sono."
     elif kind == "clear":
         text = (f"Tolgo dal telefono {these}? Prima le copio sul computer, nella cartella «{folder}», e controllo che siano arrivate intere. "
                 "Poi il telefono le sposta nel suo cestino, dove restano 30 giorni: te lo chiederà Android.")
@@ -264,6 +281,25 @@ def received_in_words(arrived: int, missing: int, folder: str) -> tuple[str, str
     return text, f'{arrived} photos arrived from the phone into the folder "{folder}".'
 
 
+def sent_in_words(count: int, folder: str) -> tuple[str, str]:
+    """What is said when pictures of the computer have been prepared for the phone, and it has not taken them yet."""
+    return (
+        f"Ho preparato {_photos(count)} per il telefono. Le prende quando Regista è aperto sul telefono.",
+        f'The user confirmed: {count} photos are to go to the phone, into the album "{folder}". They arrive when the phone app is open.',
+    )
+
+
+def delivered_in_words(received: int, missing: int, folder: str) -> tuple[str, str]:
+    """What is said when the phone has taken the pictures the computer prepared for it."""
+    if received:
+        text = f"Fatto: {_photos(received)} sul telefono, nell'album «{folder}»."
+    else:
+        text = "Sul telefono non è arrivata nessuna foto."
+    if missing:
+        text += f" {_photos(missing).capitalize()} non {'è arrivata' if missing == 1 else 'sono arrivate'}: forse sul computer non c'{'era' if missing == 1 else 'erano'} più."
+    return text, f'{received} photos arrived on the phone, in the album "{folder}".'
+
+
 def confirming_in_words(arrived: int, folder: str) -> str:
     """What is said while the phone asks its user whether the pictures, now copied, may go to its trash."""
     safe = "La foto è al sicuro" if arrived == 1 else f"Le {arrived} foto sono al sicuro"
@@ -315,7 +351,8 @@ def look(library, caption: str, limit: int, when: tuple | None, spot: dict | Non
     return library.search(caption, limit, when), False
 
 
-def propose(decision: dict, photos, actions, selection: list[str], phones=None, phone: bool = False, when: tuple | None = None, spot: dict | None = None) -> dict:
+def propose(decision: dict, photos, actions, selection: list[str], phones=None, phone: bool = False, when: tuple | None = None, spot: dict | None = None,
+            to_phone: bool = False) -> dict:
     """What a request to change the pictures becomes: words, and a proposal for the user to confirm.
 
     Nothing is touched here. `selection` is the pictures the user is looking at, by their
@@ -347,8 +384,15 @@ def propose(decision: dict, photos, actions, selection: list[str], phones=None, 
 
     kind = "trash" if decision["action"] == "trash_photos" else "copy"
     caption, folder = decision["caption"], ""
+    if to_phone:
+        # pictures of the computer, to go to the phone
+        if phones is None or not phones.devices:
+            return only(NO_PHONE, "No phone is connected.")
+        if not caption and not when and bool(selection) and all(on_phone(identifier) for identifier in selection):
+            return only(ALREADY_THERE, "The photos the user meant are already on the phone.")
+        kind = "send"
     # the pictures are on the phone if the request says so, or if "these" are pictures of the phone
-    away = phone or (not caption and not when and bool(selection) and all(on_phone(identifier) for identifier in selection))
+    away = not to_phone and (phone or (not caption and not when and bool(selection) and all(on_phone(identifier) for identifier in selection)))
     if away:
         if phones is None or not phones.devices:
             return only(NO_PHONE, "No phone is connected.")
@@ -358,6 +402,12 @@ def propose(decision: dict, photos, actions, selection: list[str], phones=None, 
         kind = "clear" if kind == "trash" else "fetch"
     if kind == "clear":
         folder = REMOVED
+    elif kind == "send":
+        # an album on the phone: when the request names none, one with a name that says where its pictures came from
+        try:
+            folder = collection_name(decision["folder"] or FROM_COMPUTER)
+        except Refused:
+            folder = FROM_COMPUTER
     elif kind != "trash":
         try:
             folder = collection_name(decision["folder"])
@@ -389,6 +439,7 @@ def propose(decision: dict, photos, actions, selection: list[str], phones=None, 
         "copy": f"copy them {into}",
         "fetch": f"copy them from the phone to the computer, {into}",
         "clear": f"copy them from the phone to the computer, {into}, and then move them to the trash of the phone",
+        "send": f'send them to the phone, into the album "{folder}"',
     }[kind]
     # with the caption, so that the next request can build on this search too
     searched = f"{_searched(caption, away, when, spot['name'] if there else '')}: {every} found. " if caption or when or there else ""
@@ -470,7 +521,12 @@ async def reply(history: list[dict], wanted: str, models: list[dict], machine, t
     looking_there = bool(selection) and all(on_phone(identifier) for identifier in selection)
     # "salvale sul computer" names where pictures go, not where they are: only a search is moved by it
     elsewhere = action in ("find_photos", "count_photos") and bool(ON_COMPUTER.search(asked))
-    phone = phones is not None and (bool(ON_PHONE.search(asked)) or (looking_there and not elsewhere))
+    # "mandale sul telefono" names where pictures go: they are the computer's
+    goes = phones is not None and bool(TO_PHONE.search(asked)) and not FROM_PHONE.search(asked)
+    if goes and action == "find_photos" and SENDS.search(asked):
+        action = decision["action"] = "copy_photos"
+    to_phone = action == "copy_photos" and goes
+    phone = phones is not None and not to_phone and (bool(ON_PHONE.search(asked)) or (looking_there and not elsewhere))
 
     def done(model: str, memory: str, **more) -> dict:
         return {"type": "done", "model": model, "seconds": round(time.perf_counter() - started, 1), "memory": memory, **more}
@@ -516,7 +572,7 @@ async def reply(history: list[dict], wanted: str, models: list[dict], machine, t
         return
 
     if action in CHANGES and actions is not None:
-        plan = await asyncio.to_thread(propose, decision, photos, actions, selection or [], phones, phone, when, spot)
+        plan = await asyncio.to_thread(propose, decision, photos, actions, selection or [], phones, phone, when, spot, to_phone)
         if plan["searched"] or plan["period"] or plan["spot"]:
             found = {"description": plan["searched"], "place": "phone" if phone else "computer", "period": plan["period"], "spot": plan["spot"]}
             yield {"type": "step", "tool": "find_photos", "arguments": found}

@@ -248,8 +248,8 @@ class ChatRequest(BaseModel):
 
 class Change(BaseModel):
     # "fetch" asks a phone for the originals of pictures that are on it; "clear" asks for them and then
-    # has the phone move them to its trash
-    action: Literal["trash", "copy", "fetch", "clear"]
+    # has the phone move them to its trash; "send" prepares pictures of this computer for the phone
+    action: Literal["trash", "copy", "fetch", "clear", "send"]
     # pictures by their short names: the page never names a file
     ids: list[str] = Field(min_length=1, max_length=1000)
     folder: str = Field(default="", max_length=200)
@@ -292,6 +292,18 @@ class SmallCopies(BaseModel):
 
 class NotSent(BaseModel):
     ids: list[str] = Field(min_length=1, max_length=1000)
+
+
+class Received(BaseModel):
+    # the pictures the phone took into its album, and the ones it could not
+    ids: list[str] = Field(default=[], max_length=1000)
+    missing: list[str] = Field(default=[], max_length=1000)
+
+
+class Offer(BaseModel):
+    # pictures of the phone, by the phone's own names for them
+    media: list[str] = Field(min_length=1, max_length=1000)
+    folder: str = Field(default="", max_length=200)
 
 
 class Trashed(BaseModel):
@@ -438,6 +450,8 @@ def act(body: Change):
     """
     if body.action in ("fetch", "clear"):
         return _ask_phone(body)
+    if body.action == "send":
+        return _send_to_phone(body)
     known = {identifier: relative for identifier in dict.fromkeys(body.ids) if (relative := photos.relative_of(identifier))}
     result = _carried_out(lambda: actions.trash(list(known.values())) if body.action == "trash" else actions.copy(list(known.values()), body.folder))
     # a picture the index no longer knows is one that is no longer there
@@ -471,6 +485,25 @@ def _ask_phone(body: Change) -> dict:
     return {**_outcome(waiting, [], text, memory), "transfer": asked["id"]}
 
 
+def _send_to_phone(body: Change) -> dict:
+    """Prepares pictures of this computer for the phone. It takes them into an album when its app is open."""
+    receiver = phones.receiver()
+    if receiver is None:
+        raise HTTPException(status_code=409, detail=orchestrator.NO_PHONE)
+    chosen = [{"id": identifier, "name": Path(relative).name} for identifier in dict.fromkeys(body.ids) if (relative := photos.relative_of(identifier))]
+    if not chosen:
+        raise HTTPException(status_code=409, detail="Quelle foto non le trovo più.")
+    try:
+        folder = collection_name(body.folder or orchestrator.FROM_COMPUTER)
+    except Refused as refused:
+        raise HTTPException(status_code=409, detail=str(refused))
+    sending = phones.send(receiver["id"], chosen, folder)
+    text, memory = orchestrator.sent_in_words(len(chosen), folder)
+    waiting = {"kind": "send", "id": "", "count": 0, "missing": 0, "failed": 0, "folder": folder}
+    # the page follows it as it follows a request to the phone, until the phone has taken them
+    return {**_outcome(waiting, [], text, memory), "transfer": sending["id"]}
+
+
 @app.post("/api/actions/undo")
 def undo(body: Undo):
     """Takes back a change, the last one unless another is named. Asked by the page when the user says so."""
@@ -499,6 +532,15 @@ def _outcome(result: dict, ids: list[str], text: str, memory: str) -> dict:
 @app.get("/api/transfers/{transfer}")
 def transfer_state(transfer: str):
     """How far a request to a phone is: how many pictures have arrived, and what to say when all have."""
+    sending = phones.sending(transfer)
+    if sending is not None:
+        received, total = len(sending["received"]), len(sending["photos"])
+        if sending["state"] == "done":
+            text, memory = orchestrator.delivered_in_words(received, len(sending["missing"]), sending["folder"])
+        else:
+            text, memory = f"Aspetto il telefono: {received} di {total} arrivate sul telefono. Tieni Regista aperto sul telefono.", ""
+        return {"id": sending["id"], "state": sending["state"], "arrived": received, "total": total, "folder": sending["folder"],
+                "entry": "", "gone": [], "text": text, "memory": memory}
     found = phones.transfer(transfer)
     if found is None:
         raise HTTPException(status_code=404, detail="no such request")
@@ -595,8 +637,49 @@ def library_done():
 
 @app.get("/phone/work")
 def work(request: Request):
-    """What a phone is asked to send: the pictures the user wanted on this computer and that have not arrived yet."""
-    return {"transfers": phones.work(request.state.device)}
+    """What a phone is asked to do: send the pictures the user wanted on this computer, and take the ones this computer prepared for it."""
+    device = request.state.device
+    return {"transfers": phones.work(device), "incoming": phones.incoming(device)}
+
+
+@app.get("/phone/incoming/{sending}/photos/{identifier}")
+def picture_for_the_phone(sending: str, identifier: str, request: Request):
+    """The original of a picture this computer sends to a phone, with what it is, for the phone to check what arrives."""
+    if not phones.offered(sending, request.state.device, identifier):
+        raise HTTPException(status_code=409, detail="Questa foto non è stata mandata a questo telefono.")
+    path = photos.path_of(identifier)
+    if path is None or not path.is_file():
+        raise HTTPException(status_code=404, detail="no such picture")
+    seen = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1 << 20), b""):
+            seen.update(chunk)
+    return FileResponse(path, headers={"X-Regista-Sha256": seen.hexdigest(), "Cache-Control": "no-store"})
+
+
+@app.post("/phone/incoming/{sending}/received")
+def taken_by_the_phone(sending: str, body: Received, request: Request):
+    """A phone says which of the pictures prepared for it it took, and which it could not."""
+    return {"noted": phones.delivered(sending, request.state.device, body.ids, body.missing) is not None or bool(phones.sending(sending))}
+
+
+@app.post("/phone/offer")
+def offered_by_the_phone(body: Offer, request: Request):
+    """A phone asks this computer to take some of its pictures. They arrive as the ones the computer asks for do,
+    and can be taken back as those can."""
+    if not actions.writable():
+        raise HTTPException(status_code=409, detail=orchestrator.READ_ONLY)
+    device = request.state.device
+    known = {photo["media"]: photo["id"] for photo in phones.photos if photo["device"] == device}
+    chosen = [known[media] for media in dict.fromkeys(body.media) if media in known]
+    if not chosen:
+        raise HTTPException(status_code=409, detail="Il computer non conosce ancora queste foto: riprova tra poco.")
+    try:
+        folder = collection_name(body.folder or orchestrator.FROM_THE_PHONE)
+        asked = phones.ask(chosen, folder)
+    except Refused as refused:
+        raise HTTPException(status_code=409, detail=str(refused))
+    return {"transfer": asked["id"], "count": len(asked["photos"]), "unknown": len(body.media) - len(chosen), "folder": folder}
 
 
 @app.put("/phone/transfers/{transfer}/photos/{identifier}")

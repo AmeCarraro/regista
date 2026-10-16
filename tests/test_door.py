@@ -196,7 +196,7 @@ def test_pictures_asked_of_a_phone_arrive_in_a_folder_and_can_be_taken_back(home
     landed = sorted((folder / "Raccolte" / "Mare").iterdir())
     assert [path.name for path in landed] == ["mare (2).jpg", "mare.jpg"]
     assert sorted(path.read_bytes() for path in landed) == [b"original 0", b"original 1"]
-    assert phone.get("/phone/work", headers=key).json() == {"transfers": []}
+    assert phone.get("/phone/work", headers=key).json() == {"transfers": [], "incoming": []}
     # not twice
     again = phone.put(f"/phone/transfers/{job['id']}/photos/{job['photos'][0]['id']}", content=b"again", headers=key)
     assert again.status_code == 409
@@ -258,7 +258,7 @@ def test_pictures_leave_a_phone_only_after_a_checked_copy_here_and_a_yes_on_the_
     done = client.get(f"/api/transfers/{asked['transfer']}").json()
     assert done["state"] == "done" and sorted(done["gone"]) == sorted(ids)
     assert done["text"] == "Fatto: 2 foto tolte dal telefono. Restano 30 giorni nel suo cestino, e una copia è sul computer nella cartella «Tolte dal telefono»."
-    assert phones.photos == [] and phone.get("/phone/work", headers=key).json() == {"transfers": []}
+    assert phones.photos == [] and phone.get("/phone/work", headers=key).json() == {"transfers": [], "incoming": []}
     # the copies here are now the ones that stay: no way back at a click, and in words it is said for what it is
     assert done["entry"] == ""
     last = main.actions.last()
@@ -303,6 +303,63 @@ def test_a_phone_cannot_say_it_threw_away_what_never_arrived_here(home):
     done = client.get(f"/api/transfers/{asked['transfer']}").json()
     assert done["gone"] == [arrived["id"]] and [photo["id"] for photo in phones.photos] == [lost["id"]]
     assert done["text"].startswith("Fatto: 1 foto tolta dal telefono.") and done["text"].endswith("1 foto il telefono non è riuscito a mandarla: non la ho toccata.")
+
+
+def test_pictures_of_the_computer_go_to_the_phone_checked_and_only_to_it(home):
+    phones, folder = home
+    phone, key, _ = let_in()
+    rose = main.photos.photos[0]["id"]
+
+    # the yes in the page: the pictures are prepared, and the phone takes them when its app is open
+    sent = client.post("/api/actions", json={"action": "send", "ids": [rose], "folder": ""}).json()
+    assert (sent["kind"], sent["folder"]) == ("send", "Dal computer")
+    assert sent["text"] == "Ho preparato 1 foto per il telefono. Le prende quando Regista è aperto sul telefono."
+    waiting = client.get(f"/api/transfers/{sent['transfer']}").json()
+    assert waiting["state"] == "waiting" and waiting["text"].startswith("Aspetto il telefono: 0 di 1 arrivate sul telefono.")
+    job = phone.get("/phone/work", headers=key).json()["incoming"]
+    assert job == [{"id": sent["transfer"], "folder": "Dal computer", "photos": [{"id": rose, "name": "rose.jpg"}]}]
+
+    # another phone cannot take it, and this one gets the picture with what it is, to check it
+    other, other_key, _ = let_in("Tablet")
+    path = f"/phone/incoming/{sent['transfer']}/photos/{rose}"
+    assert other.get(path, headers=other_key).status_code == 409
+    taken = phone.get(path, headers=key)
+    assert taken.content == (folder / "rose.jpg").read_bytes()
+    assert taken.headers["x-regista-sha256"] == hashlib.sha256(taken.content).hexdigest()
+
+    assert phone.post(f"/phone/incoming/{sent['transfer']}/received", json={"ids": [rose]}, headers=key).json() == {"noted": True}
+    done = client.get(f"/api/transfers/{sent['transfer']}").json()
+    assert done["state"] == "done" and done["text"] == "Fatto: 1 foto sul telefono, nell'album «Dal computer»."
+    # once taken it is no longer offered, and nothing on this computer changed
+    assert phone.get(path, headers=key).status_code == 409
+    assert phone.get("/phone/work", headers=key).json()["incoming"] == []
+    assert (folder / "rose.jpg").exists() and client.get("/api/actions").json()["last"] is None
+
+
+def test_pictures_are_sent_only_when_a_phone_was_let_in(home):
+    rose = main.photos.photos[0]["id"]
+
+    refused = client.post("/api/actions", json={"action": "send", "ids": [rose], "folder": ""})
+
+    assert refused.status_code == 409 and refused.json()["detail"].startswith("Non c'è nessun telefono collegato.")
+
+
+def test_a_phone_can_ask_the_computer_to_take_some_of_its_pictures(home):
+    phones, folder = home
+    phone, key, ids = with_two_pictures()
+
+    # one the computer knows, and one it has not been told of yet
+    offered = phone.post("/phone/offer", json={"media": ["41", "99"]}, headers=key).json()
+    assert (offered["count"], offered["unknown"], offered["folder"]) == (1, 1, "Dal telefono")
+    job = phone.get("/phone/work", headers=key).json()["transfers"][0]
+    assert job["id"] == offered["transfer"] and [photo["media"] for photo in job["photos"]] == ["41"]
+    phone.put(f"/phone/transfers/{job['id']}/photos/{job['photos'][0]['id']}", content=b"original", headers={**key, **sha(b"original")})
+
+    # they arrive as any other, and can be taken back from here like any other
+    assert [path.read_bytes() for path in (folder / "Raccolte" / "Dal telefono").iterdir()] == [b"original"]
+    assert client.get("/api/actions").json()["last"]["kind"] == "receive"
+    assert phone.post("/phone/offer", json={"media": ["99"]}, headers=key).status_code == 409
+    assert client.post("/phone/offer", json={"media": ["41"]}).status_code == 404
 
 
 def test_a_picture_the_phone_cannot_send_ends_the_wait(home):
