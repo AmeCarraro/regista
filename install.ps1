@@ -64,7 +64,7 @@ try {
 # one that answers is there, wherever it was installed
 $ollama = $ollamaOn -or (Test-Command 'ollama')
 # any model that can direct will do; the page then says which one is best for this computer
-$hasModel = [bool]($models | Where-Object { $_ -like 'granite4.1:*' })
+$hasModel = [bool]($models | Where-Object { $_ -like 'granite4.1:*' -or $_ -like 'qwen3.5*' })
 
 Say ("Docker Desktop: " + $(if ($dockerOn) { 'c''è ed è acceso' } elseif ($docker) { 'c''è, ma è spento' } else { 'manca' }))
 Say ("Ollama:         " + $(if ($ollamaOn) { 'c''è ed è acceso' } elseif ($ollama) { 'c''è, ma è spento' } else { 'manca' }))

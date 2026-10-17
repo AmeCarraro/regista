@@ -18,14 +18,21 @@ JOBS = {
 NEEDS = {"tools": "tools", "chat": "completion", "vision": "vision"}
 # video memory a model needs on top of its file, for the conversation it holds
 HEADROOM_GB = 0.8
+# A model that was tried and writes at least this many tokens a second decides in about a second:
+# it runs well enough, even if part of it sits on the processor. Measured, Qwen3.5 4B wrote 30 on a
+# 4 GB card with a third of it outside, and decided right more often than the 3B that fits.
+FAST_ENOUGH = 15
 # Models that declare tools and, when tried in this project, did not manage a single call.
 # It is only a starting opinion: a test on this computer replaces it.
 POOR_AT_TOOLS = ("llama3.2",)
 # The models the app can suggest for the job of director, smallest first, with the size of the
-# download. The first is the one this app was built and measured with; the others are the same
-# model in larger sizes. Names and sizes as the Ollama library gave them on 2026-10-11.
+# download. On a PC with a 4 GB card, Qwen3.5 4B decided right 17 times of 17 and Granite 4.1 3B 13,
+# Granite translating "motosega" as "a motorcycle engine": so Qwen where it fits, and Granite, which
+# is smaller and quicker, where nothing else does. The larger ones were not measured here. Names and
+# sizes as the Ollama library gave them on 2026-10-11 and 2026-10-17.
 SUGGESTED = [
     {"name": "granite4.1:3b", "gigabytes": 2.1},
+    {"name": "qwen3.5:4b", "gigabytes": 3.1},
     {"name": "granite4.1:8b", "gigabytes": 5.3},
     {"name": "granite4.1:30b", "gigabytes": 17.0},
 ]
@@ -108,6 +115,10 @@ def where(model: dict, machine: Hardware, tests: dict | None = None) -> str:
 
 
 def runs_well(model: dict, machine: Hardware, tests: dict | None = None) -> bool:
+    """Whether a model is quick enough here. What was measured says it better than where the model sits."""
+    tried = (tests or {}).get(model["name"])
+    if tried and tried.get("tokens_per_second"):
+        return tried["tokens_per_second"] >= FAST_ENOUGH
     return where(model, machine, tests) in ("gpu", "cpu")
 
 

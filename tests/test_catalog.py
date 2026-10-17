@@ -58,6 +58,19 @@ def test_a_model_seen_to_spill_out_of_the_video_memory_is_judged_by_that_and_not
     assert catalog.pick("tools", [LLAMA, GRANITE], LAPTOP, tried) == "granite4.1:3b"
 
 
+def test_a_model_partly_on_the_processor_that_proved_quick_and_better_directs():
+    # as on this PC: Qwen3.5 4B does not fit whole in 4 GB, writes 30 tokens a second, and decided right more often
+    qwen = model("qwen3.5-testo:4b", 2.5, "4.2B", ["completion", "tools", "thinking"])
+    tried = {"qwen3.5-testo:4b": {"cases": 17, "right": 17, "tokens_per_second": 30.0, "gpu_share": 0.64},
+             "granite4.1:3b": {"cases": 17, "right": 14, "tokens_per_second": 54.0, "gpu_share": 0.81}}
+
+    assert catalog.where(qwen, LAPTOP, tried) == "split" and catalog.runs_well(qwen, LAPTOP, tried)
+    assert catalog.pick("tools", [GRANITE, qwen], LAPTOP, tried) == "qwen3.5-testo:4b"
+    # one that crawls is not, however right it is
+    crawling = {**tried, "qwen3.5-testo:4b": {**tried["qwen3.5-testo:4b"], "tokens_per_second": 6.0}}
+    assert catalog.pick("tools", [GRANITE, qwen], LAPTOP, crawling) == "granite4.1:3b"
+
+
 def test_the_user_can_choose_who_talks_but_only_among_those_who_can():
     assert catalog.pick("chat", ALL, LAPTOP, {}, wanted="llama3.2:3b") == "llama3.2:3b"
     # an embedding model cannot talk: the choice falls back to the best one
@@ -81,8 +94,10 @@ def test_the_page_gets_every_model_with_what_it_is_for_and_the_order_for_each_jo
 
 
 @pytest.mark.parametrize("machine, installed, name, place, there", [
-    # a 4 GB card: the small one, which is already there
-    (LAPTOP, [GRANITE, LLAMA], "granite4.1:3b", "gpu", True),
+    # a 4 GB card: Qwen3.5 4B, which decided better than the 3B there
+    (LAPTOP, [GRANITE, LLAMA], "qwen3.5:4b", "gpu", False),
+    # a 3 GB card: only the small one fits
+    (Hardware("GTX 1060", 3.0, 16.0, 6), [GRANITE], "granite4.1:3b", "gpu", True),
     # 12 and 16 GB: the 8B one fits whole, the 30B one does not
     (Hardware("RTX 4070", 12.0, 32.0, 16), [GRANITE], "granite4.1:8b", "gpu", False),
     (Hardware("RTX 5080", 16.0, 32.0, 16), [], "granite4.1:8b", "gpu", False),

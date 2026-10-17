@@ -57,6 +57,9 @@ async def stream(model: str, messages: list[dict], max_tokens: int = 700, schema
         "model": model,
         "messages": messages,
         "stream": True,
+        # A model that can think aloud before it answers (Qwen3.5) would take many times as long for
+        # a decision of a few words: it answers straight away. Models that cannot think ignore this.
+        "think": False,
         "options": {"temperature": 0, "num_ctx": NUM_CTX, "num_predict": max_tokens},
     }
     if schema:

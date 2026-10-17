@@ -14,24 +14,29 @@ import catalog
 import llm
 from orchestrator import TALK, decide
 
-# a request, and the right thing to do with it
+# a request, the right thing to do with it, and, for a search, words one of which its English caption must have:
+# the picture model reads English, and a word translated wrong finds the wrong pictures
 CASES = [
-    ("trovami le foto con un cane", "find_photos"),
-    ("show me the pictures of the beach at sunset", "find_photos"),
-    ("mi fai vedere le foto delle chiese?", "find_photos"),
-    ("cerca le immagini con una macchina rossa", "find_photos"),
-    ("quante foto ho?", "count_photos"),
-    ("ciao, come stai?", "answer"),
-    ("quanto fa 12 per 12?", "answer"),
-    ("spiegami in una frase cos'è una scheda video", "answer"),
+    ("trovami le foto con un cane", "find_photos", ("dog",)),
+    ("show me the pictures of the beach at sunset", "find_photos", ("beach", "sunset")),
+    ("mi fai vedere le foto delle chiese?", "find_photos", ("church",)),
+    ("cerca le immagini con una macchina rossa", "find_photos", ("red car",)),
+    ("quante foto ho?", "count_photos", ()),
+    ("ciao, come stai?", "answer", ()),
+    ("quanto fa 12 per 12?", "answer", ()),
+    ("spiegami in una frase cos'è una scheda video", "answer", ()),
     # the word "foto" is there, and still nothing is to be searched
-    ("dammi tre consigli brevi per fare belle foto", "answer"),
-    ("che differenza c'è tra jpg e png?", "answer"),
+    ("dammi tre consigli brevi per fare belle foto", "answer", ()),
+    ("che differenza c'è tra jpg e png?", "answer", ()),
     # what changes the pictures: told to do it, the model must propose it; asked how it is done, it must answer
-    ("elimina le foto dei gatti", "trash_photos"),
-    ("copia le foto del mare in una cartella chiamata Estate", "copy_photos"),
-    ("annulla l'ultima modifica", "undo"),
-    ("come si svuota il cestino di Windows?", "answer"),
+    ("elimina le foto dei gatti", "trash_photos", ()),
+    ("copia le foto del mare in una cartella chiamata Estate", "copy_photos", ()),
+    ("annulla l'ultima modifica", "undo", ()),
+    ("come si svuota il cestino di Windows?", "answer", ()),
+    # words that small models translate wrong: "a motorcycle engine", "a cow", "an eagle"
+    ("trovami le foto con una motosega", "find_photos", ("chainsaw", "chain saw")),
+    ("le foto di un tacchino", "find_photos", ("turkey",)),
+    ("le foto con un aquilone", "find_photos", ("kite",)),
 ]
 # what a model is asked to write when its speed is measured
 SPEED_PROBE = "Describe in three sentences what a web browser does."
@@ -49,12 +54,13 @@ def save(index_dir: str, tests: dict) -> None:
     (Path(index_dir) / "tests.json").write_text(json.dumps(tests, indent=1))
 
 
-async def try_case(model: str, request: str, expected: str) -> bool:
-    """One request to one model: did it decide to do the right thing with it."""
+async def try_case(model: str, request: str, expected: str, words: tuple = ()) -> bool:
+    """One request to one model: did it decide to do the right thing with it, and say in English what it was asked."""
     decision = await decide(model, [{"role": "user", "content": request}])
     # a search with nothing to search for is not a search, and a copy needs the name of its folder
     needed = {"find_photos": "caption", "copy_photos": "folder"}.get(expected)
-    return decision["action"] == expected and (needed is None or bool(decision[needed]))
+    understood = not words or any(word in decision["caption"].lower() for word in words)
+    return decision["action"] == expected and (needed is None or bool(decision[needed])) and understood
 
 
 async def speed(model: str) -> float:
@@ -73,10 +79,10 @@ async def run(index_dir: str):
     tests = load(index_dir)
     for name in candidates:
         right = 0
-        for number, (request, expected) in enumerate(CASES, start=1):
+        for number, (request, expected, words) in enumerate(CASES, start=1):
             yield {"type": "progress", "model": name, "case": number, "cases": len(CASES)}
             try:
-                right += await try_case(name, request, expected)
+                right += await try_case(name, request, expected, words)
             except Exception as exc:
                 yield {"type": "problem", "model": name, "message": f"{type(exc).__name__}: {exc}"}
         try:
