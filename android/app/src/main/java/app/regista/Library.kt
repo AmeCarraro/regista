@@ -2,6 +2,7 @@ package app.regista
 
 import android.content.ContentValues
 import android.content.Context
+import android.util.Base64
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import org.json.JSONArray
@@ -12,13 +13,14 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
 /**
- * What the app knows of each picture of this phone: the day it was taken and where, read once
+ * What the app knows of each picture of this phone: the day it was taken and where (the country
+ * and, in Italy, the region), read once
  * from the picture itself (Gallery.notes), and, once the phone has its own models (Sight), what
  * it shows, as 512 numbers. All kept in a small database of the app's own, so that a search on
  * the phone takes a moment also among thousands of pictures. Nothing here changes a picture.
  */
 class Library(context: Context, private val gallery: Gallery, private val places: Places, private val sight: Sight) :
-    SQLiteOpenHelper(context, "library.db", null, 2) {
+    SQLiteOpenHelper(context, "library.db", null, 3) {
 
     /** How many pictures have been read, of how many there are. */
     @Volatile var done = 0
@@ -38,11 +40,13 @@ class Library(context: Context, private val gallery: Gallery, private val places
 
     override fun onCreate(db: SQLiteDatabase) {
         // vector: what the picture shows, as 512 numbers; empty when it could not be looked at, null until it is
-        db.execSQL("CREATE TABLE photo (id INTEGER PRIMARY KEY, stamp TEXT NOT NULL, name TEXT NOT NULL, day TEXT NOT NULL, lat REAL, lon REAL, country TEXT NOT NULL, vector BLOB)")
+        db.execSQL("CREATE TABLE photo (id INTEGER PRIMARY KEY, stamp TEXT NOT NULL, name TEXT NOT NULL, day TEXT NOT NULL, lat REAL, lon REAL, country TEXT NOT NULL, region TEXT, vector BLOB)")
     }
 
     override fun onUpgrade(db: SQLiteDatabase, before: Int, now: Int) {
         if (before < 2) db.execSQL("ALTER TABLE photo ADD COLUMN vector BLOB")
+        // null until worked out, from the position the picture has (placed)
+        if (before < 3) db.execSQL("ALTER TABLE photo ADD COLUMN region TEXT")
     }
 
     /**
@@ -86,6 +90,43 @@ class Library(context: Context, private val gallery: Gallery, private val places
         }
     }
 
+    /** The pictures the phone has not looked at yet, the newest first: their numbers and stamps, to ask the computer for. */
+    fun notLookedAt(): List<Pair<Long, String>> {
+        val found = ArrayList<Pair<Long, String>>()
+        readableDatabase.rawQuery("SELECT id, stamp FROM photo WHERE vector IS NULL OR length(vector) = 0 ORDER BY day DESC", null).use { rows ->
+            while (rows.moveToNext()) found += rows.getLong(0) to rows.getString(1)
+        }
+        return found
+    }
+
+    /**
+     * Keeps what the computer read in some pictures as the phone's own: {"id": base64 of 512 numbers}.
+     * Only for a picture still as it was when the computer was asked (the same stamp) and not looked at
+     * since. Says how many were kept.
+     */
+    fun keep(vectors: JSONObject, stamps: Map<Long, String>): Int {
+        val db = writableDatabase
+        var kept = 0
+        db.beginTransaction()
+        try {
+            for (name in vectors.keys()) {
+                val id = name.toLongOrNull() ?: continue
+                val stamp = stamps[id] ?: continue
+                val bytes = runCatching { Base64.decode(vectors.getString(name), Base64.DEFAULT) }.getOrNull() ?: continue
+                if (bytes.size != Sight.SIZE * 4) continue
+                kept += db.update(
+                    "photo", ContentValues().apply { put("vector", bytes) },
+                    "id = ? AND stamp = ? AND (vector IS NULL OR length(vector) = 0)", arrayOf(id.toString(), stamp),
+                )
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        counted()
+        return kept
+    }
+
     /** How close every picture the phone has looked at is to what a sentence says: {"id": score}. */
     fun scores(sentence: FloatArray): String {
         val all = JSONObject()
@@ -124,13 +165,16 @@ class Library(context: Context, private val gallery: Gallery, private val places
                         put("name", photo.name)
                         put("day", notes.day)
                         if (latitude != null && longitude != null) {
+                            val (country, region) = places.where(latitude, longitude)
                             put("lat", latitude)
                             put("lon", longitude)
-                            put("country", places.countryOf(latitude, longitude))
+                            put("country", country)
+                            put("region", region)
                         } else {
                             putNull("lat")
                             putNull("lon")
                             put("country", "")
+                            put("region", "")
                         }
                     }
                     db.insertWithOnConflict("photo", null, row, SQLiteDatabase.CONFLICT_REPLACE)
@@ -141,14 +185,35 @@ class Library(context: Context, private val gallery: Gallery, private val places
             }
             done += batch.size
         }
+        placed(db)
     }
 
-    /** Every picture known, as the phone's page reads them: {"id", "name", "day", "lat", "lon", "country"}. */
+    /** The region of the pictures read before the app knew of regions, from the position they have: once. */
+    private fun placed(db: SQLiteDatabase) {
+        val missing = ArrayList<Triple<Long, Double, Double>>()
+        db.rawQuery("SELECT id, lat, lon FROM photo WHERE region IS NULL AND lat IS NOT NULL", null).use { rows ->
+            while (rows.moveToNext()) missing += Triple(rows.getLong(0), rows.getDouble(1), rows.getDouble(2))
+        }
+        db.beginTransaction()
+        try {
+            for ((id, latitude, longitude) in missing) {
+                val (country, region) = places.where(latitude, longitude)
+                db.update("photo", ContentValues().apply { put("country", country); put("region", region) }, "id = ?", arrayOf(id.toString()))
+            }
+            db.execSQL("UPDATE photo SET region = '' WHERE region IS NULL")
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    /** Every picture known, as the phone's page reads them: {"id", "name", "day", "lat", "lon", "country", "region"}. */
     fun json(): String {
         val all = JSONArray()
-        readableDatabase.rawQuery("SELECT id, name, day, lat, lon, country FROM photo", null).use { rows ->
+        readableDatabase.rawQuery("SELECT id, name, day, lat, lon, country, region FROM photo", null).use { rows ->
             while (rows.moveToNext()) {
-                val one = JSONObject().put("id", rows.getLong(0).toString()).put("name", rows.getString(1)).put("day", rows.getString(2)).put("country", rows.getString(5))
+                val one = JSONObject().put("id", rows.getLong(0).toString()).put("name", rows.getString(1)).put("day", rows.getString(2))
+                    .put("country", rows.getString(5)).put("region", rows.getString(6) ?: "")
                 if (!rows.isNull(3)) one.put("lat", rows.getDouble(3)).put("lon", rows.getDouble(4))
                 all.put(one)
             }

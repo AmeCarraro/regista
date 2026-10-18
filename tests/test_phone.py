@@ -21,9 +21,11 @@ def phones(tmp_path):
 
 
 def let_in(phones, name="Pixel"):
-    """Pairs a phone the way a real one does: with the secret of the link. Returns its key and its name here."""
+    """Pairs a phone the way a real one does: the secret of the code, the user's yes here, the key taken with the ticket."""
     secret = parse_qs(urlparse(phones.invite()["link"]).query)["s"][0]
-    paired = phones.pair(secret, name)
+    asked = phones.pair(secret, name)
+    phones.answer(phones.waiting()[0]["id"], True)
+    paired = phones.collect(asked["ticket"])
     return paired["token"], paired["device"]
 
 
@@ -38,20 +40,58 @@ def test_the_link_says_where_the_computer_is_and_how_to_recognise_it(phones):
     assert len(said["s"][0]) >= 20
 
 
-def test_a_link_lets_one_phone_in_once(phones):
+def test_a_phone_comes_in_only_after_a_yes_here_with_the_same_number_on_both_screens(phones):
     secret = parse_qs(urlparse(phones.invite()["link"]).query)["s"][0]
 
-    paired = phones.pair(secret, "  Pixel 8\n")
+    asked = phones.pair(secret, "  Pixel 8\n")
 
-    assert paired["computer"] == "PC di casa" and phones.described()[0]["name"] == "Pixel 8"
+    # six figures, the same the user sees here; and nothing is let in yet
+    assert len(asked["code"]) == 6 and asked["code"].isdigit() and asked["computer"] == "PC di casa"
+    assert [(one["name"], one["code"]) for one in phones.waiting()] == [("Pixel 8", asked["code"])]
+    assert phones.devices == [] and phones.collect(asked["ticket"])["state"] == "waiting"
+    # the code is good once: one phone at a time
     with pytest.raises(Refused):
         phones.pair(secret, "another phone")
     with pytest.raises(Refused):
         phones.pair("a guess", "a stranger")
-    assert len(phones.devices) == 1
+
+    assert phones.answer(phones.waiting()[0]["id"], True)
+    paired = phones.collect(asked["ticket"])
+
+    assert paired["state"] == "paired" and phones.device_of(paired["token"])["name"] == "Pixel 8"
+    # the key is told once, and only to whoever has the ticket
+    with pytest.raises(Refused):
+        phones.collect(asked["ticket"])
+    with pytest.raises(Refused):
+        phones.collect("a guessed ticket")
+    assert len(phones.devices) == 1 and phones.waiting() == []
 
 
-def test_a_link_stops_being_good_after_a_few_minutes(phones, monkeypatch):
+def test_a_no_here_leaves_the_phone_out(phones):
+    secret = parse_qs(urlparse(phones.invite()["link"]).query)["s"][0]
+    asked = phones.pair(secret, "Telefono di qualcuno")
+
+    assert phones.answer(phones.waiting()[0]["id"], False)
+
+    with pytest.raises(Refused, match="hanno detto di no"):
+        phones.collect(asked["ticket"])
+    assert phones.devices == [] and not phones.answer("no such request", True)
+
+
+def test_a_phone_that_waits_too_long_is_not_let_in(phones, monkeypatch):
+    secret = parse_qs(urlparse(phones.invite()["link"]).query)["s"][0]
+    asked = phones.pair(secret, "Pixel")
+    phones.answer(phones.waiting()[0]["id"], True)
+    # the yes came, but the phone did not take its key in time: it is shut out again
+    later = phone.time.monotonic() + phone.PENDING_SECONDS + 1
+    monkeypatch.setattr(phone.time, "monotonic", lambda: later)
+
+    with pytest.raises(Refused):
+        phones.collect(asked["ticket"])
+    assert phones.devices == []
+
+
+def test_a_code_stops_being_good_after_a_minute(phones, monkeypatch):
     secret = parse_qs(urlparse(phones.invite()["link"]).query)["s"][0]
     later = phone.time.monotonic() + phone.INVITE_SECONDS + 1
     monkeypatch.setattr(phone.time, "monotonic", lambda: later)
@@ -60,12 +100,23 @@ def test_a_link_stops_being_good_after_a_few_minutes(phones, monkeypatch):
         phones.pair(secret, "Pixel")
 
 
-def test_a_new_link_replaces_the_one_before(phones):
+def test_a_new_code_on_show_leaves_the_one_before_good_until_its_time_is_up(phones):
     old = parse_qs(urlparse(phones.invite()["link"]).query)["s"][0]
     phones.invite()
 
-    with pytest.raises(Refused):
-        phones.pair(old, "Pixel")
+    assert phones.pair(old, "Pixel")["code"]
+
+
+def test_the_knocks_refused_are_counted_and_too_many_calm_the_door_down(phones):
+    for _ in range(phone.KNOCKS):
+        with pytest.raises(Refused):
+            phones.pair("a guess", "x")
+    assert phones.knocks()["count"] == phone.KNOCKS and phones.knocks()["what"] == "un codice di collegamento sbagliato o scaduto"
+    assert not phones.calm
+
+    phones.knocked("una chiave sbagliata")
+
+    assert phones.calm and phones.knocks()["count"] == phone.KNOCKS + 1
 
 
 def test_a_phone_is_known_by_its_key_and_the_key_is_not_kept(phones, tmp_path):

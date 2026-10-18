@@ -165,6 +165,37 @@ body {
   line-height: 1.5;
 }
 
+/* who gave the answer on screen: the phone by itself, or the computer */
+.source {
+  display: inline-block;
+  margin-right: 4px;
+  padding: 1px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.74rem;
+  vertical-align: 1px;
+}
+
+.source.computer {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+/* from the computer's answer to the phone's own, and back */
+.switch {
+  display: block;
+  margin: -6px 2px 12px;
+  padding: 4px 0;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.82rem;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .fine {
   margin: 12px 2px 0;
   color: var(--muted);
@@ -223,6 +254,17 @@ body {
 .card .go {
   align-self: flex-start;
   padding: 11px 18px;
+}
+
+.card .quiet {
+  align-self: flex-start;
+  padding: 10px 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--card-solid);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
 }
 
 /* where the pictures the phone is less sure of begin: a line across the grid */

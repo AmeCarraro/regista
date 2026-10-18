@@ -13,12 +13,13 @@ from places import Places, position_of
 from test_orchestrator import Changes, form, proposed, said, script
 
 TOKYO, KYOTO, PARIS, NICE, ROME = (35.6895, 139.6917), (35.0211, 135.7538), (48.8534, 2.3488), (43.7031, 7.2661), (41.8919, 12.5113)
+CAGLIARI = (39.2238, 9.1217)
 
 
-def row(name, other_names, position, country, people):
-    """A city as the table of GeoNames writes it: nineteen columns, of which this app reads seven."""
+def row(name, other_names, position, country, people, region=""):
+    """A city as the table of GeoNames writes it: nineteen columns, of which this app reads eight."""
     cells = [""] * 19
-    cells[1], cells[2], cells[3], cells[4], cells[5], cells[8], cells[14] = name, name, other_names, str(position[0]), str(position[1]), country, str(people)
+    cells[1], cells[2], cells[3], cells[4], cells[5], cells[8], cells[10], cells[14] = name, name, other_names, str(position[0]), str(position[1]), country, region, str(people)
     return "\t".join(cells)
 
 
@@ -31,17 +32,20 @@ def places(tmp_path):
         row("Kyoto", "Kioto", KYOTO, "JP", 1_400_000),
         row("Paris", "Parigi,PAR", PARIS, "FR", 2_100_000),
         row("Nice", "Nizza", NICE, "FR", 340_000),
-        row("Rome", "Roma", ROME, "IT", 2_800_000),
+        row("Rome", "Roma", ROME, "IT", 2_800_000, "07"),
+        row("Cagliari", "", CAGLIARI, "IT", 150_000, "14"),
         # a village with the name of a capital does not take its place
         row("Paris", "", (33.66, -95.55), "US", 25_000),
         # nor does a large town that someone, somewhere, also calls by the name of a smaller city
-        row("Venice", "Venezia", (45.4371, 12.3327), "IT", 51_000),
+        row("Venice", "Venezia", (45.4371, 12.3327), "IT", 51_000, "20"),
         row("Dayton", "Venice,Daytona", (39.7589, -84.1916), "US", 140_000),
     ]
     with zipfile.ZipFile(folder / "cities15000.zip", "w") as packed:
         packed.writestr("cities15000.txt", "\n".join(cities))
     countries = "# comments at the top\nJP\tJPN\t392\tJA\tJapan\nFR\tFRA\t250\tFR\tFrance\nIT\tITA\t380\tIT\tItaly\nTR\tTUR\t792\tTU\tTurkey\n"
     (folder / "countryInfo.txt").write_text(countries, encoding="utf-8")
+    italian = "# code\tItalian name\tEnglish name\nJP\tGiappone\tJapan\nFR\tFrancia\tFrance\nIT\tItalia\tItaly\nTR\tTurchia\tTürkiye\nUS\tStati Uniti\tUnited States\n"
+    (folder / "countries.tsv").write_text(italian, encoding="utf-8")
     return Places(str(folder))
 
 
@@ -79,14 +83,20 @@ def test_a_position_is_in_the_country_of_the_nearest_city(places):
 
 
 @pytest.mark.parametrize("caption, asked, kind, name, left", [
-    ("Japan", "le foto del Giappone", "country", "Japan", ""),
-    ("photos of Japan", "", "country", "Japan", ""),
-    ("the sea in Japan", "", "country", "Japan", "the sea"),
+    # a country is said as Italians say it, whatever language the model wrote it in
+    ("Japan", "le foto del Giappone", "country", "Giappone", ""),
+    ("photos of Japan", "", "country", "Giappone", ""),
+    ("the sea in Japan", "", "country", "Giappone", "the sea"),
+    ("United States", "", "country", "Stati Uniti", ""),
+    # and a region of Italy, in English or in Italian
+    ("Sardinia", "le foto della Sardegna", "region", "Sardegna", ""),
+    ("the sea in Sardinia", "", "region", "Sardegna", "the sea"),
+    ("Lazio", "", "region", "Lazio", ""),
     ("Tokyo", "", "city", "Tokyo", ""),
     # the name the user used is the one shown
     ("Paris", "le foto di Parigi", "city", "Parigi", ""),
     ("a dog in Kyoto", "un cane a Kioto", "city", "Kioto", "a dog"),
-    ("Turkey", "", "country", "Turkey", ""),
+    ("Turkey", "", "country", "Turchia", ""),
 ])
 def test_a_place_is_found_in_a_caption(places, caption, asked, kind, name, left):
     spot, rest = places.find(caption, asked)
@@ -97,6 +107,18 @@ def test_a_place_is_found_in_a_caption(places, caption, asked, kind, name, left)
 @pytest.mark.parametrize("caption", ["a nice dog", "a turkey", "nice", "a dog in a park", "churches", "the sea", "PAR", ""])
 def test_a_word_that_is_also_a_place_is_not_one_without_the_capital_of_a_name(places, caption):
     assert places.find(caption) == (None, caption)
+
+
+def test_a_position_is_in_the_region_of_the_nearest_city(places):
+    assert places.where((39.25, 9.05)) == ("IT", "IT.14")      # near Cagliari: Sardinia
+    assert places.where((41.9, 12.4)) == ("IT", "IT.07")       # Rome: Lazio
+    assert places.where(None) == ("", "")
+
+
+def test_the_pictures_of_a_region_are_the_ones_taken_there(places):
+    entries = [{"region": "IT.14"}, {"region": "IT.07"}, {}, {"region": "IT.14"}]
+
+    assert places.inside(places.find("Sardinia")[0], entries) == [0, 3]
 
 
 def test_a_capital_is_the_largest_city_of_that_name(places):
@@ -191,10 +213,10 @@ def test_a_request_for_a_place_finds_the_pictures_taken_there(library, places, m
 
     events = ask("trovami le foto del Giappone", library, places, monkeypatch)
 
-    assert events[1]["arguments"] == {"description": "", "place": "computer", "period": "", "spot": "in Japan"}
+    assert events[1]["arguments"] == {"description": "", "place": "computer", "period": "", "spot": "in Giappone"}
     assert names(events[2]) == ["crossing.jpg", "temple.jpg", "tower.jpg"]
-    assert said(events) == "Ho trovato 3 foto scattate in Japan."
-    assert events[-1]["memory"] == "Searched the photos taken in Japan: 3 found, 0 uncertain."
+    assert said(events) == "Ho trovato 3 foto scattate in Giappone."
+    assert events[-1]["memory"] == "Searched the photos taken in Giappone: 3 found, 0 uncertain."
 
 
 def test_a_place_and_what_the_pictures_show_work_together(library, places, monkeypatch):
@@ -203,7 +225,7 @@ def test_a_place_and_what_the_pictures_show_work_together(library, places, monke
     events = ask("le cose rosse a Tokio", library, places, monkeypatch)
 
     assert events[1]["arguments"] == {"description": "something red", "place": "computer", "period": "", "spot": "a Tokio"}
-    assert names(events[2]) == ["tower.jpg"] and said(events) == "Ho trovato 1 foto scattate a Tokio."
+    assert names(events[2]) == ["tower.jpg"] and said(events) == "Ho trovato 1 foto scattata a Tokio."
 
 
 def test_when_no_picture_says_it_was_taken_there_the_ones_that_look_like_it_are_shown(library, places, monkeypatch):
@@ -213,7 +235,7 @@ def test_when_no_picture_says_it_was_taken_there_the_ones_that_look_like_it_are_
 
     # the search is the one there was before places were known, and the words say why
     assert events[1]["arguments"] == {"description": "Turkey", "place": "computer", "period": "", "spot": ""}
-    assert said(events).startswith("Nessuna foto risulta scattata in Turkey: cerco quelle che ci somigliano. ")
+    assert said(events).startswith("Nessuna foto risulta scattata in Turchia: cerco quelle che ci somigliano. ")
 
 
 def test_the_pictures_of_a_place_can_be_proposed_for_a_copy(library, places, monkeypatch):
@@ -222,5 +244,21 @@ def test_the_pictures_of_a_place_can_be_proposed_for_a_copy(library, places, mon
     events = ask("prendi tutte le foto del Giappone e salvamele in una cartella Giappone", library, places, monkeypatch, actions=Changes())
 
     assert sorted(photo["name"] for photo in proposed(events)["photos"]) == ["crossing.jpg", "temple.jpg", "tower.jpg"]
-    assert events[1]["arguments"] == {"description": "", "place": "computer", "period": "", "spot": "in Japan"}
-    assert events[-1]["memory"].startswith("Searched the photos taken in Japan: 3 found. Proposed to copy them")
+    assert events[1]["arguments"] == {"description": "", "place": "computer", "period": "", "spot": "in Giappone"}
+    assert events[-1]["memory"].startswith("Searched the photos taken in Giappone: 3 found. Proposed to copy them")
+
+
+def test_the_pictures_of_a_region_are_found_and_said_with_its_preposition(tmp_path, places, monkeypatch):
+    folder = tmp_path / "isola"
+    taken_at(folder, "poetto.jpg", "blue", CAGLIARI)
+    taken_at(folder, "colosseo.jpg", "red", ROME)
+    index = PhotoIndex(str(folder), str(tmp_path / "index-isola"), ColourEmbedder(), places)
+    index.build()
+    script(monkeypatch, [form("find_photos", "Sardinia")])
+
+    events = ask("le foto della Sardegna", index, places, monkeypatch)
+
+    assert names(events[2]) == ["poetto.jpg"]
+    assert said(events) == "Ho trovato 1 foto scattata in Sardegna."
+    script(monkeypatch, [form("find_photos", "Lazio")])
+    assert said(ask("le foto del Lazio", index, places, monkeypatch)) == "Ho trovato 1 foto scattata nel Lazio."

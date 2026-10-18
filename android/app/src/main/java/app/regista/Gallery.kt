@@ -53,6 +53,9 @@ class Gallery(private val context: Context) {
 
     val allowed get() = context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
 
+    /** The number of the newest picture of the gallery; 0 when there is none. The ones added later have larger numbers. */
+    fun newest(): Long = all().maxOfOrNull { it.id } ?: 0L
+
     fun all(): List<Photo> {
         val columns = arrayOf(
             MediaStore.Images.Media._ID,

@@ -18,6 +18,35 @@ from PIL import Image
 
 # how far from a city a picture can be and still be "of" that city, in kilometres
 NEAR = 50
+# The Italian regions: what GeoNames calls each (the country, then the code of the region in it),
+# its names in Italian and in English, and how it is said after "scattate". The phone has the same (regions.ts).
+REGIONS = {
+    "IT.01": ("Abruzzo", ("abruzzo",), "in Abruzzo"),
+    "IT.02": ("Basilicata", ("basilicata",), "in Basilicata"),
+    "IT.03": ("Calabria", ("calabria",), "in Calabria"),
+    "IT.04": ("Campania", ("campania",), "in Campania"),
+    "IT.05": ("Emilia-Romagna", ("emilia-romagna", "emilia romagna", "emilia", "romagna"), "in Emilia-Romagna"),
+    "IT.06": ("Friuli-Venezia Giulia", ("friuli-venezia giulia", "friuli venezia giulia", "friuli", "venezia giulia"), "in Friuli-Venezia Giulia"),
+    "IT.07": ("Lazio", ("lazio", "latium"), "nel Lazio"),
+    "IT.08": ("Liguria", ("liguria",), "in Liguria"),
+    "IT.09": ("Lombardia", ("lombardia", "lombardy"), "in Lombardia"),
+    "IT.10": ("Marche", ("marche", "the marches"), "nelle Marche"),
+    "IT.11": ("Molise", ("molise",), "in Molise"),
+    "IT.12": ("Piemonte", ("piemonte", "piedmont"), "in Piemonte"),
+    "IT.13": ("Puglia", ("puglia", "apulia"), "in Puglia"),
+    "IT.14": ("Sardegna", ("sardegna", "sardinia"), "in Sardegna"),
+    "IT.15": ("Sicilia", ("sicilia", "sicily"), "in Sicilia"),
+    "IT.16": ("Toscana", ("toscana", "tuscany"), "in Toscana"),
+    "IT.17": ("Trentino-Alto Adige", ("trentino-alto adige", "trentino alto adige", "trentino", "alto adige", "south tyrol"), "in Trentino-Alto Adige"),
+    "IT.18": ("Umbria", ("umbria",), "in Umbria"),
+    "IT.19": ("Valle d'Aosta", ("valle d'aosta", "val d'aosta", "aosta valley"), "in Valle d'Aosta"),
+    "IT.20": ("Veneto", ("veneto",), "in Veneto"),
+}
+# countries said with another word than "in": "negli Stati Uniti", "nel Regno Unito"
+IN_COUNTRY = {
+    "US": "negli Stati Uniti", "GB": "nel Regno Unito", "NL": "nei Paesi Bassi", "AE": "negli Emirati Arabi Uniti",
+    "PH": "nelle Filippine", "MV": "nelle Maldive", "SC": "nelle Seychelles", "VA": "nella Città del Vaticano",
+}
 EARTH = 6371.0
 # what can come before a place when it is all a caption says: "photos of Japan", "in the Netherlands"
 _LEAD = re.compile(r"^(?:(?:photos?|pictures?|images?)\s+(?:of|from|in|taken in)\s+|(?:in|from|at)\s+)?(?:the\s+)?", re.IGNORECASE)
@@ -61,11 +90,17 @@ class Places:
         """Reads the table from a folder. If it is not there the object knows no place, and `known` says so."""
         self.names: list[str] = []
         self.codes: list[str] = []
+        # the region of every city, as "IT.14": the country, then the code GeoNames gives the region in it
+        self.regions: list[str] = []
         self.latitudes = self.longitudes = np.zeros(0)
         # a name in small letters -> the largest city called so, in any of the languages the table has
         self._cities: dict[str, int] = {}
         # the English name of a country in small letters -> (its code, its name)
         self._countries: dict[str, tuple[str, str]] = {}
+        # the name of a region in small letters, in Italian or in English -> its code
+        self._regions = {name: code for code, (_, names, _) in REGIONS.items() for name in names}
+        # the Italian name of every country, by its code, to speak of it as Italians do
+        self._italian: dict[str, str] = {}
         cities, countries = Path(folder) / "cities15000.zip", Path(folder) / "countryInfo.txt"
         if not (cities.exists() and countries.exists()):
             return
@@ -82,6 +117,7 @@ class Places:
             cells = row.split("\t")
             self.names.append(cells[1])
             self.codes.append(cells[8])
+            self.regions.append(f"{cells[8]}.{cells[10]}")
             latitudes.append(float(cells[4]))
             longitudes.append(float(cells[5]))
             people = int(cells[14] or 0)
@@ -99,6 +135,14 @@ class Places:
             if line and not line.startswith("#"):
                 cells = line.split("\t")
                 self._countries[cells[4].lower()] = (cells[0], cells[4])
+        italian = Path(folder) / "countries.tsv"
+        if italian.exists():
+            for line in italian.read_text(encoding="utf-8").splitlines():
+                if line and not line.startswith("#"):
+                    code, name, english = line.split("\t")[:3]
+                    self._italian[code] = name
+                    # the model may write the name CLDR gives, too: "Czechia", "South Korea"
+                    self._countries.setdefault(english.lower(), (code, english))
 
     @property
     def known(self) -> bool:
@@ -106,9 +150,20 @@ class Places:
 
     def of(self, position: tuple[float, float] | None) -> str:
         """The country a position is in, as the two letters of its code: the one of the nearest city. Empty if not known."""
+        return self.where(position)[0]
+
+    def country_name(self, code: str) -> str:
+        """A country as Italians write it, by its code: "Giappone". In English when that is all that is known, or the code itself."""
+        if code in self._italian:
+            return self._italian[code]
+        return next((label for known, label in self._countries.values() if known == code), code)
+
+    def where(self, position: tuple[float, float] | None) -> tuple[str, str]:
+        """The country and the region a position is in, as ("IT", "IT.14"): those of the nearest city. Empty if not known."""
         if position is None or not self.known:
-            return ""
-        return self.codes[int(np.argmin(_distances(position[0], position[1], self.latitudes, self.longitudes)))]
+            return "", ""
+        nearest = int(np.argmin(_distances(position[0], position[1], self.latitudes, self.longitudes)))
+        return self.codes[nearest], self.regions[nearest]
 
     def find(self, caption: str, asked: str = "") -> tuple[dict | None, str]:
         """The place a caption names, and what is left of the caption without it.
@@ -131,7 +186,10 @@ class Places:
             key = name.lower()
             if key in self._countries:
                 code, label = self._countries[key]
-                return {"kind": "country", "code": code, "name": label}, rest
+                return {"kind": "country", "code": code, "name": self._italian.get(code, label)}, rest
+            if key in self._regions:
+                code = self._regions[key]
+                return {"kind": "region", "code": code, "name": REGIONS[code][0]}, rest
             if key in self._cities:
                 city = self._cities[key]
                 label = next((word for word in re.findall(r"[\w'-]+", asked) if self._cities.get(word.lower()) == city), self.names[city])
@@ -142,6 +200,8 @@ class Places:
         """The pictures taken in a spot, by their position in the list. A picture with no position is in none."""
         if spot["kind"] == "country":
             return [index for index, entry in enumerate(entries) if entry.get("country") == spot["code"]]
+        if spot["kind"] == "region":
+            return [index for index, entry in enumerate(entries) if entry.get("region") == spot["code"]]
         placed = [index for index, entry in enumerate(entries) if entry.get("lat") is not None]
         if not placed:
             return []

@@ -2,10 +2,11 @@
 // the phone, from what the app knows of each picture (the day and the place it was taken).
 
 import { inWords, iso } from './period.ts'
+import { REGIONS } from './regions.ts'
 import type { Spot, Understood } from './understand.ts'
 
-/** A picture of the phone, as the app knows it. `country` is the code of the country it was taken in. */
-export type Picture = { id: string; name: string; day: string; lat?: number | null; lon?: number | null; country?: string }
+/** A picture of the phone, as the app knows it: `country` and `region` are the codes of where it was taken, "IT" and "IT.14". */
+export type Picture = { id: string; name: string; day: string; lat?: number | null; lon?: number | null; country?: string; region?: string }
 
 /** The pictures chosen, the sure ones first: `sure` says how many of them are. */
 export type Found = { pictures: Picture[]; words: string; sure: number }
@@ -29,9 +30,10 @@ const IN_COUNTRY: Record<string, string> = {
   VA: 'nella Città del Vaticano',
 }
 
-/** A place after "scattate": "a Parigi", "in Giappone". */
+/** A place after "scattate": "a Parigi", "in Giappone", "nel Lazio". */
 export function at(spot: Spot): string {
   if (spot.kind === 'city') return `a ${spot.name}`
+  if (spot.kind === 'region') return REGIONS[spot.code].at
   return IN_COUNTRY[spot.code] ?? `in ${spot.name}`
 }
 
@@ -44,6 +46,7 @@ function distance(latitude1: number, longitude1: number, latitude2: number, long
 
 function inside(picture: Picture, spot: Spot): boolean {
   if (spot.kind === 'country') return picture.country === spot.code
+  if (spot.kind === 'region') return picture.region === spot.code
   return picture.lat != null && picture.lon != null && distance(spot.latitude, spot.longitude, picture.lat, picture.lon) <= NEAR
 }
 

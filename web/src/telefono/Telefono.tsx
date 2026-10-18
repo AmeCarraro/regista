@@ -1,9 +1,10 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import * as icons from '../icons.tsx'
 import { connect } from './bridge.ts'
-import type { State } from './bridge.ts'
+import type { Answer, State } from './bridge.ts'
 import type { Day } from './period.ts'
 import { select, sentence } from './select.ts'
+import type { Found } from './select.ts'
 import { understand } from './understand.ts'
 
 // how many pictures are shown at first, and how many more at each "Mostrane altre"
@@ -34,6 +35,7 @@ export default function Telefono() {
   const [reading, setReading] = useState(() => app.reading())
   const [state, setState] = useState(() => app.state())
   const [sight, setSight] = useState(() => app.sight())
+  const [copying, setCopying] = useState(() => app.autoCopy())
   const [request, setRequest] = useState('')
   // the request the pictures on screen are the answer to
   const [asked, setAsked] = useState('')
@@ -41,6 +43,12 @@ export default function Telefono() {
   // the pictures ticked to go to the computer, while the user is choosing them
   const [choosing, setChoosing] = useState<Set<string> | null>(null)
   const [note, setNote] = useState('')
+  // the computer's answer to the request on screen, when it gave one; and whether it is still being asked
+  const [answered, setAnswered] = useState<{ asked: string; answer: Answer } | null>(null)
+  const [waiting, setWaiting] = useState(false)
+  // the computer can be wrong too: the user may go back to the phone's own answer
+  const [phoneFirst, setPhoneFirst] = useState(false)
+  const latest = useRef('')
   const read = useRef(reading.done)
 
   // the app reads the pictures in its own time, and the computer comes and goes: both are asked again now and then
@@ -54,6 +62,7 @@ export default function Telefono() {
       setReading(now)
       setState(app.state())
       setSight(app.sight())
+      setCopying(app.autoCopy())
     }, 2000)
     return () => clearInterval(timer)
   }, [app])
@@ -66,15 +75,40 @@ export default function Telefono() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [understood, sight.ready, sight.seen, app],
   )
-  const found = useMemo(() => select(pictures, understood, scores), [pictures, understood, scores])
+  const mine = useMemo(() => select(pictures, understood, scores), [pictures, understood, scores])
+  // the computer's answer, when there is one for this request, names the phone's own pictures
+  const both = answered !== null && answered.asked === asked
+  const found: Found = useMemo(() => {
+    if (!answered || answered.asked !== asked || phoneFirst) return mine
+    const byName = new Map(pictures.map((picture) => [picture.id, picture]))
+    const sure = answered.answer.sure.flatMap((id) => byName.get(id) ?? [])
+    const maybe = answered.answer.maybe.flatMap((id) => byName.get(id) ?? [])
+    return { pictures: [...sure, ...maybe], words: answered.answer.words, sure: sure.length }
+  }, [answered, asked, mine, pictures, phoneFirst])
+  const fromComputer = found !== mine
   const visible = found.pictures.slice(0, shown)
 
   function ask(text: string) {
+    const typed = text.trim()
     setRequest(text)
-    setAsked(text.trim())
+    setAsked(typed)
     setShown(PAGE)
     setChoosing(null)
     setNote('')
+    setAnswered(null)
+    setPhoneFirst(false)
+    latest.current = typed
+    // the phone answers at once, by itself; the computer, when it answers, understands more and has the last word
+    if (!typed || !state.reachable) {
+      setWaiting(false)
+      return
+    }
+    setWaiting(true)
+    void app.ask(typed).then((answer) => {
+      if (latest.current !== typed) return
+      setWaiting(false)
+      if (answer) setAnswered({ asked: typed, answer })
+    })
   }
 
   function toggle(id: string) {
@@ -144,6 +178,27 @@ export default function Telefono() {
         </div>
       )}
 
+      {!asked && state.paired && (
+        <section className="card">
+          <b>Copia automatica sul computer</b>
+          <p>
+            {copying.on
+              ? `Attiva: quando il telefono è sulla Wi-Fi di casa, le foto nuove vanno sul computer da sole, nella cartella «Dal telefono».${copying.count ? ` L'ultima volta ${count(copying.count)}, ${new Date(copying.at).toLocaleString('it-IT', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}.` : ''}`
+              : "Quando il telefono è sulla Wi-Fi di casa, le foto nuove vanno sul computer da sole, anche con l'app chiusa. Quelle che ci sono già restano solo qui."}
+          </p>
+          <button
+            type="button"
+            className={copying.on ? 'quiet' : 'go wide'}
+            onClick={() => {
+              app.setAutoCopy(!copying.on)
+              setCopying(app.autoCopy())
+            }}
+          >
+            {copying.on ? 'Spegni' : 'Attiva'}
+          </button>
+        </section>
+      )}
+
       {!reading.allowed && <p className="notice">Per cercare tra le foto mi serve il permesso di vederle: chiudi e riapri l'app, e dimmi di sì.</p>}
       {reading.allowed && reading.done < reading.total && (
         <p className="fine">
@@ -179,8 +234,19 @@ export default function Telefono() {
       )}
 
       <p className="words" role="status">
+        {asked && state.paired && (
+          <>
+            <span className={fromComputer ? 'source computer' : 'source'}>{fromComputer ? 'dal computer' : 'dal telefono'}</span>{' '}
+          </>
+        )}
         {found.words}
       </p>
+      {both && (
+        <button type="button" className="switch" onClick={() => setPhoneFirst(!phoneFirst)}>
+          {phoneFirst ? 'Mostra la risposta del computer' : 'Mostra la risposta del telefono'}
+        </button>
+      )}
+      {waiting && <p className="fine">Chiedo anche al computer, che capisce di più…</p>}
       {note && (
         <p className="note">
           <icons.Check /> {note}

@@ -15,11 +15,24 @@ android {
         // is done another way, or said to the user; moving pictures to the trash needs Android 11
         minSdk = 24
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2"
-        // the phones this app is built for: almost every phone and tablet (64 and 32 bit), and the emulator
-        ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+        versionCode = 3
+        versionName = "0.3"
+    }
+
+    // One app file for each kind of phone, each with only its own copy of the engine that runs the models:
+    // arm64-v8a for almost every phone and tablet, armeabi-v7a for older 32-bit ones, x86_64 for the emulator.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86_64")
+            isUniversalApk = false
+        }
+    }
+    packaging {
+        // the engine compressed inside the file, which is then less than half as large to send; the phone unpacks it when it installs the app
+        jniLibs {
+            useLegacyPackaging = true
         }
     }
 

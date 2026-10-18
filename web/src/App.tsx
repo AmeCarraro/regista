@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { carryOut, chatStream, fetchChanges, fetchLibrary, fetchModels, fetchPhone, fetchTransfer, readFolderAgain, takeBack, testModels } from './api.ts'
+import { carryOut, chatStream, fetchChanges, fetchLibrary, fetchModels, fetchPhone, fetchTransfer, makeAlbums, readFolderAgain, takeBack, testModels } from './api.ts'
 import type { Changes, Library, Models, Outcome, PhoneState } from './api.ts'
 import { apply, lapse, missing, newReply, selection, settle, tail, toMessages, waiting, yesOrNo } from './chat.ts'
 import type { Proposed, Reply, Turn } from './chat.ts'
@@ -164,7 +164,16 @@ export default function App() {
     try {
       const { proposal } = proposed
       const outcome =
-        proposal.action === 'undo' ? await takeBack(proposal.of) : await carryOut(proposal.action, proposed.picked, proposed.folder)
+        proposal.action === 'undo'
+          ? await takeBack(proposal.of)
+          : proposal.action === 'albums'
+            ? // each album with the pictures still ticked; an album left with none is not made
+              await makeAlbums(
+                proposal.albums
+                  .map((album) => ({ folder: album.folder, ids: album.ids.filter((id) => proposed.picked.includes(id)) }))
+                  .filter((album) => album.ids.length > 0),
+              )
+            : await carryOut(proposal.action, proposed.picked, proposed.folder)
       if (outcome.transfer) {
         // a phone was asked: the card now follows the request until the pictures have arrived
         const transfer = outcome.transfer
@@ -214,12 +223,19 @@ export default function App() {
   /** What the buttons of the proposal of a reply do. */
   function answersFor(reply: Reply): Answers {
     const proposed = reply.parts.find((part) => part.kind === 'proposal')
-    if (proposed?.kind !== 'proposal') return { onPick() {}, onFolder() {}, onYes() {}, onNo() {}, onBack() {} }
+    if (proposed?.kind !== 'proposal') return { onPick() {}, onPickMany() {}, onFolder() {}, onYes() {}, onNo() {}, onBack() {} }
     return {
       onPick: (photo) =>
         patch(reply.id, (current) =>
           settle(current, { picked: proposed.picked.includes(photo) ? proposed.picked.filter((id) => id !== photo) : [...proposed.picked, photo] }),
         ),
+      onPickMany: (photos, on) =>
+        patch(reply.id, (current) => {
+          // from what is ticked now: an album is many pictures, changed in one go
+          const part = current.parts.find((one) => one.kind === 'proposal')
+          const before = part?.kind === 'proposal' ? part.picked : []
+          return settle(current, { picked: on ? [...new Set([...before, ...photos])] : before.filter((id) => !photos.includes(id)) })
+        }),
       onFolder: (name) => patch(reply.id, (current) => settle(current, { folder: name })),
       onYes: () => void carry(reply, proposed),
       onNo: () => void decline(reply),

@@ -36,16 +36,26 @@ import numpy as np
 from PIL import Image, ImageOps
 
 from actions import Refused
-from photos import BATCH, THUMB, closest
+from photos import BATCH, THUMB, closest, look_of, twins
 
-# how long the link that lets a phone in stays good
-INVITE_SECONDS = 300
+# How long the code that lets a phone ask to come in stays good: the page shows a new one every half
+# minute, so a picture taken of the screen is soon of no use.
+INVITE_SECONDS = 60
+# how long a phone that showed a good code waits for the user's yes on this computer
+PENDING_SECONDS = 120
+# more refused knocks than this in a minute, and for a minute the door answers only the phones it knows
+KNOCKS = 30
 # the largest small copy a phone may send, as text: a 384-pixel JPEG is a tenth of this
 SMALL_COPY = 600_000
 # and the most pixels it may have: a phone of ours sends 384 on the long side
 SMALL_COPY_PIXELS = 1600 * 1600
 # what a file that arrives from a phone may end in
 ENDINGS = {"jpg", "jpeg", "png", "webp", "heic", "heif", "gif", "avif", "dng"}
+# the first Android with a trash an app can ask for: 11
+TRASH_SINCE = 30
+# The model whose fingerprints a phone can keep as its own: the phone looks at pictures with the same
+# one, CLIP ViT-B/32 as OpenAI made it (Sight.kt), so the numbers of one can be compared with the other's.
+SHARED_MODEL = "ViT-B-32-quickgelu/openai"
 
 
 def _now() -> str:
@@ -79,8 +89,14 @@ class Phones:
         # where a phone finds this computer, as whoever started the app saw it from outside
         self.addresses, self.port, self.computer = addresses, port, computer
         self._lock = threading.RLock()
-        # the secret of the link on show, and when it stops being good
-        self._invite: tuple[str, float] | None = None
+        # the secrets of the codes on show, with when each stops being good
+        self._invites: dict[str, float] = {}
+        # the phones that showed a good code and wait for the user's yes, by the name of their request
+        self._pending: dict[str, dict] = {}
+        # the knocks at the door of the phones that were refused, the last ones, and how many in all
+        self.refused: list[dict] = []
+        self._refusals = 0
+        self._calm_until = 0.0
         self._saved = 0.0
         self.devices: list[dict] = self._read("devices.json", [])
         # the pictures of every phone: {"id", "device", "media" (the phone's own name for it), "stamp", "name", "day"}
@@ -140,24 +156,74 @@ class Phones:
     # ---- letting a phone in
 
     def invite(self) -> dict:
-        """A new link that lets one phone in, once, for a few minutes. It replaces the one before."""
+        """A new code that lets one phone ask to come in, good for a minute. The ones before stay good until their time is up."""
         secret = secrets.token_urlsafe(18)
+        now = time.monotonic()
         with self._lock:
-            self._invite = (secret, time.monotonic() + INVITE_SECONDS)
+            self._invites = {known: until for known, until in self._invites.items() if until > now}
+            self._invites[secret] = now + INVITE_SECONDS
         query = urlencode({"a": ",".join(self.addresses), "p": self.port, "s": secret, "f": self.fingerprint(), "n": self.computer})
         return {"link": f"regista://pair?{query}", "seconds": INVITE_SECONDS}
 
+    def _tidy(self) -> None:
+        """Forgets the requests whose time is up. A phone that was let in and never took its key is shut out again."""
+        now = time.monotonic()
+        for request in [one for one in self._pending.values() if one["until"] <= now]:
+            del self._pending[request["id"]]
+            if request["state"] == "accepted":
+                self.devices = [device for device in self.devices if device["id"] != request["device"]]
+                self._write("devices.json", self.devices)
+
     def pair(self, secret: str, name: str) -> dict:
-        """Lets in the phone that shows the secret of the link. It gets a key of its own, which is told only now."""
+        """A phone shows the secret of a code still good: it is put to wait for the user's yes on this computer.
+
+        It gets a ticket, to ask whether the yes came, and a number of six figures that the user sees here
+        and on the phone, so that the phone let in is the one in the user's hand. The codes on show stop
+        being good: one phone at a time.
+        """
+        now = time.monotonic()
         with self._lock:
-            invite = self._invite
-            if invite is None or time.monotonic() > invite[1] or not secrets.compare_digest(secret.encode(), invite[0].encode()):
+            self._tidy()
+            good = any(until > now and secrets.compare_digest(secret.encode(), known.encode()) for known, until in self._invites.items())
+            if not good:
+                self._knocked("un codice di collegamento sbagliato o scaduto")
                 raise Refused("Questo collegamento non vale più: fanne uno nuovo dal computer.")
-            self._invite = None
+            self._invites = {}
+            ticket = secrets.token_urlsafe(32)
+            request = {
+                "id": secrets.token_hex(4),
+                # the ticket itself is not kept: only what proves that a ticket is the right one
+                "ticket": hashlib.sha256(ticket.encode()).hexdigest(),
+                "name": re.sub(r"[\x00-\x1f]", " ", name).strip()[:40] or "Telefono",
+                "code": f"{secrets.randbelow(1_000_000):06d}",
+                "until": now + PENDING_SECONDS,
+                "state": "waiting",
+            }
+            self._pending[request["id"]] = request
+            return {"ticket": ticket, "code": request["code"], "computer": self.computer, "seconds": PENDING_SECONDS}
+
+    def waiting(self) -> list[dict]:
+        """The phones that wait for the user's yes, as the page shows them: the name each gives itself, and its number."""
+        with self._lock:
+            self._tidy()
+            now = time.monotonic()
+            return [{"id": one["id"], "name": one["name"], "code": one["code"], "seconds": int(one["until"] - now)}
+                    for one in self._pending.values() if one["state"] == "waiting"]
+
+    def answer(self, request: str, yes: bool) -> bool:
+        """The user's answer, on this computer, to a phone that asks to come in. With a yes it is let in, with a key of its own."""
+        with self._lock:
+            self._tidy()
+            one = self._pending.get(request)
+            if one is None or one["state"] != "waiting":
+                return False
+            if not yes:
+                one["state"] = "refused"
+                return True
             token = secrets.token_urlsafe(32)
             device = {
                 "id": secrets.token_hex(4),
-                "name": re.sub(r"[\x00-\x1f]", " ", name).strip()[:40] or "Telefono",
+                "name": one["name"],
                 # the key itself is not kept: only what proves that a key is the right one
                 "key": hashlib.sha256(token.encode()).hexdigest(),
                 "paired": _now(),
@@ -165,7 +231,50 @@ class Phones:
             }
             self.devices.append(device)
             self._write("devices.json", self.devices)
-            return {"token": token, "device": device["id"], "computer": self.computer}
+            # the key waits here, in memory only, until the phone takes it with its ticket
+            one.update(state="accepted", token=token, device=device["id"])
+            return True
+
+    def collect(self, ticket: str) -> dict:
+        """What a phone that asked to come in learns with its ticket: that it still waits, or, once, its key."""
+        mark = hashlib.sha256(ticket.encode()).hexdigest()
+        with self._lock:
+            self._tidy()
+            one = next((one for one in self._pending.values() if secrets.compare_digest(one["ticket"], mark)), None)
+            if one is None:
+                self._knocked("una richiesta di collegamento che non c'era")
+                raise Refused("Questa richiesta non vale più: rifai il collegamento dal computer.")
+            if one["state"] == "waiting":
+                return {"state": "waiting", "seconds": int(one["until"] - time.monotonic())}
+            del self._pending[one["id"]]
+            if one["state"] == "refused":
+                raise Refused("Sul computer hanno detto di no: questo telefono non è collegato.")
+            return {"state": "paired", "token": one["token"], "device": one["device"], "computer": self.computer}
+
+    # ---- the knocks that were refused
+
+    def knocked(self, what: str) -> None:
+        """Notes a knock at the door of the phones that was refused, and why. Many in a short time, and the door calms down for a minute."""
+        with self._lock:
+            self._knocked(what)
+
+    def _knocked(self, what: str) -> None:
+        now = time.monotonic()
+        self._refusals += 1
+        self.refused = [*self.refused[-49:], {"when": _now(), "what": what, "at": now}]
+        if sum(1 for one in self.refused if now - one["at"] < 60) > KNOCKS:
+            self._calm_until = now + 60
+
+    @property
+    def calm(self) -> bool:
+        """Whether, for a while, the door answers only the phones it knows: too many knocks were refused."""
+        return time.monotonic() < self._calm_until
+
+    def knocks(self) -> dict:
+        """The knocks refused since this computer started, as the page shows them: how many, and the last one."""
+        with self._lock:
+            last = self.refused[-1] if self.refused else {"when": "", "what": ""}
+            return {"count": self._refusals, "last": last["when"], "what": last["what"]}
 
     def device_of(self, token: str) -> dict | None:
         """The phone a key belongs to, if it is the key of a phone that was let in."""
@@ -174,6 +283,20 @@ class Phones:
         if device:
             device["seen"] = _now()
         return device
+
+    def running(self, device: dict, android: str) -> None:
+        """Notes the version of Android a phone says it runs: what can be done with its pictures depends on it."""
+        # a number of a few figures, and nothing else: what a phone sends is not trusted to be one
+        if re.fullmatch("[0-9]{1,3}", android) and device.get("android") != int(android):
+            with self._lock:
+                device["android"] = int(android)
+                self._write("devices.json", self.devices)
+
+    def can_trash(self, identifiers: list[str]) -> bool:
+        """Whether the phones these pictures are on have a trash an app can ask for: from Android 11. A phone that has not said is taken to."""
+        with self._lock:
+            devices = {photo["device"] for photo in self.photos if photo["id"] in set(identifiers)}
+            return all(device.get("android", TRASH_SINCE) >= TRASH_SINCE for device in self.devices if device["id"] in devices)
 
     def forget_device(self, device: str) -> bool:
         """Shuts a phone out: its key stops working, and what was known of its pictures is dropped."""
@@ -235,6 +358,23 @@ class Phones:
             known = {photo["media"]: photo["stamp"] for photo in mine if photo.get("day") and "lat" in photo}
             return [media for media, stamp in there.items() if known.get(media) != stamp]
 
+    def vectors_of(self, device: str, listing: list[dict]) -> dict[str, str]:
+        """What this computer has read in some pictures of a phone, for the phone to keep as its own.
+
+        By the phone's own name for each picture, as base64 of 512 numbers (float32, little-endian);
+        only for a picture as the phone has it now (the same "stamp"), and only when the numbers were
+        made by the model the phone looks with.
+        """
+        if self.embedder.name != SHARED_MODEL:
+            return {}
+        asked = {str(item["id"]): str(item.get("stamp", "")) for item in listing}
+        with self._lock:
+            return {
+                photo["media"]: base64.b64encode(self.vectors[position].astype("<f4").tobytes()).decode()
+                for position, photo in enumerate(self.photos)
+                if photo["device"] == device and asked.get(photo["media"]) == photo["stamp"]
+            }
+
     def add(self, device: str, arrived: list[dict]) -> int:
         """Takes small copies of pictures from a phone, reads them as this computer reads its own, and keeps them to show."""
         pictures, entries = [], []
@@ -252,9 +392,12 @@ class Phones:
             except (OSError, ValueError, KeyError):
                 continue  # one that cannot be read is skipped: the phone will offer it again
             picture.thumbnail((THUMB, THUMB))
+            # how it looks in pixels, to tell a copy of a picture from another picture of the same thing
+            look = look_of(picture)
             media = str(item["id"])
             day = str(item.get("day", ""))
             position = self._position(item)
+            country, region = self.places.where(position) if self.places else ("", "")
             entries.append({
                 "id": phone_photo_id(device, media),
                 "device": device,
@@ -266,7 +409,9 @@ class Phones:
                 # where it was taken, if the phone knew and was allowed to say
                 "lat": position[0] if position else None,
                 "lon": position[1] if position else None,
-                "country": self.places.of(position) if self.places else "",
+                "country": country,
+                "region": region,
+                "look": look,
             })
             pictures.append(picture)
         if not pictures:
@@ -296,14 +441,45 @@ class Phones:
         inside = -90 <= latitude <= 90 and -180 <= longitude <= 180 and (latitude, longitude) != (0, 0)
         return (round(latitude, 5), round(longitude, 5)) if inside else None
 
-    def search(self, description: str, limit: int = 60, period: tuple | None = None, spot: dict | None = None) -> dict:
-        """The pictures of the phones closest to a sentence: the same answer the pictures of this computer give."""
+    def search(self, description: str, limit: int = 60, period: tuple | None = None, spot: dict | None = None, device: str | None = None) -> dict:
+        """The pictures of the phones closest to a sentence, or of one phone only: the same answer the pictures of this computer give."""
         with self._lock:
             photos, vectors = self.photos, self.vectors
+        if device is not None:
+            mine = [position for position, photo in enumerate(photos) if photo["device"] == device]
+            photos, vectors = [photos[position] for position in mine], (vectors[mine] if mine else vectors[:0])
         if not photos:
             return closest(vectors, None, [], limit)
+        if spot and spot["kind"] == "region" and self.places:
+            # pictures kept before regions were known get theirs from the position they have
+            for photo in photos:
+                if "region" not in photo:
+                    photo["region"] = self.places.where((photo["lat"], photo["lon"]) if photo.get("lat") is not None else None)[1]
         only = self.places.inside(spot, photos) if spot and self.places else None
         return closest(vectors, self.embedder.text(description) if description else None, photos, limit, period, only)
+
+    def twins(self, period: tuple | None = None) -> list[list[dict]]:
+        """The pictures of the phones that are copies of one another, in groups, the one to keep first: each {"id", "name", "day"}.
+
+        Only within one phone: a copy on another phone is not one too many.
+        """
+        with self._lock:
+            photos, vectors = list(self.photos), self.vectors
+        for photo in photos:
+            if "look" not in photo:
+                # a picture kept before looks were: its small copy here tells it
+                small = self.folder / "thumbs" / f"{photo['id']}.jpg"
+                try:
+                    with Image.open(small) as picture:
+                        photo["look"] = look_of(picture)
+                except OSError:
+                    photo["look"] = ""
+        groups = []
+        for device in {photo["device"] for photo in photos}:
+            mine = [position for position, photo in enumerate(photos) if photo["device"] == device]
+            found = twins([photos[position] for position in mine], vectors[mine], period)
+            groups += [[{key: photos[mine[at]].get(key, "") for key in ("id", "name", "day")} for at in group] for group in found]
+        return groups
 
     def thumbnail(self, identifier: str) -> bytes | None:
         file = self.folder / "thumbs" / f"{identifier}.jpg"

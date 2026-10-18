@@ -1,0 +1,250 @@
+# code	Italian name	English name: from Unicode CLDR, as Java 21 gives it
+AD	Andorra	Andorra
+AE	Emirati Arabi Uniti	United Arab Emirates
+AF	Afghanistan	Afghanistan
+AG	Antigua e Barbuda	Antigua & Barbuda
+AI	Anguilla	Anguilla
+AL	Albania	Albania
+AM	Armenia	Armenia
+AO	Angola	Angola
+AQ	Antartide	Antarctica
+AR	Argentina	Argentina
+AS	Samoa americane	American Samoa
+AT	Austria	Austria
+AU	Australia	Australia
+AW	Aruba	Aruba
+AX	Isole Åland	Åland Islands
+AZ	Azerbaigian	Azerbaijan
+BA	Bosnia ed Erzegovina	Bosnia & Herzegovina
+BB	Barbados	Barbados
+BD	Bangladesh	Bangladesh
+BE	Belgio	Belgium
+BF	Burkina Faso	Burkina Faso
+BG	Bulgaria	Bulgaria
+BH	Bahrein	Bahrain
+BI	Burundi	Burundi
+BJ	Benin	Benin
+BL	Saint-Barthélemy	St. Barthélemy
+BM	Bermuda	Bermuda
+BN	Brunei	Brunei
+BO	Bolivia	Bolivia
+BQ	Caraibi olandesi	Caribbean Netherlands
+BR	Brasile	Brazil
+BS	Bahamas	Bahamas
+BT	Bhutan	Bhutan
+BV	Isola Bouvet	Bouvet Island
+BW	Botswana	Botswana
+BY	Bielorussia	Belarus
+BZ	Belize	Belize
+CA	Canada	Canada
+CC	Isole Cocos (Keeling)	Cocos (Keeling) Islands
+CD	Congo - Kinshasa	Congo - Kinshasa
+CF	Repubblica Centrafricana	Central African Republic
+CG	Congo-Brazzaville	Congo - Brazzaville
+CH	Svizzera	Switzerland
+CI	Costa d’Avorio	Côte d’Ivoire
+CK	Isole Cook	Cook Islands
+CL	Cile	Chile
+CM	Camerun	Cameroon
+CN	Cina	China
+CO	Colombia	Colombia
+CR	Costa Rica	Costa Rica
+CU	Cuba	Cuba
+CV	Capo Verde	Cape Verde
+CW	Curaçao	Curaçao
+CX	Isola Christmas	Christmas Island
+CY	Cipro	Cyprus
+CZ	Cechia	Czechia
+DE	Germania	Germany
+DJ	Gibuti	Djibouti
+DK	Danimarca	Denmark
+DM	Dominica	Dominica
+DO	Repubblica Dominicana	Dominican Republic
+DZ	Algeria	Algeria
+EC	Ecuador	Ecuador
+EE	Estonia	Estonia
+EG	Egitto	Egypt
+EH	Sahara occidentale	Western Sahara
+ER	Eritrea	Eritrea
+ES	Spagna	Spain
+ET	Etiopia	Ethiopia
+FI	Finlandia	Finland
+FJ	Figi	Fiji
+FK	Isole Falkland	Falkland Islands
+FM	Micronesia	Micronesia
+FO	Isole Fær Øer	Faroe Islands
+FR	Francia	France
+GA	Gabon	Gabon
+GB	Regno Unito	United Kingdom
+GD	Grenada	Grenada
+GE	Georgia	Georgia
+GF	Guyana Francese	French Guiana
+GG	Guernsey	Guernsey
+GH	Ghana	Ghana
+GI	Gibilterra	Gibraltar
+GL	Groenlandia	Greenland
+GM	Gambia	Gambia
+GN	Guinea	Guinea
+GP	Guadalupa	Guadeloupe
+GQ	Guinea Equatoriale	Equatorial Guinea
+GR	Grecia	Greece
+GS	Georgia del Sud e Sandwich Australi	South Georgia & South Sandwich Islands
+GT	Guatemala	Guatemala
+GU	Guam	Guam
+GW	Guinea-Bissau	Guinea-Bissau
+GY	Guyana	Guyana
+HK	RAS di Hong Kong	Hong Kong SAR China
+HM	Isole Heard e McDonald	Heard & McDonald Islands
+HN	Honduras	Honduras
+HR	Croazia	Croatia
+HT	Haiti	Haiti
+HU	Ungheria	Hungary
+ID	Indonesia	Indonesia
+IE	Irlanda	Ireland
+IL	Israele	Israel
+IM	Isola di Man	Isle of Man
+IN	India	India
+IO	Territorio britannico dell’Oceano Indiano	British Indian Ocean Territory
+IQ	Iraq	Iraq
+IR	Iran	Iran
+IS	Islanda	Iceland
+IT	Italia	Italy
+JE	Jersey	Jersey
+JM	Giamaica	Jamaica
+JO	Giordania	Jordan
+JP	Giappone	Japan
+KE	Kenya	Kenya
+KG	Kirghizistan	Kyrgyzstan
+KH	Cambogia	Cambodia
+KI	Kiribati	Kiribati
+KM	Comore	Comoros
+KN	Saint Kitts e Nevis	St. Kitts & Nevis
+KP	Corea del Nord	North Korea
+KR	Corea del Sud	South Korea
+KW	Kuwait	Kuwait
+KY	Isole Cayman	Cayman Islands
+KZ	Kazakistan	Kazakhstan
+LA	Laos	Laos
+LB	Libano	Lebanon
+LC	Saint Lucia	St. Lucia
+LI	Liechtenstein	Liechtenstein
+LK	Sri Lanka	Sri Lanka
+LR	Liberia	Liberia
+LS	Lesotho	Lesotho
+LT	Lituania	Lithuania
+LU	Lussemburgo	Luxembourg
+LV	Lettonia	Latvia
+LY	Libia	Libya
+MA	Marocco	Morocco
+MC	Monaco	Monaco
+MD	Moldavia	Moldova
+ME	Montenegro	Montenegro
+MF	Saint Martin	St. Martin
+MG	Madagascar	Madagascar
+MH	Isole Marshall	Marshall Islands
+MK	Macedonia del Nord	North Macedonia
+ML	Mali	Mali
+MM	Myanmar (Birmania)	Myanmar (Burma)
+MN	Mongolia	Mongolia
+MO	RAS di Macao	Macao SAR China
+MP	Isole Marianne settentrionali	Northern Mariana Islands
+MQ	Martinica	Martinique
+MR	Mauritania	Mauritania
+MS	Montserrat	Montserrat
+MT	Malta	Malta
+MU	Mauritius	Mauritius
+MV	Maldive	Maldives
+MW	Malawi	Malawi
+MX	Messico	Mexico
+MY	Malaysia	Malaysia
+MZ	Mozambico	Mozambique
+NA	Namibia	Namibia
+NC	Nuova Caledonia	New Caledonia
+NE	Niger	Niger
+NF	Isola Norfolk	Norfolk Island
+NG	Nigeria	Nigeria
+NI	Nicaragua	Nicaragua
+NL	Paesi Bassi	Netherlands
+NO	Norvegia	Norway
+NP	Nepal	Nepal
+NR	Nauru	Nauru
+NU	Niue	Niue
+NZ	Nuova Zelanda	New Zealand
+OM	Oman	Oman
+PA	Panama	Panama
+PE	Perù	Peru
+PF	Polinesia francese	French Polynesia
+PG	Papua Nuova Guinea	Papua New Guinea
+PH	Filippine	Philippines
+PK	Pakistan	Pakistan
+PL	Polonia	Poland
+PM	Saint-Pierre e Miquelon	St. Pierre & Miquelon
+PN	Isole Pitcairn	Pitcairn Islands
+PR	Portorico	Puerto Rico
+PS	Territori palestinesi	Palestinian Territories
+PT	Portogallo	Portugal
+PW	Palau	Palau
+PY	Paraguay	Paraguay
+QA	Qatar	Qatar
+RE	Riunione	Réunion
+RO	Romania	Romania
+RS	Serbia	Serbia
+RU	Russia	Russia
+RW	Ruanda	Rwanda
+SA	Arabia Saudita	Saudi Arabia
+SB	Isole Salomone	Solomon Islands
+SC	Seychelles	Seychelles
+SD	Sudan	Sudan
+SE	Svezia	Sweden
+SG	Singapore	Singapore
+SH	Sant’Elena	St. Helena
+SI	Slovenia	Slovenia
+SJ	Svalbard e Jan Mayen	Svalbard & Jan Mayen
+SK	Slovacchia	Slovakia
+SL	Sierra Leone	Sierra Leone
+SM	San Marino	San Marino
+SN	Senegal	Senegal
+SO	Somalia	Somalia
+SR	Suriname	Suriname
+SS	Sud Sudan	South Sudan
+ST	São Tomé e Príncipe	São Tomé & Príncipe
+SV	El Salvador	El Salvador
+SX	Sint Maarten	Sint Maarten
+SY	Siria	Syria
+SZ	eSwatini	Eswatini
+TC	Isole Turks e Caicos	Turks & Caicos Islands
+TD	Ciad	Chad
+TF	Terre australi francesi	French Southern Territories
+TG	Togo	Togo
+TH	Thailandia	Thailand
+TJ	Tagikistan	Tajikistan
+TK	Tokelau	Tokelau
+TL	Timor Est	Timor-Leste
+TM	Turkmenistan	Turkmenistan
+TN	Tunisia	Tunisia
+TO	Tonga	Tonga
+TR	Turchia	Türkiye
+TT	Trinidad e Tobago	Trinidad & Tobago
+TV	Tuvalu	Tuvalu
+TW	Taiwan	Taiwan
+TZ	Tanzania	Tanzania
+UA	Ucraina	Ukraine
+UG	Uganda	Uganda
+UM	Isole Minori Esterne degli Stati Uniti	U.S. Outlying Islands
+US	Stati Uniti	United States
+UY	Uruguay	Uruguay
+UZ	Uzbekistan	Uzbekistan
+VA	Città del Vaticano	Vatican City
+VC	Saint Vincent e Grenadine	St. Vincent & Grenadines
+VE	Venezuela	Venezuela
+VG	Isole Vergini Britanniche	British Virgin Islands
+VI	Isole Vergini Americane	U.S. Virgin Islands
+VN	Vietnam	Vietnam
+VU	Vanuatu	Vanuatu
+WF	Wallis e Futuna	Wallis & Futuna
+WS	Samoa	Samoa
+YE	Yemen	Yemen
+YT	Mayotte	Mayotte
+ZA	Sudafrica	South Africa
+ZM	Zambia	Zambia
+ZW	Zimbabwe	Zimbabwe

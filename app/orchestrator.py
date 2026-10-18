@@ -16,6 +16,7 @@ The decision is a form, with examples, because a small model left free to call t
 calls them too often: asked for advice on taking pictures, it searched the pictures.
 """
 import asyncio
+import functools
 import json
 import re
 import time
@@ -27,6 +28,7 @@ from period import in_words as period_in_words
 from period import read as read_period
 from period import without_time
 from phone import on_phone
+from places import IN_COUNTRY, REGIONS
 
 ACTIONS = ("answer", "find_photos", "count_photos", "trash_photos", "copy_photos", "undo")
 # the decisions that would change the pictures: they are proposed, never carried out here
@@ -51,6 +53,16 @@ TO_PHONE = re.compile(
 SENDS = re.compile(r"\b(?:mand|mett|copi|salv|trasferisc|trasferi|port|caric|invi)\w*", re.IGNORECASE)
 FROM_PHONE = re.compile(r"\b(?:dal|dalla)\s+(?:mio\s+|mia\s+)?(?:telefono|telefonino|cellulare|smartphone|tablet)\b|\bfrom\s+(?:my|the)\s+(?:phone|smartphone|tablet)\b", re.IGNORECASE)
 ON_COMPUTER = re.compile(r"\b(?:dal|sul|nel|del|al)\s+(?:mio\s+)?(?:computer|pc)\b|\b(?:on|from|in)\s+(?:my|the)\s+(?:computer|pc)\b", re.IGNORECASE)
+# A request about copies of the same picture, "trovami le foto doppie", "elimina i doppioni"; and one for
+# an album for each trip, "fammi gli album dei viaggi". Read here, in the words of the user: no model is
+# needed to know them, and what follows is worked out by the app (photos.twins, trips.py).
+TWINS = re.compile(r"\b(?:doppioni|doppie|duplicat[ei]|duplicates?|(?:foto|copie|immagini)\s+(?:uguali|identiche|ripetute))\b", re.IGNORECASE)
+ALBUMS = re.compile(
+    r"\balbum\w*\b[^.?!]*\bviagg|\bviagg\w*\b[^.?!]*\balbum"
+    r"|\b(?:organizz|divid|raggrupp|smist|ordin|metti|separ)\w*\b[^.?!]*\bper\s+(?:ogni\s+)?viagg"
+    r"|\btrip\s+albums?\b",
+    re.IGNORECASE,
+)
 # what a model may leave in a caption about the place, and that the pictures do not show
 PLACE_WORDS = re.compile(r"\b(?:on|onto|to|from|in|of)\s+(?:my\s+|the\s+)?(?:phone|smartphone|cellphone|mobile|tablet|computer|pc)\b", re.IGNORECASE)
 
@@ -116,6 +128,8 @@ HISTORY = 12
 DECISION_TOKENS = 80
 # how many pictures one request may propose to change: enough for a trip, few enough to look at them
 MOST = 300
+# the most pictures of a phone an answer for its own screen names
+PHONE_SHOWN = 120
 
 NO_MODEL = "Non trovo nessun modello locale. Controlla che Ollama sia acceso e che ci sia almeno un modello installato."
 NO_PHOTOS = "Non ho ancora nessuna foto in cui cercare: metti delle foto nella cartella che mi hai indicato."
@@ -209,7 +223,38 @@ def undo_proposed_in_words(entry: dict) -> str:
                 f"Da qui posso solo togliere dal computer {copies}: lo faccio?")
     if entry["kind"] == "receive":
         return f"L'ultima modifica è stata copiare {_photos(count)} dal telefono nella cartella «{entry.get('folder', '')}». Tolgo {copies}? Sul telefono le foto restano."
+    if entry["kind"] == "albums":
+        return f"L'ultima modifica è stata copiare {_photos(count)} negli album dei viaggi. Tolgo {copies}? Gli originali non vengono toccati."
     return f"L'ultima modifica è stata copiare {_photos(count)} nella cartella «{entry.get('folder', '')}». Tolgo {copies}? Gli originali non vengono toccati."
+
+
+def twins_in_words(groups: int, extra: int, phone: bool) -> str:
+    """What was found of copies of the same picture, before the question: how many pictures have copies, and which are kept."""
+    if groups == 1:
+        copies = "una copia" if extra == 1 else f"{extra} copie"
+        return f"Ho trovato 1 foto con {copies}. {'Ne tengo una' if phone else 'Tengo la versione più grande'}, questa:"
+    kept = "ne tengo una" if phone else "tengo la versione più grande"
+    return f"Ho trovato {groups} foto con delle copie, {extra} copie in più in tutto. Di ognuna {kept}, queste:"
+
+
+def no_twins_in_words(indexed: int, phone: bool, period: str) -> str:
+    """When no picture has a copy."""
+    among = f"tra le {indexed} foto{' del telefono' if phone else ''}{f' {period}' if period else ''} che conosco"
+    return f"Non ho trovato foto doppie {among}."
+
+
+def albums_in_words(trips: list[dict]) -> str:
+    """What was found of trips, before the question: the trips by name, and what a yes does."""
+    named = [f"«{trip['name']}» ({_photos(len(trip['photos']))})" for trip in trips[:5]]
+    listed = ", ".join(named) + (f" e altri {len(trips) - 5}" if len(trips) > 5 else "")
+    found = "1 viaggio" if len(trips) == 1 else f"{len(trips)} viaggi, dal più recente"
+    return (f"Ho trovato {found}: {listed}. Copio le foto di ogni viaggio in una cartella con il suo nome, in Raccolte? "
+            "Gli originali restano dove sono, e puoi lasciare fuori un viaggio qui sotto.")
+
+
+NO_TRIPS = ("Non ho trovato viaggi: servono foto in cui sia scritto dove sono state scattate, ad almeno 50 km da casa. "
+            "Per casa intendo il posto dove ci sono le foto di più giorni diversi.")
+ALBUMS_ONLY_HERE = "Gli album dei viaggi per ora li faccio con le foto del computer: quelle del telefono restano dove sono."
 
 
 def _left_out(result: dict) -> str:
@@ -228,6 +273,11 @@ def done_in_words(result: dict) -> tuple[str, str]:
     if result["kind"] == "trash":
         text = f"Fatto: {_photos(count)} nel cestino. Per riaverl{'a' if count == 1 else 'e'} basta dirmi «annulla»." if count else "Non ho spostato niente."
         memory = f"The user confirmed: {count} photos were moved to the trash."
+    elif result["kind"] == "albums":
+        folders = result["folders"]
+        into = f"nell'album «{folders[0]}»" if len(folders) == 1 else f"in {len(folders)} album, in Raccolte"
+        text = f"Fatto: {_photos(count)} copiat{'a' if count == 1 else 'e'} {into}." if count else "Non ho copiato niente."
+        memory = f"The user confirmed: {count} photos were copied into {len(folders)} trip albums: " + ", ".join(f'"{folder}"' for folder in folders) + "."
     else:
         text = f"Fatto: {_photos(count)} copiat{'a' if count == 1 else 'e'} nella cartella «{result['folder']}»." if count else "Non ho copiato niente."
         memory = f'The user confirmed: {count} photos were copied into the folder "{result["folder"]}".'
@@ -243,6 +293,9 @@ def undone_in_words(result: dict) -> tuple[str, str]:
         else:
             text = "Nel cestino quelle foto non ci sono più: non ho potuto rimetterle a posto."
         memory = f"The change was undone: {count} photos were restored from the trash."
+    elif result["undid"] == "albums":
+        text = f"Annullato: ho tolto {'la copia' if count == 1 else f'le {count} copie'} dagli album dei viaggi. Gli originali sono al loro posto."
+        memory = f"The change was undone: {count} copies were removed from the trip albums."
     else:
         if result["undid"] != "receive":
             still = "Gli originali sono al loro posto."
@@ -255,6 +308,12 @@ def undone_in_words(result: dict) -> tuple[str, str]:
     if stuck := result.get("failed"):
         text += f" {_photos(stuck).capitalize()} non sono riuscito a spostarl{'a' if stuck == 1 else 'e'}: chiedimelo di nuovo tra poco."
     return text, memory
+
+
+def no_trash_in_words(count: int) -> str:
+    """Why a request to take pictures off a phone becomes a copy: before Android 11 there is no trash an app can use."""
+    them = "la" if count == 1 else "le"
+    return f"Questo telefono non ha un cestino che io possa usare (serve Android 11 o più recente), quindi non posso toglier{them}: posso solo copiar{them}."
 
 
 def asked_in_words(count: int, folder: str, clear: bool = False) -> tuple[str, str]:
@@ -333,22 +392,28 @@ def _searched(caption: str, phone: bool, when: tuple | None, there: str = "") ->
 
 
 def _at(spot: dict) -> str:
-    """A place after "scattate": "a Parigi", "in Japan"."""
-    return f"{'a' if spot['kind'] == 'city' else 'in'} {spot['name']}"
+    """A place after "scattate": "a Parigi", "in Giappone", "negli Stati Uniti", "nelle Marche"."""
+    if spot["kind"] == "city":
+        return f"a {spot['name']}"
+    if spot["kind"] == "region":
+        return REGIONS[spot["code"]][2]
+    return IN_COUNTRY.get(spot["code"], f"in {spot['name']}")
 
 
-def look(library, caption: str, limit: int, when: tuple | None, spot: dict | None) -> tuple[dict, bool]:
+def look(library, caption: str, limit: int, when: tuple | None, spot: dict | None, device: str | None = None) -> tuple[dict, bool]:
     """Searches the pictures for what a request names. Says also whether they were found by where they were taken.
 
     When the request names a place, the pictures taken there are the answer. But many pictures
     have no position written in them: if none turns out to be from there, the search is for
-    the pictures that look like the place, as it was before places were known.
+    the pictures that look like the place, as it was before places were known. With a `device`,
+    only the pictures of that phone are looked at.
     """
+    search = functools.partial(library.search, device=device) if device else library.search
     if spot:
-        result = library.search(spot["rest"], limit, when, spot)
+        result = search(spot["rest"], limit, when, spot)
         if result["sure"] or result["maybe"]:
             return result, True
-    return library.search(caption, limit, when), False
+    return search(caption, limit, when), False
 
 
 def propose(decision: dict, photos, actions, selection: list[str], phones=None, phone: bool = False, when: tuple | None = None, spot: dict | None = None,
@@ -433,6 +498,10 @@ def propose(decision: dict, photos, actions, selection: list[str], phones=None, 
         if not chosen:
             return only(WHICH_ONES, "No photos were chosen, so nothing was proposed.")
 
+    # a phone with no trash an app can use can only be copied from: said before the question, and not hidden in it
+    old = kind == "clear" and not phones.can_trash([photo["id"] for photo in chosen])
+    if old:
+        kind, folder = "fetch", FROM_THE_PHONE
     into = f'into the folder "{folder}"' if folder else "into a folder that has no name yet"
     what = {
         "trash": "move them to the trash",
@@ -443,14 +512,139 @@ def propose(decision: dict, photos, actions, selection: list[str], phones=None, 
     }[kind]
     # with the caption, so that the next request can build on this search too
     searched = f"{_searched(caption, away, when, spot['name'] if there else '')}: {every} found. " if caption or when or there else ""
+    if old:
+        searched += "The phone has no trash an app can use (its Android is older than 11), so the photos cannot be taken off it. "
     return {
-        "text": proposed_in_words(kind, len(chosen), folder, every),
+        "text": (f"{no_trash_in_words(len(chosen))} " if old else "") + proposed_in_words(kind, len(chosen), folder, every),
         # nothing has changed yet, and the model must not think it has
         "memory": f"{searched}Proposed to {what} ({len(chosen)} photos). Nothing was done: the user must confirm.",
         "proposal": {"action": kind, "folder": folder, "photos": [{"id": photo["id"], "name": photo["name"]} for photo in chosen]},
         "searched": caption,
         "period": period if caption or when else "",
         "spot": _at(spot) if there else "",
+    }
+
+
+async def _twins(asked: str, photos, actions, phones):
+    """Copies of the same picture: the ones kept are shown, and the others proposed for the trash.
+
+    On the phone ("le foto doppie del telefono") they go first to the computer and then to the phone's
+    own trash, as any picture taken off it. Each copy kept is the one with the most pixels on the
+    computer; on the phone, where only small copies are known here, the one taken first.
+    """
+    phone = phones is not None and bool(ON_PHONE.search(asked))
+    when = read_period(asked)
+    period = period_in_words(when) if when else ""
+    place = "phone" if phone else "computer"
+    yield {"type": "step", "tool": "find_twins", "arguments": {"place": place, "period": period}}
+    if phone and not phones.devices:
+        yield {"type": "text", "text": NO_PHONE}
+        yield {"type": "done", "memory": "No phone is connected."}
+        return
+    library = phones if phone else photos
+    if not library.photos:
+        yield {"type": "text", "text": PHONE_EMPTY if phone else NO_PHOTOS}
+        yield {"type": "done", "memory": "There were no photos to look at."}
+        return
+    groups = await asyncio.to_thread(library.twins, when)
+    on = " on the phone" if phone else ""
+    if not groups:
+        # how many pictures were looked at: those of the period, when one was named
+        looked_at = sum(1 for photo in library.photos if not when or when[0].isoformat() <= photo.get("day", "") <= when[1].isoformat())
+        yield {"type": "text", "text": no_twins_in_words(looked_at, phone, period)}
+        yield {"type": "done", "memory": f"Looked for copies of the same photo{on}: none found."}
+        return
+    # the newest first, as a search shows them
+    groups.sort(key=lambda group: group[0]["day"], reverse=True)
+    kept = [group[0] for group in groups]
+    extra = [photo for group in groups for photo in group[1:]]
+    yield {"type": "text", "text": twins_in_words(len(groups), len(extra), phone)}
+    yield {"type": "photos", "description": "", "place": place, "partial": False, "indexed": len(library.photos), "matching": len(kept),
+           "sure": [{"id": photo["id"], "name": photo["name"], "score": 1.0} for photo in kept], "maybe": []}
+    found = f"Found {len(groups)} photos{on} with copies, {len(extra)} copies in all; the first of each was kept and shown."
+    if actions is None or not actions.writable():
+        yield {"type": "text", "text": READ_ONLY}
+        yield {"type": "done", "memory": f"{found} The photo folder is read-only: nothing was proposed."}
+        return
+    chosen = extra[:MOST]
+    kind, folder = ("clear", REMOVED) if phone else ("trash", "")
+    old = phone and not phones.can_trash([photo["id"] for photo in chosen])
+    if old:
+        kind, folder = "fetch", FROM_THE_PHONE
+    question = proposed_in_words(kind, len(chosen), folder, len(extra))
+    yield {"type": "text", "text": f"{no_trash_in_words(len(chosen)) + ' ' if old else ''}{question}"}
+    yield {"type": "proposal", "action": kind, "folder": folder, "photos": [{"id": photo["id"], "name": photo["name"]} for photo in chosen]}
+    what = {"trash": "move them to the trash", "clear": "copy them to the computer and then move them to the trash of the phone",
+            "fetch": "copy them from the phone to the computer (it has no trash an app can use)"}[kind]
+    yield {"type": "done", "memory": f"{found} Proposed to {what} ({len(chosen)} copies). Nothing was done: the user must confirm."}
+
+
+async def _albums(asked: str, photos, actions, phones):
+    """An album for each trip: the trips are worked out from where and when the pictures were taken (trips.py), and copying them is proposed."""
+    yield {"type": "step", "tool": "make_albums", "arguments": {}}
+    if phones is not None and ON_PHONE.search(asked):
+        yield {"type": "text", "text": ALBUMS_ONLY_HERE}
+        yield {"type": "done", "memory": "Trip albums are made only of the photos of the computer."}
+        return
+    if not photos.photos:
+        yield {"type": "text", "text": NO_PHOTOS}
+        yield {"type": "done", "memory": "There were no photos to look at."}
+        return
+    trips = await asyncio.to_thread(photos.trips)
+    if not trips:
+        yield {"type": "text", "text": NO_TRIPS}
+        yield {"type": "done", "memory": "Looked for trips among the photos: none found."}
+        return
+    names = ", ".join(f'"{trip["name"]}" ({len(trip["photos"])} photos)' for trip in trips)
+    if actions is None or not actions.writable():
+        yield {"type": "text", "text": f"Ho trovato {len(trips)} viaggi. {READ_ONLY}"}
+        yield {"type": "done", "memory": f"Found {len(trips)} trips: {names}. The photo folder is read-only: nothing was proposed."}
+        return
+    yield {"type": "text", "text": albums_in_words(trips)}
+    yield {
+        "type": "proposal",
+        "action": "albums",
+        "folder": "",
+        "photos": [{"id": photo["id"], "name": photo["name"]} for trip in trips for photo in trip["photos"]],
+        "albums": [{"folder": trip["name"], "ids": [photo["id"] for photo in trip["photos"]]} for trip in trips],
+    }
+    yield {"type": "done", "memory": f"Found {len(trips)} trips: {names}. Proposed to copy the photos of each into a folder with its name. Nothing was done: the user must confirm."}
+
+
+async def on_the_phone(text: str, device: str, phones, places, models: list[dict], machine, tests: dict) -> dict | None:
+    """A request typed on a phone's own screen, understood here: the pictures of that phone it asks for, and the words.
+
+    The phone reads a request by itself too (understand.ts), with no model. Here the director
+    understands what that cannot, and this computer's model, which reads English best, looks
+    for what the pictures show. The pictures are named as the phone names them. None when this
+    computer has nothing to add: then the phone's own answer stands.
+    """
+    director = catalog.pick("tools", models, machine, tests)
+    if director is None or not any(photo["device"] == device for photo in phones.photos):
+        return None
+    started = time.perf_counter()
+    decision = await decide(director, [{"role": "user", "content": text}])
+    caption = re.sub(r"\s+", " ", PLACE_WORDS.sub(" ", decision["caption"])).strip()
+    when = read_period(text)
+    if when:
+        caption = without_time(caption)
+    if not caption and not when:
+        return None
+    spot, rest = places.find(caption, text) if places is not None and caption else (None, caption)
+    if spot:
+        spot = {**spot, "rest": rest}
+    result, there = await asyncio.to_thread(look, phones, caption, PHONE_SHOWN, when, spot, device)
+    taken = f"scattat{'a' if result['matching'] == 1 and len(result['sure']) <= 1 else 'e'} {_at(spot)}" if there else ""
+    words = found_in_words(result, False, " ".join(filter(None, [taken, period_in_words(when) if when else ""])), bool(spot["rest"] if there else caption))
+    if spot and not there:
+        words = f"Nessuna foto risulta scattata {_at(spot)}: cerco quelle che ci somigliano. {words}"
+    media = {photo["id"]: photo["media"] for photo in phones.photos if photo["device"] == device}
+    return {
+        "words": words,
+        "sure": [media[photo["id"]] for photo in result["sure"] if photo["id"] in media],
+        "maybe": [media[photo["id"]] for photo in result["maybe"] if photo["id"] in media],
+        "model": director,
+        "seconds": round(time.perf_counter() - started, 1),
     }
 
 
@@ -498,13 +692,20 @@ async def reply(history: list[dict], wanted: str, models: list[dict], machine, t
         yield {"type": "done", "model": "", "seconds": 0, "memory": NO_MODEL}
         return
     loaded = {model["name"] for model in models if model["loaded"]}
+    asked = next((str(message.get("content", "")) for message in reversed(history) if message.get("role") == "user"), "")
+    # copies of the same picture, and albums of trips, are worked out by the app: no model is asked
+    if TWINS.search(asked) or ALBUMS.search(asked):
+        yield {"type": "start", "director": director, "writer": writer, "loading": False}
+        app_made = _twins(asked, photos, actions, phones) if TWINS.search(asked) else _albums(asked, photos, actions, phones)
+        async for event in app_made:
+            yield {**event, "model": director or writer, "seconds": round(time.perf_counter() - started, 1)} if event["type"] == "done" else event
+        return
     yield {"type": "start", "director": director, "writer": writer, "loading": (director or writer) not in loaded}
 
     # without a model that can direct, the app can still talk
     decision = await decide(director, history) if director else {"action": "answer", "caption": "", "folder": ""}
     # the place is not something a picture shows: out of the caption, whatever the model left in it
     decision["caption"] = re.sub(r"\s+", " ", PLACE_WORDS.sub(" ", decision["caption"])).strip()
-    asked = next((str(message.get("content", "")) for message in reversed(history) if message.get("role") == "user"), "")
     # The period a request names is read here, in its words, and not asked to the model (period.py).
     # And a picture does not show its date: what the model left of it in the caption comes out.
     when = read_period(asked)
@@ -562,7 +763,9 @@ async def reply(history: list[dict], wanted: str, models: list[dict], machine, t
         yield {"type": "step", "tool": "find_photos", "arguments": {"description": caption, "place": place, "period": period, "spot": _at(spot) if there else ""}}
         result["partial"] = False if phone else photos.state["running"]
         yield {"type": "photos", "description": caption, "place": place, **result}
-        words = found_in_words(result, phone, " ".join(filter(None, [f"scattate {_at(spot)}" if there else "", period])), bool(caption))
+        # "1 foto scattata", "3 foto scattate"
+        taken = f"scattat{'a' if result['matching'] == 1 and len(result['sure']) <= 1 else 'e'} {_at(spot)}" if there else ""
+        words = found_in_words(result, phone, " ".join(filter(None, [taken, period])), bool(caption))
         if spot and not there:
             # the place was understood, and no picture says it was taken there
             words = f"Nessuna foto risulta scattata {_at(spot)}: cerco quelle che ci somigliano. {words}"

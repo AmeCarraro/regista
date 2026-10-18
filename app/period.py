@@ -1,4 +1,4 @@
-"""Reads a period of time in a request written in Italian: "dal 20 maggio al 20 luglio", "di agosto 2024", "l'anno scorso".
+"""Reads a period of time in a request written in Italian: "dal 20 maggio al 20 luglio", "di agosto 2024", "l'estate scorsa".
 
 It is read here, in the words of the user, and not asked to the model: a small model gets
 dates wrong, and a date wrong by a year finds the wrong pictures without anyone noticing.
@@ -10,6 +10,9 @@ import re
 
 MONTHS = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"]
 _MONTH = "(" + "|".join(MONTHS) + ")"
+# the seasons by the month they begin in: whole months, as weather services count them
+SEASONS = {"primavera": 3, "estate": 6, "autunno": 9, "inverno": 12}
+_SEASON = "(" + "|".join(SEASONS) + ")"
 _DAY = r"(\d{1,2})[º°]?"
 _YEAR = r"((?:19|20)\d{2})"
 _FROM = r"\b(?:dal|dall['’]|da|tra il|tra l['’]|fra il|fra l['’])\s*"
@@ -28,15 +31,22 @@ _ONE_DAY_NUMBERS = re.compile(r"\b(\d{1,2})[/.-](\d{1,2})[/.-]((?:19|20)\d{2})\b
 _ONE_MONTH = re.compile(rf"\b{_MONTH}(?:\s+(?:del\s+)?{_YEAR})?")
 _ONE_YEAR = re.compile(rf"\b(?:del|nel|dell['’]anno|anno)\s+{_YEAR}\b")
 _LAST = re.compile(r"\bultim[ie]\s+(\d{1,3})\s+(giorni|settimane|mesi)\b")
+# a season: "l'estate del 2024", and "l'estate scorsa", "quest'inverno", "d'estate"
+_SEASON_YEAR = re.compile(rf"\b{_SEASON}\s+(?:del\s+)?{_YEAR}\b")
+_ONE_SEASON = re.compile(rf"\b{_SEASON}\b")
 
 # What a model leaves in an English caption about when the pictures were taken: "in August 2024",
 # "from May 20 to July 20", "last year". A picture does not show its date, so it comes out of the caption.
 _ENGLISH_MONTH = "(?:january|february|march|april|may|june|july|august|september|october|november|december)"
+_ENGLISH_SEASON = "(?:spring|summer|autumn|fall|winter)"
 _WHEN = re.compile(
     rf"\b(?:taken\s+)?(?:(?:in|from|during|of|since|until|to|between|and|on)\s+)?(?:the\s+)?(?:\d{{1,2}}(?:st|nd|rd|th)?\s+(?:of\s+)?)?{_ENGLISH_MONTH}(?:\s+\d{{1,2}}(?:st|nd|rd|th)?)?(?:,?\s*(?:19|20)\d{{2}})?\b"
     r"|\b(?:taken\s+)?(?:(?:in|of|from|during|to|and)\s+)?(?:19|20)\d{2}\b"
     r"|\b(?:taken\s+)?(?:(?:from|of|in|during)\s+)?(?:the\s+)?(?:last|this|past)\s+(?:\d+\s+)?(?:years?|months?|weeks?|days?)\b"
-    r"|\b(?:today|yesterday)\b",
+    r"|\b(?:today|yesterday)\b"
+    # a season only with a word of time: "in the summer", "last winter", "summer 2024", but "a hot spring" stays
+    rf"|\b(?:taken\s+)?(?:in|during|of|from|this|last|past)\s+(?:the\s+)?(?:(?:last|this|past)\s+)?{_ENGLISH_SEASON}(?:\s+(?:of\s+)?(?:19|20)\d{{2}})?\b"
+    rf"|\b{_ENGLISH_SEASON}\s+(?:of\s+)?(?:19|20)\d{{2}}\b",
     re.IGNORECASE,
 )
 # what can be left of a caption that was only about time: no subject in these
@@ -53,6 +63,14 @@ def _years_back(day: datetime.date, years: int) -> datetime.date:
         return day.replace(year=day.year - years)
     except ValueError:
         return day.replace(year=day.year - years, day=28)
+
+
+def _season(name: str, year: int) -> tuple[datetime.date, datetime.date]:
+    """A season of a year. The winter of a year is the one that ends in it: the winter of 2024 is from December 2023."""
+    first = SEASONS[name]
+    if first == 12:
+        return datetime.date(year - 1, 12, 1), _month_end(year, 2)
+    return datetime.date(year, first, 1), _month_end(year, first + 2)
 
 
 def _full_year(text: str | None) -> int | None:
@@ -99,6 +117,18 @@ def read(text: str, today: datetime.date | None = None) -> tuple[datetime.date, 
         if found := _YEARS.search(text):
             first, last = sorted(int(year) for year in found.groups())
             return datetime.date(first, 1, 1), datetime.date(last, 12, 31)
+        if found := _SEASON_YEAR.search(text):
+            return _season(found.group(1), int(found.group(2)))
+        if found := _ONE_SEASON.search(text):
+            name = found.group(1)
+            if re.search(r"\b(?:anno scorso|scorso anno)\b", text):
+                return _season(name, today.year - 1)
+            # "l'estate scorsa" is the last one that is over; "quest'estate" and "d'estate", the last one that has begun
+            over = re.search(r"\b(?:scors|passat)[ao]\b", text)
+            for year in (today.year + 1, today.year, today.year - 1):
+                since, until = _season(name, year)
+                if (until < today) if over else (since <= today):
+                    return since, until
 
         monday = today - datetime.timedelta(days=today.weekday())
         if re.search(r"\bl['’]altro ?ieri\b", text):
@@ -150,16 +180,24 @@ def read(text: str, today: datetime.date | None = None) -> tuple[datetime.date, 
 
 
 def in_words(period: tuple[datetime.date, datetime.date]) -> str:
-    """A period as it is said in Italian after "le foto": "di agosto 2024", "dal 20 maggio al 20 luglio 2026"."""
+    """A period as it is said in Italian after "le foto": "di agosto 2024", "da giugno ad agosto 2026", "dal 20 maggio al 20 luglio 2026".
+
+    Whole months are said as months: a season is said by the months it is made of, so that
+    the user hears which ones were looked in.
+    """
     since, until = period
     if since == until:
         # "dell'1", "dell'8", "dell'11": the days whose name starts with a vowel
         of = "dell'" if since.day in (1, 8, 11) else "del "
         return f"{of}{since.day} {MONTHS[since.month - 1]} {since.year}"
-    if since.day == 1 and since.month == 1 and until.day == 31 and until.month == 12 and since.year == until.year:
-        return f"del {since.year}"
-    if since.day == 1 and until == _month_end(since.year, since.month):
-        return f"di {MONTHS[since.month - 1]} {since.year}"
+    if since.day == 1 and since.month == 1 and until.day == 31 and until.month == 12:
+        return f"del {since.year}" if since.year == until.year else f"dal {since.year} al {until.year}"
+    if since.day == 1 and until == _month_end(until.year, until.month):
+        if (since.year, since.month) == (until.year, until.month):
+            return f"di {MONTHS[since.month - 1]} {since.year}"
+        first = MONTHS[since.month - 1] + ("" if since.year == until.year else f" {since.year}")
+        last = MONTHS[until.month - 1]
+        return f"da {first} {'ad' if last.startswith('a') else 'a'} {last} {until.year}"
     first = f"{since.day} {MONTHS[since.month - 1]}" + ("" if since.year == until.year else f" {since.year}")
     start = "dall'" if since.day in (1, 8, 11) else "dal "
     end = "all'" if until.day in (1, 8, 11) else "al "

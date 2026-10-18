@@ -18,6 +18,12 @@ export type Reading = { allowed: boolean; done: number; total: number }
  */
 export type Sight = { ready: boolean; wanted: boolean; got: number; size: number; seen: number; unseen: number }
 
+/** Whether the new pictures go to the computer by themselves, and when they last did: `at` in milliseconds, 0 if never. */
+export type AutoCopy = { on: boolean; at: number; count: number }
+
+/** The computer's answer to a request typed here: its words, and the pictures of this phone, by the phone's own names. */
+export type Answer = { words: string; sure: string[]; maybe: string[]; model: string; seconds: number }
+
 export type App = {
   pictures(): Picture[]
   reading(): Reading
@@ -34,6 +40,11 @@ export type App = {
   wantSight(): void
   /** How close each picture the phone has looked at is to a sentence; null while it has no models. */
   scores(sentence: string): Record<string, number> | null
+  /** Asks the computer about a request, when it answers; null when it cannot be asked, or has nothing to add. */
+  ask(text: string): Promise<Answer | null>
+  autoCopy(): AutoCopy
+  /** Starts or stops the copying of the new pictures by themselves: the ones added from now on. */
+  setAutoCopy(on: boolean): void
 }
 
 /** What the app offers the page: every answer is text, as JSON. */
@@ -48,18 +59,35 @@ type Native = {
   sight(): string
   wantSight(): void
   scores(sentence: string): string
+  ask(text: string, token: string): void
+  answer(token: string): string
+  autoCopy(): string
+  setAutoCopy(on: boolean): void
 }
 
 declare global {
   interface Window {
     Regista?: Native
+    /** Called by the app when the computer's answer to a request is there. */
+    registaAnswered?: (token: string) => void
   }
 }
+
+// how long the computer is waited for: its model may have to be loaded first
+const PATIENCE = 45_000
 
 export function connect(): App {
   const native = window.Regista
   if (!native) return pretend()
   const parse = <T>(text: string): T => JSON.parse(text) as T
+  // the requests waiting for the computer, by the name each was given
+  const waiting = new Map<string, (answer: Answer | null) => void>()
+  let asked = 0
+  window.registaAnswered = (token) => {
+    const done = waiting.get(token)
+    waiting.delete(token)
+    done?.(parse<Answer | null>(native.answer(token)))
+  }
   return {
     pictures: () => parse<Picture[]>(native.pictures()),
     reading: () => parse<Reading>(native.reading()),
@@ -74,6 +102,18 @@ export function connect(): App {
     sight: () => parse<Sight>(native.sight()),
     wantSight: () => native.wantSight(),
     scores: (sentence) => parse<Record<string, number> | null>(native.scores(sentence)),
+    autoCopy: () => parse<AutoCopy>(native.autoCopy()),
+    setAutoCopy: (on) => native.setAutoCopy(on),
+    ask: (text) =>
+      new Promise((resolve) => {
+        asked += 1
+        const token = `a${asked}`
+        waiting.set(token, resolve)
+        native.ask(text, token)
+        setTimeout(() => {
+          if (waiting.delete(token)) resolve(null)
+        }, PATIENCE)
+      }),
   }
 }
 
@@ -82,15 +122,16 @@ export function connect(): App {
 const TRIPS = [
   { country: 'JP', start: '2026-05-03', at: [35.68, 139.69], hue: 350 },
   { country: 'FR', start: '2026-06-10', at: [48.86, 2.34], hue: 220 },
-  { country: 'IT', start: '2026-07-14', at: [41.89, 12.49], hue: 130 },
+  { country: 'IT', region: 'IT.07', start: '2026-07-14', at: [41.89, 12.49], hue: 130 },
 ]
 
 function pretend(): App {
+  const copying = { on: false, at: Date.UTC(2026, 9, 17, 13, 42), count: 3 }
   const pictures: Picture[] = TRIPS.flatMap((trip, number) =>
     Array.from({ length: 12 }, (_, index) => {
       const day = new Date(`${trip.start}T12:00:00Z`)
       day.setUTCDate(day.getUTCDate() + Math.floor(index / 3))
-      return { id: `${number * 12 + index}`, name: `foto_${number * 12 + index}.jpg`, day: day.toISOString().slice(0, 10), lat: trip.at[0], lon: trip.at[1], country: trip.country }
+      return { id: `${number * 12 + index}`, name: `foto_${number * 12 + index}.jpg`, day: day.toISOString().slice(0, 10), lat: trip.at[0], lon: trip.at[1], country: trip.country, region: trip.region }
     }),
   )
   const countries: Record<string, { code: string; name: string }> = {
@@ -108,6 +149,12 @@ function pretend(): App {
     reading: () => ({ allowed: true, done: pictures.length, total: pictures.length }),
     state: () => ({ paired: true, computer: 'PC di casa', reachable: false, waiting: 0 }),
     places: { country: (name) => countries[name] ?? null, city: (written) => cities[written.toLowerCase()] ?? null },
+    // no computer here
+    ask: () => Promise.resolve(null),
+    autoCopy: () => ({ ...copying }),
+    setAutoCopy: (on) => {
+      copying.on = on
+    },
     thumb: (id) => {
       // a colour for each trip, a shade for each picture
       const number = Number(id)

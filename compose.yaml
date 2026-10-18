@@ -24,6 +24,16 @@ services:
       HOST_CORES: ${HOST_CORES:-0}
       # the folder as the user knows it, to show it in the page
       PHOTOS_LABEL: ${PHOTOS_DIR:-foto}
+    # What the app may do in its container, and no more: it writes only its index, the pictures'
+    # folder and /tmp, it cannot gain rights it was not started with, and it has none of the
+    # special powers of a system's administrator. Whatever went wrong in it would stay small.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     volumes:
       # the pictures. The app never deletes one: it can move them to its trash, inside this same
       # folder, and copy them, and both only when the user says yes. Started with

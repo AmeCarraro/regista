@@ -179,6 +179,39 @@ class Actions:
             entry = self._record(self._name(), "copy", files, back=lambda file: (self.root / file["to"]).unlink(missing_ok=True), folder=target.name)
             return {**entry, "folder": target.name, "count": len(files), "missing": missing, "failed": failed}
 
+    def albums(self, groups: list[tuple[str, list[str]]]) -> dict:
+        """Copies pictures into several folders of the collections at once, one per album: one change, taken back as one.
+
+        `groups` is (folder, pictures) for each album. The originals stay where they are.
+        """
+        with self._lock:
+            # every name, of folder and of picture, is checked before anything is touched
+            planned = [(self.root / COLLECTIONS / collection_name(folder), [(relative, self._picture(relative)) for relative in relatives]) for folder, relatives in groups]
+            files, missing, failed, folders = [], 0, 0, []
+            for target, sources in planned:
+                made_here = 0
+                for relative, source in sources:
+                    if not source.is_file():
+                        missing += 1
+                        continue
+                    made = free(target / source.name)
+                    partial = made.with_name(made.name + ".part")
+                    try:
+                        target.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(source, partial)
+                        os.rename(partial, made)
+                    except OSError:
+                        failed += 1
+                        with contextlib.suppress(OSError):
+                            partial.unlink(missing_ok=True)
+                        continue
+                    files.append({"from": relative, "to": self._relative(made)})
+                    made_here += 1
+                if made_here:
+                    folders.append(target.name)
+            entry = self._record(self._name(), "albums", files, back=lambda file: (self.root / file["to"]).unlink(missing_ok=True), folder="", folders=folders)
+            return {**entry, "folder": "", "folders": folders, "count": len(files), "missing": missing, "failed": failed}
+
     def incoming(self, folder: str) -> Path:
         """A temporary file in a folder of the collections, for a picture that is arriving from a phone."""
         directory = self.root / COLLECTIONS / collection_name(folder)

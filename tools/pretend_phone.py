@@ -1,7 +1,8 @@
 """A pretend phone, to try what the computer does with a real one without having one at hand.
 
-It does what the Android app does: it is let in with the link shown on the page, checks
-that the computer is the one the link names, sends a small copy of every picture of a
+It does what the Android app does: it asks to come in with the link shown on the page, checks
+that the computer is the one the link names, shows the number to confirm on the page (or, with
+--yes, says yes there itself, from this same PC), sends a small copy of every picture of a
 folder (its "gallery"), and then waits for requests and sends the originals asked for.
 When the computer says that pictures may go to the phone's trash, it answers as its user
 would with --trash yes or --trash no: with yes the files move to a folder ".cestino" inside
@@ -24,6 +25,7 @@ import sys
 import time
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
+from urllib.request import Request, urlopen
 
 from PIL import Image, ImageOps
 
@@ -111,6 +113,7 @@ def main() -> None:
     parser.add_argument("--memory", type=Path, default=Path("pretend_phone.json"), help="where this phone keeps its key, as a real one does")
     parser.add_argument("--once", action="store_true", help="send what is asked for now and stop, instead of waiting for more")
     parser.add_argument("--trash", choices=["yes", "no"], default="no", help="what the user of this phone answers when asked whether pictures may go to its trash")
+    parser.add_argument("--yes", action="store_true", help="say yes on the computer's page by itself, as its user would: for trials on this same PC")
     arguments = parser.parse_args()
     # line by line also when the output goes to a file: whoever watches it sees what happens as it happens
     sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
@@ -128,7 +131,20 @@ def main() -> None:
                 continue
         if computer is None:
             raise SystemExit(f"The computer does not answer at {', '.join(addresses)} on port {said['p']}")
-        paired = computer.ask("POST", "/phone/pair", {"secret": said["s"], "name": arguments.name})
+        asked = computer.ask("POST", "/phone/pair", {"secret": said["s"], "name": arguments.name})
+        print(f"on the computer, say yes to the phone that shows {asked['code'][:3]} {asked['code'][3:]}")
+        if arguments.yes:
+            # the page's own door, which answers only on this PC
+            pending = json.loads(urlopen("http://127.0.0.1:8090/api/phone").read())["pending"]
+            request = next(one for one in pending if one["code"] == asked["code"])
+            urlopen(Request(f"http://127.0.0.1:8090/api/phone/pending/{request['id']}", data=b'{"yes": true}', headers={"Content-Type": "application/json"}))
+        paired = {"state": "waiting"}
+        until = time.monotonic() + asked["seconds"]
+        while paired["state"] == "waiting" and time.monotonic() < until:
+            time.sleep(1)
+            paired = computer.ask("POST", "/phone/pair/wait", {"ticket": asked["ticket"]})
+        if paired["state"] != "paired":
+            raise SystemExit("Nobody said yes on the computer in time.")
         computer.key = paired["token"]
         arguments.memory.write_text(json.dumps(vars(computer)))
         print(f"let in by {paired['computer'] or computer.address} as {arguments.name}")

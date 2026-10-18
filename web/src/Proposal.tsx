@@ -7,6 +7,8 @@ import { Thumb } from './Photos.tsx'
 /** What the user can do with a proposal: leave pictures out, rename the folder, say yes or no, take it back afterwards. */
 export type Answers = {
   onPick: (photo: string) => void
+  /** Puts back, or leaves out, many pictures at once: the ones of an album. */
+  onPickMany: (photos: string[], on: boolean) => void
   onFolder: (name: string) => void
   onYes: () => void
   onNo: () => void
@@ -51,6 +53,15 @@ function wording(proposed: Proposed): { icon: ReactNode; title: string; hint: st
         hint: 'Arrivano in un album del telefono. Sul computer restano dove sono.',
         yes: count === 1 ? 'Manda 1 foto al telefono' : `Manda ${count} foto al telefono`,
       }
+    case 'albums': {
+      const albums = proposal.albums.filter((album) => album.ids.some((id) => proposed.picked.includes(id))).length
+      return {
+        icon: <icons.Folder />,
+        title: 'Album dei viaggi',
+        hint: 'Una cartella per viaggio, in Raccolte. Gli originali restano dove sono.',
+        yes: `Copia ${count === 1 ? '1 foto' : `${count} foto`} in ${albums === 1 ? '1 album' : `${albums} album`}`,
+      }
+    }
     case 'clear':
       return {
         icon: <icons.Phone />,
@@ -65,7 +76,9 @@ function wording(proposed: Proposed): { icon: ReactNode; title: string; hint: st
           ? `${proposal.count} foto spostate nel cestino`
           : proposal.undoes === 'receive'
             ? `${proposal.count} foto arrivate dal telefono in «${proposal.folder}»`
-            : `${proposal.count} foto copiate in «${proposal.folder}»`
+            : proposal.undoes === 'albums'
+              ? `${proposal.count} foto copiate negli album dei viaggi`
+              : `${proposal.count} foto copiate in «${proposal.folder}»`
       return {
         icon: <icons.Undo />,
         title: "Annulla l'ultima modifica",
@@ -145,7 +158,31 @@ export default function ProposalCard({ proposed, answers }: { proposed: Proposed
         </label>
       )}
 
-      {proposal.action !== 'undo' && (
+      {proposal.action === 'albums' && (
+        <ul className="albums">
+          {proposal.albums.map((album) => {
+            const on = album.ids.some((id) => picked.has(id))
+            return (
+              <li key={album.folder}>
+                <label className={on ? 'album' : 'album off'}>
+                  <input type="checkbox" checked={on} disabled={working} onChange={() => answers.onPickMany(album.ids, !on)} />
+                  <span className="album-name">
+                    <b>{album.folder}</b>
+                    <span>{album.ids.length === 1 ? '1 foto' : `${album.ids.length} foto`}</span>
+                  </span>
+                  <span className="album-thumbs">
+                    {album.ids.slice(0, 4).map((id) => (
+                      <Thumb key={id} id={id} />
+                    ))}
+                  </span>
+                </label>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+
+      {proposal.action !== 'undo' && proposal.action !== 'albums' && (
         <ul className="picks">
           {proposal.photos.map((photo) => (
             <li key={photo.id}>
@@ -180,7 +217,8 @@ export default function ProposalCard({ proposed, answers }: { proposed: Proposed
         <button type="button" className="quiet-button" disabled={working} onClick={answers.onNo}>
           Lascia stare
         </button>
-        {proposal.action !== 'undo' && proposal.photos.length > 1 && <span className="fine">Tocca una foto per lasciarla fuori.</span>}
+        {proposal.action === 'albums' && proposal.albums.length > 1 && <span className="fine">Tocca un viaggio per lasciarlo fuori.</span>}
+        {proposal.action !== 'undo' && proposal.action !== 'albums' && proposal.photos.length > 1 && <span className="fine">Tocca una foto per lasciarla fuori.</span>}
       </footer>
     </section>
   )

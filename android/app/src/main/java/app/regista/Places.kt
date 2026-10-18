@@ -11,12 +11,14 @@ import kotlin.math.cos
  * Places, on the phone itself. The countries as Android names them, in Italian and in English,
  * and the cities of a table the app carries: the same one the computer uses, from GeoNames
  * (geonames.org, licence CC BY 4.0), the cities with more than 15,000 inhabitants. With it a
- * position becomes a country, and a name becomes a place, with no network.
+ * position becomes a country and a region, and a name becomes a place, with no network.
  */
 class Places(private val context: Context) {
     private var latitudes = DoubleArray(0)
     private var longitudes = DoubleArray(0)
     private var codes = emptyArray<String>()
+    // the region of every city, as "IT.14": the country, then the code GeoNames gives the region in it
+    private var regions = emptyArray<String>()
     private var people = IntArray(0)
 
     // every name of a city, in small letters -> the city it names: its own name before a name it is
@@ -33,6 +35,7 @@ class Places(private val context: Context) {
         val lats = ArrayList<Double>(40_000)
         val lons = ArrayList<Double>(40_000)
         val countries = ArrayList<String>(40_000)
+        val areas = ArrayList<String>(40_000)
         val sizes = ArrayList<Int>(40_000)
         // a city's own names, and the other names it is known by, kept apart until the end: an own name always wins
         val others = HashMap<String, Int>()
@@ -41,13 +44,14 @@ class Places(private val context: Context) {
                 if (packed.nextEntry == null) return@use
                 packed.bufferedReader().forEachLine { line ->
                     // the columns, as GeoNames documents them: 1 name, 2 name in plain letters, 3 other names,
-                    // 4 and 5 position, 8 country, 14 inhabitants
+                    // 4 and 5 position, 8 country, 10 region, 14 inhabitants
                     val cells = line.split('\t', limit = 16)
                     if (cells.size < 15) return@forEachLine
                     val city = lats.size
                     lats += cells[4].toDoubleOrNull() ?: 0.0
                     lons += cells[5].toDoubleOrNull() ?: 0.0
                     countries += cells[8].intern()
+                    areas += "${cells[8]}.${cells[10]}".intern()
                     sizes += cells[14].toIntOrNull() ?: 0
                     for (key in listOf(cells[1], cells[2])) rank(named, key.lowercase(Locale.ROOT), city, sizes)
                     for (name in cells[3].split(',')) rank(others, name.lowercase(Locale.ROOT), city, sizes)
@@ -60,6 +64,7 @@ class Places(private val context: Context) {
         latitudes = lats.toDoubleArray()
         longitudes = lons.toDoubleArray()
         codes = countries.toTypedArray()
+        regions = areas.toTypedArray()
         people = sizes.toIntArray()
         loaded = true
     }
@@ -93,8 +98,8 @@ class Places(private val context: Context) {
         return JSONObject().put("name", shown).put("latitude", latitudes[index]).put("longitude", longitudes[index])
     }
 
-    /** The country a position is in, as the two letters of its code: the one of the nearest city. Empty if not known. */
-    fun countryOf(latitude: Double, longitude: Double): String {
+    /** The country and the region a position is in, as ("IT", "IT.14"): those of the nearest city. Empty if not known. */
+    fun where(latitude: Double, longitude: Double): Pair<String, String> {
         ready()
         // the nearest on a flat map stretched as the Earth is at that latitude: near enough to tell the country
         val stretch = cos(Math.toRadians(latitude))
@@ -110,7 +115,7 @@ class Places(private val context: Context) {
                 best = city
             }
         }
-        return if (best >= 0) codes[best] else ""
+        return if (best >= 0) Pair(codes[best], regions[best]) else Pair("", "")
     }
 
     private companion object {

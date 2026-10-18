@@ -172,7 +172,10 @@ export function lapse(turns: Turn[]): Turn[] {
 export function missing(proposed: Proposed): string {
   if (proposed.proposal.action === 'undo') return ''
   if (proposed.picked.length === 0) return 'Non è rimasta nessuna foto selezionata.'
-  if (proposed.proposal.action !== 'trash' && !proposed.folder.trim()) return 'Scrivi prima il nome della cartella nella scheda qui sopra.'
+  // the albums are named after their trips, and the trash has no folder
+  if (proposed.proposal.action !== 'trash' && proposed.proposal.action !== 'albums' && !proposed.folder.trim()) {
+    return 'Scrivi prima il nome della cartella nella scheda qui sopra.'
+  }
   return ''
 }
 

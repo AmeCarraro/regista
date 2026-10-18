@@ -1,5 +1,6 @@
 # Builds the Android app and tries it on a pretend phone, all in containers: nothing Android is installed on the PC.
-# Usage: .\android.ps1 build       makes android\app\build\outputs\apk\release\app-release.apk, to install on a phone
+# Usage: .\android.ps1 build       makes the app, one file per kind of phone, in android\app\build\outputs\apk\release:
+#                                  app-arm64-v8a-release.apk for almost every phone, app-armeabi-v7a-release.apk for old 32-bit ones
 #        .\android.ps1 phone       starts a pretend phone (an Android 15 emulator, no window) and waits until it is on
 #        .\android.ps1 install     puts the app on the pretend phone
 #        .\android.ps1 pictures D:\some\folder   copies the pictures of a folder into the pretend phone's gallery
@@ -38,7 +39,7 @@ switch ($What) {
         $script = 'mkdir -p .keys && { [ -f .keys/regista.keystore ] || keytool -genkeypair -keystore .keys/regista.keystore -storepass regista -keypass regista -alias regista -keyalg RSA -keysize 2048 -validity 10000 -dname CN=Regista; } && gradle --no-daemon -q assembleRelease'
         docker run --rm -v "${project}:/work" -v regista-gradle:/root/.gradle regista-android sh -c $script
         if ($LASTEXITCODE -ne 0) { Stop-Run 'the build' }
-        Write-Host "App: $(Join-Path $project 'app\build\outputs\apk\release\app-release.apk')" -ForegroundColor Green
+        Write-Host "App: $(Join-Path $project 'app\build\outputs\apk\release\app-arm64-v8a-release.apk') (for almost every phone; the others are beside it)" -ForegroundColor Green
     }
     'phone' {
         docker rm -f regista-phone 2>$null | Out-Null
@@ -52,7 +53,9 @@ switch ($What) {
         Write-Host "The pretend phone is on (Android $(docker exec regista-phone adb shell getprop ro.build.version.release))." -ForegroundColor Green
     }
     'install' {
-        docker exec regista-phone adb install -r /work/app/build/outputs/apk/release/app-release.apk
+        # the file of the kind of phone the pretend one is
+        $kind = (docker exec regista-phone adb shell getprop ro.product.cpu.abi).Trim()
+        docker exec regista-phone adb install -r "/work/app/build/outputs/apk/release/app-$kind-release.apk"
     }
     'pictures' {
         if (-not $More -or -not (Test-Path $More[0] -PathType Container)) { Stop-Run 'give the folder with the pictures' }
@@ -86,7 +89,13 @@ switch ($What) {
                 & $adb devices -l
                 Write-Host "Android $(& $adb shell getprop ro.build.version.release), $(& $adb shell getprop ro.product.manufacturer) $(& $adb shell getprop ro.product.model), $(& $adb shell getprop ro.product.cpu.abi)"
             }
-            'install' { & $adb install -r (Join-Path $project 'app\build\outputs\apk\release\app-release.apk') }
+            'install' {
+                # the file made for the kind of processor the device has
+                $kind = (& $adb shell getprop ro.product.cpu.abi).Trim()
+                $file = Join-Path $project "app\build\outputs\apk\release\app-$kind-release.apk"
+                if (-not (Test-Path $file)) { Stop-Run "no app made for '$kind' devices" }
+                & $adb install -r $file
+            }
             'pictures' {
                 # into an album of their own: what a trial touches is never one of the owner's pictures
                 if (-not $rest -or -not (Test-Path $rest[0] -PathType Container)) { Stop-Run 'give the folder with the pictures' }

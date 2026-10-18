@@ -253,6 +253,33 @@
   gap: 10px;
 }
 
+/* a phone that asks to come in: its number, large, to compare with the one on the phone */
+.pending {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--rose);
+  border-radius: var(--radius-small);
+  background: var(--raised);
+}
+
+.pending p {
+  margin: 0;
+}
+
+.pending-code {
+  font-size: 2rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-align: center;
+}
+
+.pending-answers {
+  display: flex;
+  gap: 10px;
+}
+
 /* the code keeps a white ground in both themes: a camera reads dark on light */
 .invite img {
   align-self: center;

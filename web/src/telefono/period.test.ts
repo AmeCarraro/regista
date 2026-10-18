@@ -50,6 +50,17 @@ describe('a period is read from the ways people say it', () => {
     ["le foto dell'anno scorso", '2025-01-01', '2025-12-31'],
     ["le foto di quest'anno", '2026-01-01', '2026-10-12'],
     ['le foto degli ultimi 7 giorni', '2026-10-05', '2026-10-12'],
+    // a season, by whole months: the last one that is over, or the last one that has begun
+    ["le foto dell'estate scorsa", '2026-06-01', '2026-08-31'],
+    ['la scorsa primavera', '2026-03-01', '2026-05-31'],
+    ["l'inverno passato", '2025-12-01', '2026-02-28'],
+    ["l'autunno scorso", '2025-09-01', '2025-11-30'],
+    ["le foto di quest'autunno", '2026-09-01', '2026-11-30'],
+    ["le foto al mare d'estate", '2026-06-01', '2026-08-31'],
+    ['questo inverno', '2025-12-01', '2026-02-28'],
+    ["l'estate del 2024", '2024-06-01', '2024-08-31'],
+    ['inverno 2024', '2023-12-01', '2024-02-29'],
+    ["l'estate dell'anno scorso", '2025-06-01', '2025-08-31'],
     ['Le Foto Dal 20 Maggio Al 20 Luglio', '2026-05-20', '2026-07-20'],
   ])('%s', (text, since, until) => {
     const found = read(text, TODAY)
@@ -78,6 +89,10 @@ test.each([
   ['2026-10-11', '2026-10-11', "dell'11 ottobre 2026"],
   ['2024-02-01', '2024-02-29', 'di febbraio 2024'],
   ['2023-01-01', '2023-12-31', 'del 2023'],
+  ['2019-01-01', '2021-12-31', 'dal 2019 al 2021'],
+  ['2026-06-01', '2026-08-31', 'da giugno ad agosto 2026'],
+  ['2026-03-01', '2026-05-31', 'da marzo a maggio 2026'],
+  ['2025-12-01', '2026-02-28', 'da dicembre 2025 a febbraio 2026'],
 ])('a period is said back in words: %s to %s', (since, until, words) => {
   expect(inWords([day(since), day(until)])).toBe(words)
 })

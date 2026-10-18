@@ -554,6 +554,91 @@
   outline-offset: 2px;
 }
 
+/* the albums of the trips: one row each, its name, how many pictures, and the first few */
+.albums {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  max-height: 320px;
+  margin: 0;
+  padding: 2px;
+  overflow-y: auto;
+  list-style: none;
+  scrollbar-width: thin;
+}
+
+.album {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-small);
+  background: var(--raised);
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.album input {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--rose);
+  cursor: pointer;
+}
+
+.album-name {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.35;
+}
+
+.album-name b {
+  font-size: 0.94rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.album-name span {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.album-thumbs {
+  display: flex;
+  flex: none;
+  gap: 4px;
+}
+
+.album-thumbs img,
+.album-thumbs .no-thumb {
+  display: block;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.album.off {
+  opacity: 0.45;
+}
+
+.album.off .album-thumbs img {
+  filter: grayscale(1);
+}
+
+/* on a narrow screen the name of the trip comes first: one small picture is enough */
+@media (max-width: 520px) {
+  .album-thumbs img:nth-child(n + 2),
+  .album-thumbs .no-thumb:nth-child(n + 2) {
+    display: none;
+  }
+}
+
 .proposal footer {
   display: flex;
   flex-wrap: wrap;

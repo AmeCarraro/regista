@@ -67,6 +67,9 @@ export type Place = 'computer' | 'phone'
 /** A picture named in a proposal: its short name, and the name of its file. */
 export type Picked = { id: string; name: string }
 
+/** An album of a trip: the folder it goes into, and its pictures by their short names. */
+export type Album = { folder: string; ids: string[] }
+
 /**
  * A change to the pictures that the app proposes. It is carried out only when
  * the user says yes, by the page, with carryOut or takeBack below.
@@ -76,8 +79,10 @@ export type Proposal =
   // "clear" does the same and then has the phone move them to its own trash, after a yes given there.
   // "send" prepares pictures of this computer for the phone, which takes them into an album.
   | { action: 'trash' | 'copy' | 'fetch' | 'clear' | 'send'; folder: string; photos: Picked[] }
+  // a copy of the pictures of each trip into an album of its own; `photos` are all of them
+  | { action: 'albums'; folder: string; photos: Picked[]; albums: Album[] }
   // "receive" is what a fetch becomes in the journal once the pictures have arrived
-  | { action: 'undo'; of: string; undoes: 'trash' | 'copy' | 'receive'; folder: string; count: number; when: string }
+  | { action: 'undo'; of: string; undoes: 'trash' | 'copy' | 'receive' | 'albums'; folder: string; count: number; when: string }
 
 /** The events of POST /api/chat, one JSON object per line. */
 export type ChatEvent =
@@ -91,7 +96,7 @@ export type ChatEvent =
 
 /** What a change did, once carried out: in numbers, and in the words to show. */
 export type Outcome = {
-  kind: 'trash' | 'copy' | 'fetch' | 'clear' | 'send' | 'undo'
+  kind: 'trash' | 'copy' | 'fetch' | 'clear' | 'send' | 'albums' | 'undo'
   /** The name of the change, to take it back later. Empty when nothing was touched, or for an undo. */
   id: string
   count: number
@@ -134,11 +139,17 @@ export type Device = {
   waiting: number
 }
 
+/** A phone that showed a good code and waits for the yes here: the name it gives itself, and the number it shows. */
+export type Pending = { id: string; name: string; code: string; seconds: number }
+
 export type PhoneState = {
   /** Whether the door of the phones was opened to the network when the app was started. */
   open: boolean
   addresses: string[]
   devices: Device[]
+  pending: Pending[]
+  /** The knocks at the door of the phones that were refused since the app started: how many, the last one, and what was wrong. */
+  refused: { count: number; last: string; what: string }
 }
 
 /** What lets one phone in: a link, and the same link as a QR code (a picture, ready to be the source of an image). */
@@ -150,7 +161,7 @@ export type Changes = {
   writable: boolean
   /** How many files are in the app's trash. */
   trash: number
-  last: { id: string; kind: 'trash' | 'copy' | 'receive'; count: number; folder: string; when: string } | null
+  last: { id: string; kind: 'trash' | 'copy' | 'receive' | 'albums'; count: number; folder: string; when: string } | null
 }
 
 /** The events of POST /api/models/test. */
@@ -262,6 +273,9 @@ export const fetchChanges = () => get<Changes>('/api/actions')
 export const carryOut = (action: 'trash' | 'copy' | 'fetch' | 'clear' | 'send', ids: string[], folder: string) =>
   post<Outcome>('/api/actions', { action, ids, folder })
 
+/** Copies the pictures of each trip into its album, all at once: one change, taken back as one. */
+export const makeAlbums = (albums: Album[]) => post<Outcome>('/api/actions/albums', { albums })
+
 export const fetchTransfer = (id: string) => get<Transfer>(`/api/transfers/${id}`)
 
 export const fetchPhone = () => get<PhoneState>('/api/phone')
@@ -269,6 +283,9 @@ export const fetchPhone = () => get<PhoneState>('/api/phone')
 export const invitePhone = () => post<Invite>('/api/phone/invite', {})
 
 export const forgetPhone = (id: string) => post<{ forgotten: boolean }>(`/api/phone/devices/${id}/forget`, {})
+
+/** The answer, given here, to a phone that asks to come in. */
+export const answerPhone = (id: string, yes: boolean) => post<{ answered: boolean }>(`/api/phone/pending/${id}`, { yes })
 
 /** Takes back a change, named by the id its outcome carried. */
 export const takeBack = (of: string) => post<Outcome>('/api/actions/undo', { of })

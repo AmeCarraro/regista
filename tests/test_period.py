@@ -51,6 +51,17 @@ def day(text):
     ("le foto dell'anno scorso", "2025-01-01", "2025-12-31"),
     ("le foto di quest'anno", "2026-01-01", "2026-10-12"),
     ("le foto degli ultimi 7 giorni", "2026-10-05", "2026-10-12"),
+    # a season, by whole months: the last one that is over, or the last one that has begun
+    ("le foto dell'estate scorsa", "2026-06-01", "2026-08-31"),
+    ("la scorsa primavera", "2026-03-01", "2026-05-31"),
+    ("l'inverno passato", "2025-12-01", "2026-02-28"),
+    ("l'autunno scorso", "2025-09-01", "2025-11-30"),
+    ("le foto di quest'autunno", "2026-09-01", "2026-11-30"),
+    ("le foto al mare d'estate", "2026-06-01", "2026-08-31"),
+    ("questo inverno", "2025-12-01", "2026-02-28"),
+    ("l'estate del 2024", "2024-06-01", "2024-08-31"),
+    ("inverno 2024", "2023-12-01", "2024-02-29"),
+    ("l'estate dell'anno scorso", "2025-06-01", "2025-08-31"),
     ("Le Foto Dal 20 Maggio Al 20 Luglio", "2026-05-20", "2026-07-20"),
 ])
 def test_a_period_is_read_from_the_ways_people_say_it(request_text, since, until):
@@ -79,6 +90,10 @@ def test_what_is_not_a_period_is_not_read_as_one(request_text):
     ("2026-10-11", "2026-10-11", "dell'11 ottobre 2026"),
     ("2024-02-01", "2024-02-29", "di febbraio 2024"),
     ("2023-01-01", "2023-12-31", "del 2023"),
+    ("2019-01-01", "2021-12-31", "dal 2019 al 2021"),
+    ("2026-06-01", "2026-08-31", "da giugno ad agosto 2026"),
+    ("2026-03-01", "2026-05-31", "da marzo a maggio 2026"),
+    ("2025-12-01", "2026-02-28", "da dicembre 2025 a febbraio 2026"),
 ])
 def test_a_period_is_said_back_in_words(since, until, words):
     assert period.in_words((day(since), day(until))) == words
@@ -90,6 +105,10 @@ def test_a_period_is_said_back_in_words(since, until, words):
     ("photos from May 20 to July 20", ""),
     ("pictures taken between the 20th of May and July 20, 2024", ""),
     ("photos of 2023", ""),
+    ("the sea last summer", "the sea"),
+    ("snow in the winter of 2024", "snow"),
+    ("photos from summer 2024", ""),
+    ("a hot spring", "a hot spring"),
     ("Japan", "Japan"),
     ("a dog on the beach", "a dog on the beach"),
     ("", ""),

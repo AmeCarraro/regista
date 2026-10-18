@@ -2,13 +2,17 @@ package app.regista
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.app.KeyguardManager
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.hardware.biometrics.BiometricManager
+import android.hardware.biometrics.BiometricPrompt
 import android.net.Uri
 import android.net.http.SslCertificate
 import android.net.http.SslError
 import android.os.Build
 import android.os.Bundle
+import android.os.CancellationSignal
 import android.provider.MediaStore
 import android.view.View
 import android.webkit.CookieManager
@@ -45,7 +49,8 @@ class MainActivity : Activity() {
     private var link: Link? = null
 
     /** The computer, when it answered last; null while it cannot be reached. */
-    @Volatile private var reached: Computer? = null
+    @Volatile var reached: Computer? = null
+        private set
 
     /** The address whose page the "Computer" tab shows. */
     private var showing: String? = null
@@ -73,7 +78,7 @@ class MainActivity : Activity() {
         setUpComputer()
         setUpPairing()
         findViewById<TextView>(R.id.tab_phone).setOnClickListener { show(PHONE) }
-        findViewById<TextView>(R.id.tab_computer).setOnClickListener { show(COMPUTER) }
+        findViewById<TextView>(R.id.tab_computer).setOnClickListener { openComputer() }
         findViewById<TextView>(R.id.status).setOnLongClickListener {
             if (memory.paired) unpair()
             true
@@ -83,6 +88,8 @@ class MainActivity : Activity() {
         // to see the pictures and where each was taken: Android asks the user once for both
         gallery.missing().takeIf { it.isNotEmpty() }?.let { requestPermissions(it, 1) }
         intent?.dataString?.let(::readInvite)?.let(::offer)
+        // after an update the copying by themselves goes on as the user left it
+        if (memory.paired && memory.autoCopy) CopyJob.plan(this, true)
     }
 
     /** The camera read the code while the app was already open. */
@@ -125,6 +132,47 @@ class MainActivity : Activity() {
         }
     }
 
+    /**
+     * The computer's tab, behind the phone's own lock, at most once a day: whoever finds this phone
+     * unlocked does not reach the computer's pictures. The search on the phone, and the copying by
+     * themselves, never ask. Not paired, the tab is the one that pairs, and opens at once.
+     */
+    private fun openComputer() {
+        if (!memory.paired || System.currentTimeMillis() - memory.unlockedAt < OPEN_FOR) return show(COMPUTER)
+        val keyguard = getSystemService(KeyguardManager::class.java)
+        if (keyguard == null || !keyguard.isDeviceSecure) {
+            say("Questo telefono non ha un blocco schermo: chi lo trova arriva alle foto del computer. Mettine uno nelle impostazioni.")
+            return show(COMPUTER)
+        }
+        if (Build.VERSION.SDK_INT >= 30) try {
+            BiometricPrompt.Builder(this)
+                .setTitle("Apri il computer")
+                .setSubtitle("Con l'impronta o il blocco schermo di questo telefono")
+                .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_WEAK or BiometricManager.Authenticators.DEVICE_CREDENTIAL)
+                .build()
+                .authenticate(
+                    CancellationSignal(),
+                    mainExecutor,
+                    object : BiometricPrompt.AuthenticationCallback() {
+                        override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) = unlocked()
+
+                        override fun onAuthenticationError(code: Int, message: CharSequence) = say(CLOSED)
+                    },
+                )
+            return
+        } catch (refused: SecurityException) {
+            // the question about the fingerprint is not allowed here: the older one, about the phone's lock, is asked instead
+        }
+        @Suppress("DEPRECATION")
+        val asking = keyguard.createConfirmDeviceCredentialIntent("Apri il computer", "Con il blocco schermo di questo telefono")
+        if (asking == null) show(COMPUTER) else startActivityForResult(asking, UNLOCK)
+    }
+
+    private fun unlocked() {
+        memory.unlocked()
+        show(COMPUTER)
+    }
+
     /** One line for the user, under both tabs. */
     private fun say(line: String) {
         findViewById<TextView>(R.id.status).text = line
@@ -136,6 +184,11 @@ class MainActivity : Activity() {
         .put("computer", memory.computer)
         .put("reachable", reached != null)
         .put("waiting", memory.offers().size)
+
+    /** Tells the phone's page that the computer's answer to one of its requests is there, to take with Phone.answer. */
+    fun answered(token: String) {
+        runOnUiThread { phonePage.evaluateJavascript("window.registaAnswered && window.registaAnswered('$token')", null) }
+    }
 
     /** Shows a picture in the phone's own viewer. */
     fun view(picture: Uri) {
@@ -233,6 +286,7 @@ class MainActivity : Activity() {
             memory,
             gallery,
             sight,
+            library,
             found = { computer ->
                 reached = computer
                 runOnUiThread { open(computer) }
@@ -259,7 +313,23 @@ class MainActivity : Activity() {
     }
 
     private fun pairingSays(line: String) {
-        findViewById<TextView>(R.id.message).text = line
+        findViewById<TextView>(R.id.message).apply {
+            text = line
+            setTextColor(getColor(R.color.bad))
+        }
+        findViewById<TextView>(R.id.code).visibility = View.GONE
+    }
+
+    /** While the computer is asked to let this phone in: what to do there, and the number to find on its page. */
+    private fun pairingShows(code: String) {
+        findViewById<TextView>(R.id.message).apply {
+            text = "Sul computer controlla che ci sia questo numero, e premi «Collega»:"
+            setTextColor(getColor(R.color.text))
+        }
+        findViewById<TextView>(R.id.code).apply {
+            text = "${code.take(3)} ${code.drop(3)}"
+            visibility = View.VISIBLE
+        }
     }
 
     /**
@@ -289,7 +359,11 @@ class MainActivity : Activity() {
             .getButton(AlertDialog.BUTTON_POSITIVE).filterTouchesWhenObscured = true
     }
 
-    /** Shows the computer the secret of the link. If it lets this phone in, the key it gives back is kept. */
+    /**
+     * Shows the computer the secret of the link, and asks to come in. The computer shows its user a
+     * number, the same this phone shows: only with the user's yes there it lets this phone in, and
+     * the key it gives then is kept.
+     */
     private fun pair(invite: Invite) {
         pairingSays("Mi collego a ${invite.computer.ifBlank { "il computer" }}…")
         findViewById<Button>(R.id.pair).isEnabled = false
@@ -297,11 +371,24 @@ class MainActivity : Activity() {
             var problem = "Non trovo il computer. Controlla che sia acceso e sulla stessa rete di questo telefono."
             for (address in invite.addresses) {
                 try {
-                    val asked = JSONObject().put("secret", invite.secret).put("name", Build.MODEL)
-                    val answer = Computer(address, invite.port, invite.fingerprint, "").ask("POST", "/phone/pair", asked)
-                    memory.remember(invite, address, answer.getString("token"), answer.optString("computer"))
-                    runOnUiThread { paired() }
-                    return@thread
+                    val computer = Computer(address, invite.port, invite.fingerprint, "")
+                    val asked = computer.ask("POST", "/phone/pair", JSONObject().put("secret", invite.secret).put("name", Build.MODEL))
+                    val code = asked.getString("code")
+                    runOnUiThread { pairingShows(code) }
+                    val ticket = JSONObject().put("ticket", asked.getString("ticket"))
+                    val until = System.currentTimeMillis() + asked.optLong("seconds", 120) * 1000
+                    problem = "Sul computer nessuno ha risposto in tempo: rifai il collegamento."
+                    while (System.currentTimeMillis() < until) {
+                        Thread.sleep(2000)
+                        val answer = computer.ask("POST", "/phone/pair/wait", ticket)
+                        if (answer.optString("state") != "paired") continue
+                        memory.remember(invite, address, answer.getString("token"), answer.optString("computer"))
+                        // the user is at the computer, with this phone in hand: its tab opens without asking now
+                        memory.unlocked()
+                        runOnUiThread { paired() }
+                        return@thread
+                    }
+                    break
                 } catch (refused: Refused) {
                     problem = refused.message ?: problem
                     break
@@ -346,6 +433,7 @@ class MainActivity : Activity() {
     /** This phone is no longer paired: by the user's choice, or because the computer forgot it. */
     private fun forgotten(why: String) {
         memory.forget()
+        CopyJob.plan(this, false)
         link?.close()
         link = null
         reached = null
@@ -379,6 +467,10 @@ class MainActivity : Activity() {
     /** The user answered Android's question. The computer is told which pictures left, or that none did. */
     override fun onActivityResult(request: Int, result: Int, data: Intent?) {
         super.onActivityResult(request, result, data)
+        if (request == UNLOCK) {
+            if (result == RESULT_OK) unlocked() else say(CLOSED)
+            return
+        }
         if (request != TRASH) return
         val asked = question ?: return
         question = null
@@ -409,5 +501,13 @@ class MainActivity : Activity() {
 
         /** The name of Android's question about the trash, to recognise its answer. */
         const val TRASH = 2
+
+        /** The name of Android's question about the phone's own lock, before the computer's tab opens. */
+        const val UNLOCK = 3
+
+        /** How long the phone's own lock, once given, opens the computer's tab: a day. */
+        const val OPEN_FOR = 24 * 60 * 60 * 1000L
+
+        const val CLOSED = "Senza lo sblocco del telefono la scheda del computer resta chiusa."
     }
 }

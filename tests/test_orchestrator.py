@@ -560,6 +560,47 @@ def test_throwing_away_pictures_of_the_phone_is_proposed_as_a_copy_here_and_then
     assert events[-1]["memory"].endswith("and then move them to the trash of the phone (2 photos). Nothing was done: the user must confirm.")
 
 
+def test_a_phone_with_no_trash_is_offered_a_copy_and_told_why(monkeypatch, phones):
+    # an Android older than 11 has no trash an app can ask for
+    phones.running(phones.devices[0], "24")
+    script(monkeypatch, [form("trash_photos", "something blue")])
+
+    events, _ = ask("elimina dal telefono le foto blu", phones=phones, actions=Changes())
+
+    assert (proposed(events)["action"], proposed(events)["folder"]) == ("fetch", "Dal telefono")
+    assert said(events) == (
+        "Questo telefono non ha un cestino che io possa usare (serve Android 11 o più recente), quindi non posso toglierle: posso solo copiarle. "
+        "Copio dal telefono al computer queste 2 foto, nella cartella «Dal telefono»? Sul telefono restano dove sono."
+    )
+    assert "cannot be taken off it" in events[-1]["memory"]
+    # a newer one is asked as before
+    phones.running(phones.devices[0], "34")
+    script(monkeypatch, [form("trash_photos", "something blue")])
+    assert proposed(ask("elimina dal telefono le foto blu", phones=phones, actions=Changes())[0])["action"] == "clear"
+
+
+def test_a_request_typed_on_the_phone_finds_its_pictures_named_as_the_phone_names_them(monkeypatch, phones):
+    # another phone, whose pictures are not this one's answer
+    phones.devices.append({"id": "d2", "name": "Tablet", "key": "", "paired": "", "seen": ""})
+    phones.add("d2", [shot("1", "blue", name="tablet.jpg")])
+    seen = script(monkeypatch, [form("find_photos", "something blue")])
+
+    found = asyncio.run(orchestrator.on_the_phone("le foto blu", "d1", phones, None, [GRANITE], LAPTOP, {}))
+
+    assert sorted(found["sure"] + found["maybe"]) == ["1", "2"]
+    assert found["words"].startswith("Ho trovato") and found["model"] == "granite4.1:3b"
+    assert seen[0]["messages"][-1] == {"role": "user", "content": "le foto blu"}
+
+
+def test_the_phone_answers_alone_when_the_computer_has_nothing_to_add(monkeypatch, phones):
+    script(monkeypatch, [ANSWER])
+    # a request with nothing to look for
+    assert asyncio.run(orchestrator.on_the_phone("ciao", "d1", phones, None, [GRANITE], LAPTOP, {})) is None
+    # no model that can direct, or a phone whose pictures are not known here
+    assert asyncio.run(orchestrator.on_the_phone("le foto blu", "d1", phones, None, [POET], LAPTOP, {})) is None
+    assert asyncio.run(orchestrator.on_the_phone("le foto blu", "d9", phones, None, [GRANITE], LAPTOP, {})) is None
+
+
 def test_the_ones_on_screen_are_taken_off_the_phone_when_they_are_its_pictures(monkeypatch, phones):
     script(monkeypatch, [form("trash_photos", "")])
     on_screen = [phones.photos[0]["id"]]

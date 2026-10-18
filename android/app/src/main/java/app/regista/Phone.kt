@@ -7,6 +7,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.io.IOException
+import java.util.concurrent.ConcurrentHashMap
+import kotlin.concurrent.thread
 
 /**
  * The phone's own screen: a page that travels inside the app (built from web/src/telefono into
@@ -21,6 +23,9 @@ class Phone(
     private val memory: Memory,
     private val sight: Sight,
 ) {
+    // the computer's answers to requests typed here, until the page takes them
+    private val answers = ConcurrentHashMap<String, String>()
+
     @JavascriptInterface
     fun pictures(): String = library.json()
 
@@ -53,6 +58,44 @@ class Phone(
     fun scores(sentence: String): String {
         if (!sight.ready || sentence.isBlank()) return "null"
         return library.scores(sight.sentence(sentence.take(500)))
+    }
+
+    /**
+     * Asks the computer about a request typed here, if it answers: its director understands more
+     * than the phone can by itself. The page is told when the answer is there, by `token`, and
+     * then takes it (answer); it is null when the computer has none.
+     */
+    @JavascriptInterface
+    fun ask(text: String, token: String) {
+        if (!TOKEN.matches(token)) return
+        val computer = app.reached
+        thread(name = "ask") {
+            answers[token] = try {
+                computer?.ask("POST", "/phone/ask", JSONObject().put("text", text.take(500)))?.opt("answer")?.toString() ?: "null"
+            } catch (unreachable: IOException) {
+                "null"
+            }
+            app.answered(token)
+        }
+    }
+
+    @JavascriptInterface
+    fun answer(token: String): String = answers.remove(token) ?: "null"
+
+    /** Whether the new pictures go to the computer by themselves, and when they last did: {"on", "at", "count"}. */
+    @JavascriptInterface
+    fun autoCopy(): String = JSONObject().put("on", memory.autoCopy).put("at", memory.copiedAt).put("count", memory.copiedCount).toString()
+
+    /**
+     * Starts or stops the copying of the new pictures by themselves. They are the ones added from now
+     * on: the pictures already on the phone stay where they are.
+     */
+    @JavascriptInterface
+    fun setAutoCopy(on: Boolean) {
+        if (on && !memory.paired) return
+        if (on && !memory.autoCopy) memory.autoAfter = gallery.newest()
+        memory.autoCopy = on
+        CopyJob.plan(app, on)
     }
 
     @JavascriptInterface
@@ -111,6 +154,9 @@ class Phone(
     }
 
     companion object {
+        // what the page names an answer it waits for by: a few letters and figures, nothing that could be code
+        private val TOKEN = Regex("[a-z0-9]{1,24}")
+
         // a name reserved for pages that an app shows from its own files: no site in the world answers to it
         const val HOST = "appassets.androidplatform.net"
         const val START = "https://$HOST/telefono/telefono.html"

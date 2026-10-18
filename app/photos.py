@@ -20,6 +20,7 @@ from PIL import Image, ImageOps
 
 from actions import NOT_LIBRARY
 from places import position_of
+from trips import trips
 
 KINDS = {".jpg", ".jpeg", ".png", ".webp"}
 BATCH = 16
@@ -30,11 +31,84 @@ THUMB = 384
 # So above SURE it is almost always a match, and between the two it is a "maybe".
 SURE = 0.235
 MAYBE = 0.215
+# Two pictures are copies of one another when the model finds them this alike AND their look in pixels
+# (look_of: 64 bits) is this close. Measured on the 200 sample pictures and on changed copies of them:
+# a copy saved again, made smaller, brighter or black and white was 0 to 5 bits away and at least
+# 0.73 alike (made very small), 0.89 or more otherwise; a copy cut 5% at the edges 4 to 15 bits away.
+# Two different pictures were at least 14 bits apart, and up to 0.95 alike (two golf balls on grass):
+# what the model sees alone takes them for copies, the bits alone do not know what is shown.
+TWIN_ALIKE = 0.85
+TWIN_BITS = 10
 
 
 def photo_id(relative: str) -> str:
     """A short name for a picture that does not give its path away and does not change between runs."""
     return hashlib.sha1(relative.encode()).hexdigest()[:12]
+
+
+def look_of(picture: Image.Image) -> str:
+    """How a picture looks in pixels, in 64 bits as 16 hex figures: whether each of 8×9 grey squares is brighter than the one on its left.
+
+    It stays the same for a copy saved again, made smaller or brighter, and is far from it for another picture.
+    """
+    small = np.asarray(picture.convert("L").resize((9, 8), Image.LANCZOS), dtype=np.int16)
+    return np.packbits(small[:, 1:] > small[:, :-1]).tobytes().hex()
+
+
+def looked(file: Path) -> dict:
+    """The look of a picture file, and how many pixels it has. Fast: from the reduced copy a JPEG gives without being read whole."""
+    with Image.open(file) as image:
+        pixels = image.width * image.height
+        image.draft("RGB", (64, 64))
+        return {"look": look_of(ImageOps.exif_transpose(image)), "pixels": pixels}
+
+
+def _worth(entry: dict) -> tuple:
+    """Which of two copies is kept, the first in this order: more pixels, a larger file, taken earlier, a shorter name."""
+    try:
+        # on this computer the stamp starts with the size of the file
+        size = int(str(entry.get("stamp", "")).split("-")[0]) if "path" in entry else 0
+    except ValueError:
+        size = 0
+    return (-entry.get("pixels", 0), -size, entry.get("day") or "9999", len(entry["name"]), entry["name"])
+
+
+def twins(entries: list[dict], vectors: np.ndarray, period: tuple | None = None) -> list[list[int]]:
+    """Groups of pictures that are copies of one another, as positions in `entries`, the one to keep first.
+
+    Each entry has its "look" and "name"; a picture with no look is left out. With a `period`, only the
+    groups with a picture taken in it: a copy received in a chat later has the day it arrived.
+    """
+    inside = [position for position, entry in enumerate(entries) if entry.get("look")]
+    if len(inside) < 2:
+        return []
+    alike = vectors[inside]
+    bits = np.unpackbits(np.frombuffer(bytes.fromhex("".join(entries[position]["look"] for position in inside)), dtype=np.uint8).reshape(len(inside), 8), axis=1)
+    parent = list(range(len(inside)))
+
+    def root(node: int) -> int:
+        while parent[node] != node:
+            parent[node] = parent[parent[node]]
+            node = parent[node]
+        return node
+
+    # by blocks of rows: the whole table of how alike every two pictures are would not fit in memory
+    for start in range(0, len(inside), 512):
+        rows, columns = np.nonzero(alike[start:start + 512] @ alike.T >= TWIN_ALIKE)
+        rows = rows + start
+        pairs = rows < columns
+        rows, columns = rows[pairs], columns[pairs]
+        close = np.count_nonzero(bits[rows] != bits[columns], axis=1) <= TWIN_BITS
+        for one, other in zip(rows[close], columns[close]):
+            parent[root(int(one))] = root(int(other))
+    groups: dict[int, list[int]] = {}
+    for at in range(len(inside)):
+        groups.setdefault(root(at), []).append(inside[at])
+    found = [sorted(members, key=lambda position: _worth(entries[position])) for members in groups.values() if len(members) > 1]
+    if period:
+        since, until = period[0].isoformat(), period[1].isoformat()
+        found = [group for group in found if any(since <= entries[position].get("day", "") <= until for position in group)]
+    return found
 
 
 def day_of(file: Path) -> str:
@@ -121,11 +195,18 @@ class PhotoIndex:
     def _noted(self, file: Path) -> dict:
         """What is written in a picture about itself: the day it was taken, and where, if its camera knew."""
         position = position_of(file)
+        country, region = self.places.where(position) if self.places else ("", "")
+        try:
+            seen = looked(file)
+        except (OSError, ValueError, Image.DecompressionBombError):
+            seen = {"look": "", "pixels": 0}  # not a picture that can be read: it has no look, and is nobody's copy
         return {
             "day": day_of(file),
             "lat": position[0] if position else None,
             "lon": position[1] if position else None,
-            "country": self.places.of(position) if self.places else "",
+            "country": country,
+            "region": region,
+            **seen,
         }
 
     def _files(self) -> list[Path]:
@@ -167,7 +248,8 @@ class PhotoIndex:
             if relative in known and known[relative][0]["stamp"] == stamp:
                 # a picture read before days and places were kept gets them now: they are written in the file,
                 # and the picture itself is not read again
-                kept.append(known[relative][0] if "lat" in known[relative][0] else {**known[relative][0], **self._noted(file)})
+                noted = all(key in known[relative][0] for key in ("day", "lat", "region", "look"))
+                kept.append(known[relative][0] if noted else {**known[relative][0], **self._noted(file)})
                 vectors.append(known[relative][1])
             else:
                 todo.append((file, {"id": photo_id(relative), "path": relative, "stamp": stamp, **self._noted(file)}))
@@ -214,6 +296,19 @@ class PhotoIndex:
         entries = [{**photo, "name": Path(photo["path"]).name} for photo in photos]
         only = self.places.inside(spot, entries) if spot and self.places else None
         return closest(vectors, self.embedder.text(description) if description else None, entries, limit, period, only)
+
+    def twins(self, period: tuple | None = None) -> list[list[dict]]:
+        """The pictures that are copies of one another, in groups, the one to keep first: each {"id", "name", "day"}."""
+        with self._swap:
+            photos, vectors = self.photos, self.vectors
+        entries = [{**photo, "name": Path(photo["path"]).name} for photo in photos]
+        return [[{key: entries[position].get(key, "") for key in ("id", "name", "day")} for position in group] for group in twins(entries, vectors, period)]
+
+    def trips(self) -> list[dict]:
+        """The trips the pictures tell of, the latest first (trips.py)."""
+        with self._swap:
+            photos = self.photos
+        return trips([{**photo, "name": Path(photo["path"]).name} for photo in photos], self.places)
 
     def forget(self, identifiers: list[str]) -> None:
         """Drops pictures from the index at once, without waiting for the folder to be read again."""

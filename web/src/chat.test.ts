@@ -133,6 +133,28 @@ test('a proposal says what stops it from being carried out', () => {
   expect(undo.picked).toEqual([])
 })
 
+test('the albums of the trips are named after them and start with every picture ticked', () => {
+  const albums = proposalOf(
+    play([
+      {
+        type: 'proposal',
+        action: 'albums',
+        folder: '',
+        photos: [{ id: 'a', name: 'a.jpg' }, { id: 'b', name: 'b.jpg' }, { id: 'c', name: 'c.jpg' }],
+        albums: [
+          { folder: 'Giappone, maggio 2026', ids: ['a', 'b'] },
+          { folder: 'Sardegna, agosto 2025', ids: ['c'] },
+        ],
+      },
+    ]),
+  )
+
+  expect(albums.picked).toEqual(['a', 'b', 'c'])
+  // no folder to write: each album has its trip's name
+  expect(missing(albums)).toBe('')
+  expect(missing({ ...albums, picked: [] })).toMatch(/nessuna foto/)
+})
+
 test('"these" are the pictures of the last search that are still there', () => {
   const dogs = play([{ type: 'photos', ...found, sure: [{ id: 'a', name: 'a.jpg', score: 0.3 }, { id: 'b', name: 'b.jpg', score: 0.3 }], maybe: [{ id: 'c', name: 'c.jpg', score: 0.22 }] }])
   const unsure = { ...play([{ type: 'photos', ...found, sure: [], maybe: [{ id: 'x', name: 'x.jpg', score: 0.22 }] }]), id: 4 }

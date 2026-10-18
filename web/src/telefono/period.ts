@@ -11,6 +11,10 @@ export type Period = [Day, Day]
 
 export const MONTHS = ['gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno', 'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre']
 const MONTH = `(${MONTHS.join('|')})`
+// the seasons by the month they begin in: whole months, as weather services count them
+const SEASONS: Record<string, number> = { primavera: 3, estate: 6, autunno: 9, inverno: 12 }
+export const SEASON_NAMES = Object.keys(SEASONS)
+const SEASON = `(${SEASON_NAMES.join('|')})`
 const DAY = '(\\d{1,2})[º°]?'
 const YEAR = '((?:19|20)\\d{2})'
 const FROM = "\\b(?:dal|dall['’]|da|tra il|tra l['’]|fra il|fra l['’])\\s*"
@@ -29,6 +33,9 @@ const ONE_DAY_NUMBERS = /\b(\d{1,2})[/.-](\d{1,2})[/.-]((?:19|20)\d{2})\b/
 const ONE_MONTH = new RegExp(`\\b${MONTH}(?:\\s+(?:del\\s+)?${YEAR})?`)
 const ONE_YEAR = new RegExp(`\\b(?:del|nel|dell['’]anno|anno)\\s+${YEAR}\\b`)
 const LAST = /\bultim[ie]\s+(\d{1,3})\s+(giorni|settimane|mesi)\b/
+// a season: "l'estate del 2024", and "l'estate scorsa", "quest'inverno", "d'estate"
+const SEASON_YEAR = new RegExp(`\\b${SEASON}\\s+(?:del\\s+)?${YEAR}\\b`)
+const ONE_SEASON = new RegExp(`\\b${SEASON}\\b`)
 
 /** A day that exists, or an error: the 31st of February is not a day anyone can mean. */
 function made(year: number, month: number, day: number): Day {
@@ -69,6 +76,13 @@ function yearsBack(day: Day, years: number): Day {
   } catch {
     return { year: day.year - years, month: day.month, day: 28 }
   }
+}
+
+/** A season of a year. The winter of a year is the one that ends in it: the winter of 2024 is from December 2023. */
+function season(name: string, year: number): Period {
+  const first = SEASONS[name]
+  if (first === 12) return [made(year - 1, 12, 1), monthEnd(year, 2)]
+  return [made(year, first, 1), monthEnd(year, first + 2)]
 }
 
 function fullYear(text: string | undefined): number | null {
@@ -121,6 +135,17 @@ export function read(written: string, today: Day): Period | null {
       const [first, last] = [Number(found[1]), Number(found[2])].sort((one, other) => one - other)
       return [made(first, 1, 1), made(last, 12, 31)]
     }
+    if ((found = SEASON_YEAR.exec(text))) return season(found[1], Number(found[2]))
+    if ((found = ONE_SEASON.exec(text))) {
+      const name = found[1]
+      if (/\b(?:anno scorso|scorso anno)\b/.test(text)) return season(name, today.year - 1)
+      // "l'estate scorsa" is the last one that is over; "quest'estate" and "d'estate", the last one that has begun
+      const over = /\b(?:scors|passat)[ao]\b/.test(text)
+      for (const year of [today.year + 1, today.year, today.year - 1]) {
+        const [since, until] = season(name, year)
+        if (over ? after(today, until) : !after(since, today)) return [since, until]
+      }
+    }
 
     const monday = plusDays(today, -((toDate(today).getUTCDay() + 6) % 7))
     if (/\bl['’]altro ?ieri\b/.test(text)) return [plusDays(today, -2), plusDays(today, -2)]
@@ -166,14 +191,24 @@ export function read(written: string, today: Day): Period | null {
   return null
 }
 
-/** A period as it is said in Italian after "le foto": "di agosto 2024", "dal 20 maggio al 20 luglio 2026". */
+/**
+ * A period as it is said in Italian after "le foto": "di agosto 2024", "da giugno ad agosto 2026",
+ * "dal 20 maggio al 20 luglio 2026". Whole months are said as months: a season is said by the
+ * months it is made of, so that the user hears which ones were looked in.
+ */
 export function inWords([since, until]: Period): string {
   const name = (day: Day) => MONTHS[day.month - 1]
   // "dell'1", "dell'8", "dell'11": the days whose name starts with a vowel
   const vowel = (day: Day) => [1, 8, 11].includes(day.day)
   if (iso(since) === iso(until)) return `${vowel(since) ? "dell'" : 'del '}${since.day} ${name(since)} ${since.year}`
-  if (since.day === 1 && since.month === 1 && until.day === 31 && until.month === 12 && since.year === until.year) return `del ${since.year}`
-  if (since.day === 1 && iso(until) === iso(monthEnd(since.year, since.month))) return `di ${name(since)} ${since.year}`
+  if (since.day === 1 && since.month === 1 && until.day === 31 && until.month === 12) {
+    return since.year === until.year ? `del ${since.year}` : `dal ${since.year} al ${until.year}`
+  }
+  if (since.day === 1 && iso(until) === iso(monthEnd(until.year, until.month))) {
+    if (since.year === until.year && since.month === until.month) return `di ${name(since)} ${since.year}`
+    const first = name(since) + (since.year === until.year ? '' : ` ${since.year}`)
+    return `da ${first} ${name(until).startsWith('a') ? 'ad' : 'a'} ${name(until)} ${until.year}`
+  }
   const first = `${since.day} ${name(since)}` + (since.year === until.year ? '' : ` ${since.year}`)
   return `${vowel(since) ? "dall'" : 'dal '}${first} ${vowel(until) ? "all'" : 'al '}${until.day} ${name(until)} ${until.year}`
 }

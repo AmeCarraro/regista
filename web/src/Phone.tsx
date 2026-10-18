@@ -1,9 +1,12 @@
-import { useEffect, useState } from 'react'
-import { forgetPhone, invitePhone } from './api.ts'
+import { useEffect, useRef, useState } from 'react'
+import { answerPhone, forgetPhone, invitePhone } from './api.ts'
 import type { Device, Invite, PhoneState } from './api.ts'
 import * as icons from './icons.tsx'
 
 const OPEN_DOOR = '.\\run.ps1 -Phone'
+// a new code every half minute, for five minutes at most: a picture taken of the screen is soon of no use
+const RENEW = 30_000
+const SHOWN_FOR = 5 * 60_000
 
 function clock(when: string): string {
   const date = new Date(when)
@@ -54,32 +57,53 @@ function DeviceRow({ device, onGone }: { device: Device; onGone: () => void }) {
 }
 
 /**
- * The phones that may talk to this computer, and the way to let one in: a code to
- * point the phone at. The code is good for a few minutes and for one phone.
+ * The phones that may talk to this computer, and the way to let one in: a code to point the
+ * phone at, which renews itself every half minute. The phone that reads it asks to come in, and
+ * comes in only with a yes given here, to the request that shows the number the phone shows.
  */
 export default function PhoneCard({ phone, onChange }: { phone: PhoneState | null; onChange: () => void }) {
-  // the code on show, with how many phones were in when it was made
-  const [made, setMade] = useState<{ invite: Invite; paired: number } | null>(null)
+  // the code on show, with how many phones were in when the codes began, and since when
+  const [made, setMade] = useState<{ invite: Invite; paired: number; since: number } | null>(null)
   const [problem, setProblem] = useState('')
   const [copied, setCopied] = useState(false)
   const paired = phone?.devices.length ?? 0
-  // the code has done its job when a phone comes in
-  const invite = made && made.paired === paired ? made.invite : null
+  const pending = phone?.pending ?? []
+  // the code has done its job when a phone asks to come in, or comes in
+  const invite = made && made.paired === paired && pending.length === 0 ? made.invite : null
+  const refresh = useRef(onChange)
+  refresh.current = onChange
 
-  // and it is of no use once its time is up
+  // a new one every half minute, for a few minutes
   useEffect(() => {
-    if (!made) return
-    const timer = setTimeout(() => setMade(null), made.invite.seconds * 1000)
+    if (!invite || !made) return
+    const timer = setTimeout(() => (Date.now() - made.since < SHOWN_FOR ? ask(made) : setMade(null)), RENEW)
     return () => clearTimeout(timer)
-  }, [made])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [invite, made])
 
-  function ask() {
+  // while a phone may be asking, what the computer knows of the phones is asked again often
+  useEffect(() => {
+    if (!invite && pending.length === 0) return
+    const timer = setInterval(() => refresh.current(), 2000)
+    return () => clearInterval(timer)
+  }, [invite, pending.length])
+
+  function ask(before: { paired: number; since: number } | null = null) {
     setProblem('')
     setCopied(false)
     invitePhone().then(
-      (fresh) => setMade({ invite: fresh, paired }),
+      (fresh) => setMade({ invite: fresh, paired: before?.paired ?? paired, since: before?.since ?? Date.now() }),
       (error: unknown) => setProblem(error instanceof Error ? error.message : String(error)),
     )
+  }
+
+  function answer(request: string, yes: boolean) {
+    // either way the codes on show are of no more use: the computer stopped taking them
+    setMade(null)
+    answerPhone(request, yes).then(onChange, (error: unknown) => {
+      setProblem(error instanceof Error ? error.message : String(error))
+      onChange()
+    })
   }
 
   function copy(text: string) {
@@ -113,12 +137,31 @@ export default function PhoneCard({ phone, onChange }: { phone: PhoneState | nul
               ))}
             </ul>
           )}
+          {pending.map((one) => (
+            <div className="pending" key={one.id} role="alert">
+              <p>
+                <b>{one.name}</b> chiede di collegarsi. Sul telefono deve esserci questo numero:
+              </p>
+              <p className="pending-code mono">
+                {one.code.slice(0, 3)} {one.code.slice(3)}
+              </p>
+              <div className="pending-answers">
+                <button type="button" className="go" onClick={() => answer(one.id, true)}>
+                  Collega
+                </button>
+                <button type="button" className="quiet-button" onClick={() => answer(one.id, false)}>
+                  Rifiuta
+                </button>
+              </div>
+              <p className="fine">Se il numero è diverso, o se non stai collegando un telefono adesso, rifiuta.</p>
+            </div>
+          ))}
           {invite ? (
             <div className="invite">
               <img src={invite.qr} alt="Codice per collegare il telefono" />
               <p className="fine">
-                Apri la fotocamera del telefono e inquadra il codice: si apre Regista e si collega. Vale {Math.round(invite.seconds / 60)} minuti,
-                per un solo telefono.
+                Apri la fotocamera del telefono e inquadra il codice: si apre Regista. Poi qui ti chiedo di confermare, con un numero da
+                controllare sul telefono. Il codice cambia ogni 30 secondi: chi lo fotografa non può usarlo.
               </p>
               <button type="button" className="command mono" onClick={() => copy(invite.link)} title="Copia il collegamento">
                 <i>{invite.link}</i>
@@ -127,11 +170,19 @@ export default function PhoneCard({ phone, onChange }: { phone: PhoneState | nul
               <p className="fine">Se la fotocamera non lo legge, copia il collegamento e incollalo nell'app.</p>
             </div>
           ) : (
-            <button type="button" className="quiet-button" onClick={ask}>
-              <icons.Phone /> {paired > 0 ? 'Collega un altro telefono' : 'Collega un telefono'}
-            </button>
+            pending.length === 0 && (
+              <button type="button" className="quiet-button" onClick={() => ask()}>
+                <icons.Phone /> {paired > 0 ? 'Collega un altro telefono' : 'Collega un telefono'}
+              </button>
+            )
           )}
-          {problem && <p className="fine warn">Non sono riuscito a preparare il codice: {problem}</p>}
+          {problem && <p className="fine warn">Non ci sono riuscito: {problem}</p>}
+          {phone.refused.count > 0 && (
+            <p className="fine warn">
+              Tentativi rifiutati alla porta dei telefoni: {phone.refused.count.toLocaleString('it-IT')}, l'ultimo {clock(phone.refused.last)}:{' '}
+              {phone.refused.what}.
+            </p>
+          )}
           <p className="fine">
             Un telefono collegato manda qui una copia piccola delle sue foto, così le posso cercare. Gli originali restano sul telefono finché non
             me li chiedi. Tutto viaggia cifrato, e solo tra il telefono e questo computer.

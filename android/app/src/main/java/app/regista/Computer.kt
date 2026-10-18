@@ -2,11 +2,18 @@ package app.regista
 
 import android.content.Context
 import android.net.Uri
+import android.os.Build
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import android.util.Base64
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 import java.io.InputStream
 import java.net.URL
+import java.security.GeneralSecurityException
+import java.security.KeyStore
+import java.security.ProviderException
 import java.security.MessageDigest
 import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
@@ -14,6 +21,10 @@ import javax.net.ssl.HostnameVerifier
 import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SSLContext
 import javax.net.ssl.X509TrustManager
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
 
 /**
  * What the link shown by the computer says: where the computer is, how to recognise it, and the
@@ -89,6 +100,8 @@ class Computer(val address: String, private val port: Int, private val fingerpri
         connection.connectTimeout = 4000
         connection.readTimeout = 60000
         if (key.isNotEmpty()) connection.setRequestProperty("Authorization", "Bearer $key")
+        // which Android this is: what the computer offers depends on it (a trash, from Android 11)
+        connection.setRequestProperty("X-Regista-Android", Build.VERSION.SDK_INT.toString())
         return connection
     }
 
@@ -147,11 +160,31 @@ class Computer(val address: String, private val port: Int, private val fingerpri
     }
 }
 
-/** What this phone remembers of the computer it was paired with. In the app's own storage, which no other app can read. */
+/**
+ * What this phone remembers of the computer it was paired with. In the app's own storage, which no
+ * other app can read; and the key that lets the phone into the computer is kept there locked, by a
+ * lock that Android keeps in its own safe and never lets out of it (the Android Keystore): a copy of
+ * the app's files does not carry a key anyone can use.
+ */
 class Memory(context: Context) {
     private val kept = context.getSharedPreferences("computer", Context.MODE_PRIVATE)
 
-    val paired get() = kept.contains("key")
+    init {
+        // a key kept before it was locked is locked now, and the open one goes; on a phone whose safe does not work, it stays as it was
+        kept.getString("key", null)?.let { open -> lock(open)?.let { locked -> kept.edit().putString("locked_key", locked).remove("key").commit() } }
+    }
+
+    val paired get() = kept.contains("locked_key") || kept.contains("key")
+
+    /** The key that lets this phone into the computer; empty if there is none, or if it cannot be opened any more. */
+    private val key get() = kept.getString("locked_key", null)?.let(::unlock) ?: kept.getString("key", null) ?: ""
+
+    /** When the user last opened the computer's tab with the phone's own lock, in milliseconds. */
+    val unlockedAt get() = kept.getLong("unlocked_at", 0)
+
+    fun unlocked() {
+        kept.edit().putLong("unlocked_at", System.currentTimeMillis()).apply()
+    }
     val computer get() = kept.getString("computer", "") ?: ""
     val fingerprint get() = kept.getString("fingerprint", "") ?: ""
 
@@ -164,7 +197,10 @@ class Memory(context: Context) {
             .putString("addresses", ordered.joinToString(","))
             .putInt("port", invite.port)
             .putString("fingerprint", invite.fingerprint)
-            .putString("key", key)
+            .apply {
+                val locked = lock(key)
+                if (locked != null) putString("locked_key", locked).remove("key") else putString("key", key).remove("locked_key")
+            }
             .putString("computer", computer.ifBlank { invite.computer })
             .apply()
     }
@@ -173,6 +209,24 @@ class Memory(context: Context) {
     fun forget() {
         val sight = wantsSight
         kept.edit().clear().putBoolean("sight", sight).apply()
+    }
+
+    /** Whether the new pictures of this phone go to the computer by themselves, on a Wi-Fi where it answers (CopyJob). */
+    var autoCopy: Boolean
+        get() = kept.getBoolean("auto", false)
+        set(value) = kept.edit().putBoolean("auto", value).apply()
+
+    /** The newest picture there was when they began to go by themselves, or the last one put in line since: the ones after it are new. */
+    var autoAfter: Long
+        get() = kept.getLong("auto_after", Long.MAX_VALUE)
+        set(value) = kept.edit().putLong("auto_after", value).apply()
+
+    /** When pictures last went to the computer by themselves, in milliseconds, and how many. */
+    val copiedAt get() = kept.getLong("copied_at", 0)
+    val copiedCount get() = kept.getInt("copied", 0)
+
+    fun copied(count: Int) {
+        kept.edit().putLong("copied_at", System.currentTimeMillis()).putInt("copied", count).apply()
     }
 
     /** Whether the user asked for the models with which the phone looks at pictures by itself: they come from the computer. */
@@ -186,21 +240,68 @@ class Memory(context: Context) {
         return (0 until list.length()).map { list.getString(it) }
     }
 
-    @Synchronized
-    fun offer(media: List<String>) {
-        kept.edit().putString("offers", JSONArray((offers() + media).distinct()).toString()).apply()
+    // the app and the copying by themselves each have a Memory: the line of pictures is changed by one at a time
+    fun offer(media: List<String>) = synchronized(LINE) {
+        kept.edit().putString("offers", JSONArray((offers() + media).distinct()).toString()).commit()
     }
 
-    @Synchronized
-    fun offered(media: List<String>) {
+    fun offered(media: List<String>) = synchronized(LINE) {
         val sent = media.toSet()
-        kept.edit().putString("offers", JSONArray(offers().filter { it !in sent }).toString()).apply()
+        kept.edit().putString("offers", JSONArray(offers().filter { it !in sent }).toString()).commit()
     }
+
 
     /** The computer at each of its addresses, to be tried in turn. */
-    fun ways(): List<Computer> = addresses.map { Computer(it, kept.getInt("port", 8443), fingerprint, kept.getString("key", "") ?: "") }
+    fun ways(): List<Computer> {
+        val key = key
+        return addresses.map { Computer(it, kept.getInt("port", 8443), fingerprint, key) }
+    }
 
     fun worked(address: String) {
         kept.edit().putString("addresses", (listOf(address) + addresses.filter { it != address }).joinToString(",")).apply()
+    }
+
+    private companion object {
+        val LINE = Any()
+
+        /** The name of the lock in Android's safe. */
+        const val SAFE = "regista"
+
+        /** The lock, made the first time: AES in Android's safe, which uses it there and never gives it out. */
+        fun safe(): SecretKey {
+            val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+            (store.getKey(SAFE, null) as? SecretKey)?.let { return it }
+            val maker = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+            maker.init(
+                KeyGenParameterSpec.Builder(SAFE, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                    .setKeySize(256)
+                    .build(),
+            )
+            return maker.generateKey()
+        }
+
+        /** A text locked: what Android's lock made of it, after the random start it was locked with. Null where the safe does not work. */
+        fun lock(text: String): String? = try {
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, safe()) }
+            Base64.encodeToString(cipher.iv + cipher.doFinal(text.toByteArray()), Base64.NO_WRAP)
+        } catch (broken: GeneralSecurityException) {
+            null
+        } catch (broken: ProviderException) {
+            null
+        }
+
+        fun unlock(text: String): String? = try {
+            val bytes = Base64.decode(text, Base64.NO_WRAP)
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.DECRYPT_MODE, safe(), GCMParameterSpec(128, bytes, 0, 12)) }
+            String(cipher.doFinal(bytes, 12, bytes.size - 12))
+        } catch (broken: GeneralSecurityException) {
+            null
+        } catch (broken: IllegalArgumentException) {
+            null
+        } catch (broken: ProviderException) {
+            null
+        }
     }
 }

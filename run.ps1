@@ -66,16 +66,26 @@ if ($Phone) {
     if (-not $addresses) { Stop-Run 'this PC has no network address a phone could reach' }
 }
 $env:PHONE_OPEN = if ($Phone) { '1' } else { '0' }
-$env:PHONE_BIND = if ($Phone) { '0.0.0.0' } else { '127.0.0.1' }
+# The door of the phones opens on this PC's address on the home network, and on no other: on another
+# network, a cafe's Wi-Fi, that address is not there, and the door stays shut by itself.
+$env:PHONE_BIND = if ($Phone) { $addresses[0] } else { '127.0.0.1' }
 $env:HOST_ADDRESSES = $addresses -join ','
 $env:HOST_NAME = $env:COMPUTERNAME
 
-docker compose -f (Join-Path $PSScriptRoot 'compose.yaml') up -d --build
+$files = @('-f', (Join-Path $PSScriptRoot 'compose.yaml'))
+if ($Phone -and $addresses.Count -gt 1) {
+    # the other addresses (a second network card, a private network such as Tailscale) open the door there too
+    $more = Join-Path $env:TEMP 'regista-door.yaml'
+    $lines = @('services:', '  regista:', '    ports:') + @($addresses | Select-Object -Skip 1 | ForEach-Object { "      - `"$($_):8443:8443`"" })
+    Set-Content -Path $more -Value $lines -Encoding ascii
+    $files += @('-f', $more)
+}
+docker compose @files up -d --build
 if ($LASTEXITCODE -ne 0) {
     # When the door of the phones goes from open to closed, or back, Docker may still be holding its
     # port for the app that was running: a moment later it is free.
     Start-Sleep -Seconds 3
-    docker compose -f (Join-Path $PSScriptRoot 'compose.yaml') up -d
+    docker compose @files up -d
     if ($LASTEXITCODE -ne 0) { Stop-Run 'docker compose up' }
 }
 
@@ -83,7 +93,7 @@ Write-Host "`nRegista: http://127.0.0.1:8090/" -ForegroundColor Green
 $access = if ($ReadOnly) { 'read only' } else { 'trash and copies allowed, after a yes in the page' }
 Write-Host "Pictures: $($env:PHOTOS_DIR) ($access)" -ForegroundColor Green
 if ($Phone) {
-    Write-Host "Phones: can connect at $($addresses -join ', '), port 8443, after pairing from the page" -ForegroundColor Green
+    Write-Host "Phones: can connect at $($addresses -join ', '), port 8443, and only there, after pairing from the page" -ForegroundColor Green
     Write-Host "        If the phone does not find the PC, Windows Firewall may be blocking port 8443 on this network." -ForegroundColor DarkGray
 } else {
     Write-Host "Phones: the door is closed to the network (start with -Phone to open it)" -ForegroundColor DarkGray

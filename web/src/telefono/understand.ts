@@ -1,13 +1,15 @@
 // What a request typed on the phone asks for, read on the phone itself, with no model: when the
-// pictures were taken (period.ts), where (the countries by their names, the cities of a table
-// the app carries), and what else it says, which is what the pictures should show.
+// pictures were taken (period.ts), where (the countries by their names, the regions of Italy, the
+// cities of a table the app carries), and what else it says, which is what the pictures should show.
 
-import { MONTHS, read } from './period.ts'
+import { MONTHS, SEASON_NAMES, read } from './period.ts'
 import type { Day, Period } from './period.ts'
+import { REGIONS, REGION_NAMED } from './regions.ts'
 
 /** Where pictures were taken, as a request names it. */
 export type Spot =
   | { kind: 'country'; code: string; name: string }
+  | { kind: 'region'; code: string; name: string }
   | { kind: 'city'; name: string; latitude: number; longitude: number }
 
 /** What the phone knows of places (Places.kt): countries by their names, and the cities of a table. */
@@ -41,7 +43,11 @@ const FILLER = new Set(
   ).split(' '),
 )
 // the words of a period, which period.ts has read already
-const TIME = new Set([...MONTHS, ...'oggi ieri altro altroieri settimana scorsa scorso mese anno quest ultimi ultime giorni giorno settimane mesi anni'.split(' ')])
+const TIME = new Set([
+  ...MONTHS,
+  ...SEASON_NAMES,
+  ...'oggi ieri altro altroieri settimana scorsa scorso passata passato mese anno quest ultimi ultime giorni giorno settimane mesi anni'.split(' '),
+])
 // words that join the parts of the name of a place: "Città del Vaticano", "Rio de Janeiro", "Costa d'Avorio"
 const JOINS = new Set(['del', 'della', 'de', 'di', 'da', 'do', 'dos', 'das', 'la', 'las', 'los', 'el', 'e', 'y', 'sur', 'd', 'upon'])
 // words a picture often shows, and that are also the names of towns somewhere: never read as places
@@ -85,6 +91,8 @@ function place(found: Word[], places: Places): { spot: Spot; from: number; to: n
       const name = named(parts)
       const country = places.country(name.toLowerCase())
       if (country) return { spot: { kind: 'country', ...country }, from, to: from + size }
+      const region = REGION_NAMED.get(name.toLowerCase())
+      if (region) return { spot: { kind: 'region', code: region, name: REGIONS[region].name }, from, to: from + size }
       if (size === 1 && SUBJECTS.has(first.small)) continue
       const city = places.city(name)
       if (city) return { spot: { kind: 'city', ...city }, from, to: from + size }

@@ -10,6 +10,10 @@
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
     <!-- to read where a picture was taken: without it Android hands pictures over with the place taken out -->
     <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />
+    <!-- to go on copying the new pictures to the computer after the phone is switched off and on, when the user asked for it -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- to ask for the fingerprint, or the phone's own lock, before the computer's tab opens -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
     <!-- no backup: the key that lets this phone into the computer must not leave the phone -->
     <application
@@ -36,5 +40,11 @@
                 <data android:host="pair" android:scheme="regista" />
             </intent-filter>
         </activity>
+
+        <!-- the copying of the new pictures by themselves, run by Android now and then on a Wi-Fi (CopyJob) -->
+        <service
+            android:name=".CopyJob"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
     </application>
 </manifest>

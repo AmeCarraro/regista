@@ -5,11 +5,14 @@ import android.util.Base64
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.locks.ReentrantLock
 
 /**
  * Keeps the phone and the computer in step while the app is open. It finds the computer,
  * tells it which pictures the phone has and sends a small copy of the ones it does not
- * know; then it waits for requests, and sends the originals the user asked for.
+ * know, and takes back what the computer read in them; then it waits for requests, and
+ * sends the originals the user asked for.
  *
  * Nothing here changes or deletes a picture. When the user asked to take pictures off the
  * phone, and the computer says their copies are safely there, the question goes to Android,
@@ -19,6 +22,7 @@ class Link(
     private val memory: Memory,
     private val gallery: Gallery,
     private val sight: Sight,
+    private val library: Library,
     /** The computer answered: its page can be shown. */
     private val found: (Computer) -> Unit,
     /** The computer no longer answers. */
@@ -36,10 +40,18 @@ class Link(
     /** The gallery of this phone changed: pictures arrived from the computer. */
     private val changed: () -> Unit,
 ) : Thread("link") {
+    companion object {
+        /** Only one round of work with the computer at a time: the app's own, or the copying by themselves. */
+        private val ROUNDS = ReentrantLock()
+    }
+
     @Volatile private var open = true
 
     /** Set when the pictures may have changed: the computer is told again what the phone has. */
     @Volatile private var again = true
+
+    /** How many originals went to the computer in this round. */
+    @Volatile private var sentNow = 0
 
     fun close() {
         open = false
@@ -62,15 +74,29 @@ class Link(
                     pause(5000)
                     continue
                 }
-                // once at the start, when asked, and every ten minutes: pictures are taken all the time
-                if (again || System.currentTimeMillis() - told > 10 * 60_000) {
-                    again = false
-                    if (describe(reached)) told = System.currentTimeMillis()
+                // the copying by themselves may be at work, with the app closed: one at a time
+                if (!turn()) {
+                    tell("Sto già mandando le foto nuove al computer…")
+                    pause(3000)
+                    continue
                 }
-                // once the computer knows the pictures, the ones the user chose on the phone can go
-                askToTake(reached)
-                if (memory.wantsSight && !sight.ready) takeSight(reached)
-                if (!send(reached)) pause(3000)
+                val idle = try {
+                    // once at the start, when asked, and every ten minutes: pictures are taken all the time
+                    if (again || System.currentTimeMillis() - told > 10 * 60_000) {
+                        again = false
+                        if (describe(reached)) {
+                            told = System.currentTimeMillis()
+                            borrow(reached)
+                        }
+                    }
+                    // once the computer knows the pictures, the ones the user chose on the phone can go
+                    askToTake(reached)
+                    if (memory.wantsSight && !sight.ready) takeSight(reached)
+                    !send(reached)
+                } finally {
+                    ROUNDS.unlock()
+                }
+                if (idle) pause(3000)
             } catch (refused: Refused) {
                 if (refused.status == 401) {
                     shutOut()
@@ -87,6 +113,34 @@ class Link(
                 tell("Non raggiungo il computer: riprovo tra poco.")
                 pause(5000)
             }
+        }
+    }
+
+    /** The right to work with the computer now, or false when the copying by themselves has it: a moment's wait, unless woken. */
+    private fun turn(): Boolean = try {
+        ROUNDS.tryLock(1, TimeUnit.SECONDS)
+    } catch (woken: InterruptedException) {
+        false
+    }
+
+    /**
+     * One round of work with the computer, with no screen: for the copying of the new pictures while the
+     * app is closed (CopyJob). Tells the computer what the phone has, puts the new pictures in line, and
+     * sends what the computer waits for. Says how many pictures went; nothing when the app is at it already.
+     */
+    fun once(): Int {
+        if (!ROUNDS.tryLock()) return 0
+        try {
+            val reached = reach() ?: return 0
+            if (!describe(reached)) return 0
+            askToTake(reached)
+            // a few times, as the computer asks for what was just put in line
+            for (round in 1..20) {
+                if (!open || !send(reached)) break
+            }
+            return sentNow
+        } finally {
+            ROUNDS.unlock()
         }
     }
 
@@ -144,9 +198,26 @@ class Link(
             sent += batch.size
             tell("Faccio conoscere le foto al computer: $sent di ${wanted.size}")
         }
+        queueNew(photos)
         computer.ask("POST", "/phone/library/done", JSONObject())
         tell(if (photos.isEmpty()) "Su questo telefono non trovo foto." else "Il computer conosce le ${photos.size} foto di questo telefono.")
         return true
+    }
+
+    /**
+     * Takes what the computer read in the pictures this phone has not looked at yet: it read their
+     * small copies with the same model the phone has, and an old phone takes a second for each.
+     */
+    private fun borrow(computer: Computer) {
+        var kept = 0
+        for (batch in library.notLookedAt().chunked(500)) {
+            if (!open) return
+            val asked = JSONArray()
+            batch.forEach { (id, stamp) -> asked.put(JSONObject().put("id", id.toString()).put("stamp", stamp)) }
+            val vectors = computer.ask("POST", "/phone/vectors", JSONObject().put("photos", asked)).optJSONObject("vectors") ?: return
+            kept += library.keep(vectors, batch.toMap())
+        }
+        if (kept > 0) tell("Il computer mi ha detto cosa mostrano $kept foto: non devo guardarle una a una.")
     }
 
     /** Takes from the computer the two models with which this phone looks at pictures by itself. Each file is checked as it arrives. */
@@ -182,6 +253,16 @@ class Link(
             tell("Il modello è sul telefono: ora guardo le foto, una alla volta.")
             changed()
         }
+    }
+
+    /** Puts in line for the computer the pictures added to the gallery since the user asked for the new ones to go by themselves. */
+    private fun queueNew(photos: List<Photo>) {
+        if (!memory.autoCopy) return
+        val after = memory.autoAfter
+        val fresh = photos.filter { it.id > after }
+        if (fresh.isEmpty()) return
+        memory.offer(fresh.map { it.id.toString() })
+        memory.autoAfter = fresh.maxOf { it.id }
     }
 
     /** Asks the computer to take the pictures the user chose on this phone. Those it does not know yet wait for the next round. */
@@ -230,6 +311,7 @@ class Link(
                 }
                 computer.send("/phone/transfers/${transfer.getString("id")}/photos/${photo.getString("id")}", -1, stream, fingerprint)
                 sent += 1
+                sentNow += 1
                 tell("Mando le foto al computer: $sent di $total")
             }
             if (missing.length() > 0) {

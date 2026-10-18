@@ -136,6 +136,10 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="regista", docs_url=None, openapi_url=None, redoc_url=None, lifespan=lifespan)
 
 
+# the only ways in for a phone with no key yet: asking to come in, and asking whether the yes came
+PAIRING = ("/phone/pair", "/phone/pair/wait")
+CALM = "Troppi tentativi sbagliati: riprova tra un minuto."
+
 class Gate:
     """Who may come in, by the door they knock at.
 
@@ -169,7 +173,7 @@ class Gate:
 
         # an original from a phone is counted by who writes it to disk, as it arrives
         if not (scope["method"] == "PUT" and path.startswith("/phone/transfers/")):
-            most = PAIRING_BODY if path == "/phone/pair" else BODY
+            most = PAIRING_BODY if path in PAIRING else BODY
             declared = headers.get(b"content-length", "")
             if declared.isdigit() and int(declared) > most:
                 return await self._refuse(send, 413, "Questa richiesta è troppo grande.")
@@ -188,14 +192,19 @@ class Gate:
                 return await self._refuse(send, 404, "Not Found")
             return await self.inner(scope, receive, send)
 
-        if path == "/phone/pair":
+        if path in PAIRING:
+            if phones.calm:
+                return await self._refuse(send, 429, CALM)
             return await self.inner(scope, receive, send)
         shown = headers.get(b"authorization", "")
         key = shown[7:] if shown.startswith("Bearer ") else ""
         kept = SimpleCookie(headers.get(b"cookie", "")).get("regista")
         device = phones.device_of(key or (kept.value if kept else ""))
         if device is None:
-            return await self._refuse(send, 401, "Questo telefono non è collegato.")
+            # who knocked cannot be told: Docker shows every phone as coming from the same address
+            phones.knocked("una chiave sbagliata" if key or kept else "nessuna chiave")
+            return await self._refuse(send, 429 if phones.calm else 401, CALM if phones.calm else "Questo telefono non è collegato.")
+        phones.running(device, headers.get(b"x-regista-android", ""))
         if path.startswith("/api/phone"):
             return await self._refuse(send, 403, "I telefoni si collegano e si scollegano dal computer.")
         scope.setdefault("state", {})["device"] = device["id"]
@@ -204,7 +213,8 @@ class Gate:
             # the page inside the phone's app cannot show the key by itself: after the first
             # request, which the app makes with the key, the browser part carries it as a cookie
             if message["type"] == "http.response.start" and key and not kept:
-                cookie = f"regista={key}; Path=/; Max-Age=31536000; HttpOnly; Secure; SameSite=Strict"
+                # only for as long as the app is open: not written on the phone, where the key is kept locked
+                cookie = f"regista={key}; Path=/; HttpOnly; Secure; SameSite=Strict"
                 message = {**message, "headers": [*message.get("headers", []), (b"set-cookie", cookie.encode())]}
             await send(message)
 
@@ -270,6 +280,14 @@ class Pairing(BaseModel):
     name: str = Field(default="", max_length=100)
 
 
+class Ticket(BaseModel):
+    ticket: str = Field(max_length=100)
+
+
+class Answer(BaseModel):
+    yes: bool
+
+
 class Listed(BaseModel):
     id: str = Field(max_length=40)
     stamp: str = Field(default="", max_length=60)
@@ -292,6 +310,23 @@ class SmallCopy(Listed):
 
 class SmallCopies(BaseModel):
     photos: list[SmallCopy] = Field(min_length=1, max_length=BATCH)
+
+
+class Asked(BaseModel):
+    photos: list[Listed] = Field(max_length=1000)
+
+
+class Album(BaseModel):
+    folder: str = Field(min_length=1, max_length=200)
+    ids: list[str] = Field(min_length=1, max_length=10_000)
+
+
+class Albums(BaseModel):
+    albums: list[Album] = Field(min_length=1, max_length=500)
+
+
+class Typed(BaseModel):
+    text: str = Field(min_length=1, max_length=500)
 
 
 class NotSent(BaseModel):
@@ -470,6 +505,17 @@ def act(body: Change):
     return _outcome(result, gone, text, memory)
 
 
+@app.post("/api/actions/albums")
+def make_albums(body: Albums):
+    """Copies pictures into an album for each trip, all at once: one change, taken back as one. Asked by the page after a yes."""
+    groups = [(album.folder, [relative for identifier in dict.fromkeys(album.ids) if (relative := photos.relative_of(identifier))]) for album in body.albums]
+    asked = sum(len(set(album.ids)) for album in body.albums)
+    result = _carried_out(lambda: actions.albums([(folder, relatives) for folder, relatives in groups if relatives]))
+    result["missing"] += asked - sum(len(relatives) for _, relatives in groups)
+    text, memory = orchestrator.done_in_words(result)
+    return _outcome(result, [], text, memory)
+
+
 def _ask_phone(body: Change) -> dict:
     """Asks a phone for the originals of some of its pictures. They arrive later, when its app is open.
 
@@ -581,7 +627,7 @@ def transfer_state(transfer: str):
 @app.get("/api/phone")
 def phone_state():
     """Whether phones can connect, where they find this computer, and the ones that were let in."""
-    return {"open": PHONE_OPEN, "addresses": phones.addresses, "devices": phones.described()}
+    return {"open": PHONE_OPEN, "addresses": phones.addresses, "devices": phones.described(), "pending": phones.waiting(), "refused": phones.knocks()}
 
 
 @app.post("/api/phone/invite")
@@ -591,6 +637,14 @@ def invite():
     # as a picture the page can show as it is: dark on white, which is what a camera reads
     code = segno.make(made["link"], error="m").svg_data_uri(scale=5, border=2, dark="#17131f", light="#ffffff")
     return {**made, "qr": code}
+
+
+@app.post("/api/phone/pending/{request}")
+def answer_phone(request: str, body: Answer):
+    """The user's answer to a phone that asks to come in. Given only here, on this computer: never from a phone."""
+    if not phones.answer(request, body.yes):
+        raise HTTPException(status_code=404, detail="Questa richiesta non c'è più: rifai il collegamento dal telefono.")
+    return {"answered": body.yes}
 
 
 @app.post("/api/phone/devices/{device}/forget")
@@ -606,9 +660,18 @@ def forget_phone(device: str):
 
 @app.post("/phone/pair")
 def pair(body: Pairing):
-    """Lets in the phone that shows the secret of a link still good. It answers with the key the phone will show from now on."""
+    """A phone that shows the secret of a code still good asks to come in. It waits for a yes on this computer, and gets a ticket to learn it."""
     try:
         return phones.pair(body.secret, body.name)
+    except Refused as refused:
+        raise HTTPException(status_code=403, detail=str(refused))
+
+
+@app.post("/phone/pair/wait")
+def pair_wait(body: Ticket):
+    """Whether the user said yes on this computer to the phone with this ticket; with the yes, once, the key it will show from now on."""
+    try:
+        return phones.collect(body.ticket)
     except Refused as refused:
         raise HTTPException(status_code=403, detail=str(refused))
 
@@ -630,6 +693,29 @@ def library(body: Listing, request: Request):
 def small_copies(body: SmallCopies, request: Request):
     """A phone sends small copies of some of its pictures."""
     return {"kept": phones.add(request.state.device, [photo.model_dump() for photo in body.photos])}
+
+
+@app.post("/phone/vectors")
+def phone_vectors(body: Asked, request: Request):
+    """What this computer has read in some pictures of a phone: an old phone takes a second to look at each, and this was done already."""
+    return {"vectors": phones.vectors_of(request.state.device, [photo.model_dump() for photo in body.photos])}
+
+
+@app.post("/phone/ask")
+async def phone_ask(body: Typed, request: Request):
+    """A request typed on a phone's own screen, understood by this computer's director: the pictures of that phone it asks for.
+
+    "answer" is null when this computer has nothing to add, or cannot ask its models now: then the phone answers alone.
+    """
+    try:
+        installed = await llm.installed()
+        tests = selftest.load(INDEX_DIR)
+        found = await orchestrator.on_the_phone(body.text, request.state.device, phones, places, installed, catalog.hardware(installed, tests), tests)
+    except Exception:
+        # Ollama is off, or a model failed: the phone has its own answer already
+        logger.exception("a request from a phone could not be understood here")
+        found = None
+    return {"answer": found}
 
 
 @app.post("/phone/library/done")

@@ -43,6 +43,17 @@ test.each([
 })
 
 test.each([
+  ['le foto della Sardegna', 'IT.14', 'Sardegna', []],
+  ['il mare in Emilia-Romagna', 'IT.05', 'Emilia-Romagna', ['mare']],
+  ["le foto della Valle d'Aosta d'inverno", 'IT.19', "Valle d'Aosta", []],
+  ['le foto del lazio', 'IT.07', 'Lazio', []],
+])('a region of Italy is read from its name: %s', (text, code, name, rest) => {
+  const read = understand(text, TODAY, places)
+  expect(read.spot).toEqual({ kind: 'region', code, name })
+  expect(read.rest).toEqual(rest)
+})
+
+test.each([
   ['le foto di Parigi', 'Parigi', []],
   ['trovami le foto con un cane a Roma', 'Roma', ['cane']],
   ['le foto di New York di agosto 2024', 'New York', []],
@@ -79,7 +90,7 @@ const pictures: Picture[] = [
   { id: '2', name: 'kyoto.jpg', day: '2026-05-05', lat: 35.01, lon: 135.76, country: 'JP' },
   { id: '3', name: 'louvre.jpg', day: '2026-06-11', lat: 48.86, lon: 2.34, country: 'FR' },
   { id: '4', name: 'versailles.jpg', day: '2026-06-12', lat: 48.8, lon: 2.12, country: 'FR' },
-  { id: '5', name: 'colosseo.jpg', day: '2026-07-14', lat: 41.89, lon: 12.49, country: 'IT' },
+  { id: '5', name: 'colosseo.jpg', day: '2026-07-14', lat: 41.89, lon: 12.49, country: 'IT', region: 'IT.07' },
   { id: '6', name: 'screenshot.png', day: '2026-07-20' },
 ]
 const ask = (text: string) => select(pictures, understand(text, TODAY, places))
@@ -92,6 +103,13 @@ test('the pictures of a country, of a city and of a period are chosen and said',
   expect(ask('le foto di Parigi del 12 giugno').words).toBe('Ho trovato 1 foto scattata a Parigi del 12 giugno 2026.')
   expect(ask('le foto di luglio').pictures.map((picture) => picture.id)).toEqual(['6', '5'])
   expect(ask('le foto degli Stati Uniti').words).toBe('Non ho trovato foto scattate negli Stati Uniti tra le 6 di questo telefono.')
+})
+
+test('the pictures of a region are the ones taken there, and are said with its own word', () => {
+  expect(ask('le foto del Lazio').pictures.map((picture) => picture.id)).toEqual(['5'])
+  expect(ask('le foto del Lazio').words).toBe('Ho trovato 1 foto scattata nel Lazio.')
+  expect(ask('le foto delle Marche').words).toBe('Non ho trovato foto scattate nelle Marche tra le 6 di questo telefono.')
+  expect(ask("le foto dell'estate scorsa").words).toBe('Ho trovato 4 foto da giugno ad agosto 2026.')
 })
 
 test('without a request the newest pictures are shown', () => {
