@@ -36,6 +36,7 @@ import numpy as np
 from PIL import Image, ImageOps
 
 from actions import Refused
+from embedder import NAME as EMBEDDER_NAME
 from photos import BATCH, THUMB, closest, look_of, twins
 
 # How long the code that lets a phone ask to come in stays good: the page shows a new one every half
@@ -53,9 +54,9 @@ SMALL_COPY_PIXELS = 1600 * 1600
 ENDINGS = {"jpg", "jpeg", "png", "webp", "heic", "heif", "gif", "avif", "dng"}
 # the first Android with a trash an app can ask for: 11
 TRASH_SINCE = 30
-# The model whose fingerprints a phone can keep as its own: the phone looks at pictures with the same
-# one, CLIP ViT-B/32 as OpenAI made it (Sight.kt), so the numbers of one can be compared with the other's.
-SHARED_MODEL = "ViT-B-32-quickgelu/openai"
+# The model whose fingerprints a phone can keep as its own: the phone looks at pictures with the very
+# same files (Sight.kt), one picture at a time, so its numbers are the ones made here.
+SHARED_MODEL = EMBEDDER_NAME
 
 
 def _now() -> str:

@@ -63,7 +63,7 @@ BROWSER_RULES = [
 
 # the table of the places of the world, to know in which country and near which city a picture was taken
 places = Places(os.getenv("PLACES_DIR", "geonames"))
-photos = PhotoIndex(PHOTOS_DIR, INDEX_DIR, ClipEmbedder(), places)
+photos = PhotoIndex(PHOTOS_DIR, INDEX_DIR, ClipEmbedder(PHONE_MODELS), places)
 actions = Actions(PHOTOS_DIR)
 phones = Phones(
     str(Path(INDEX_DIR) / "phone"),

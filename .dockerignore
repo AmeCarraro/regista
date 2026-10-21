@@ -6,4 +6,6 @@ tests
 # the pictures are mounted when the app runs, never copied into the image
 foto
 web/node_modules
-web/dist
+# the page goes into the image already built (web/dist); its sources and tools do not
+web/src
+android

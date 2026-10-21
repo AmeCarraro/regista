@@ -12,6 +12,7 @@ import datetime
 import hashlib
 import io
 import json
+import re
 import threading
 from pathlib import Path
 
@@ -25,12 +26,12 @@ from trips import trips
 KINDS = {".jpg", ".jpeg", ".png", ".webp"}
 BATCH = 16
 THUMB = 384
-# How close a picture must be to a sentence to count as a match. Measured for the ViT-B/32
-# model on 200 pictures of 10 kinds: pictures that showed the thing scored from 0.22 to 0.30,
-# most of them 0.24 or more; the others were around 0.18, with a few as high as 0.26.
-# So above SURE it is almost always a match, and between the two it is a "maybe".
-SURE = 0.235
-MAYBE = 0.215
+# How close a picture must be to a sentence to count as a match: the same as on the phone. Measured
+# with the small models (embedder.py) on the 200 sample pictures and 20 captions as the director
+# writes them: from 0.26, 94% of the pictures shown are right and 77% of the right ones are shown;
+# from 0.24, 77% and 92%. So above SURE it is almost always a match, and between the two a "maybe".
+SURE = 0.26
+MAYBE = 0.24
 # Two pictures are copies of one another when the model finds them this alike AND their look in pixels
 # (look_of: 64 bits) is this close. Measured on the 200 sample pictures and on changed copies of them:
 # a copy saved again, made smaller, brighter or black and white was 0 to 5 bits away and at least
@@ -39,6 +40,9 @@ MAYBE = 0.215
 # what the model sees alone takes them for copies, the bits alone do not know what is shown.
 TWIN_ALIKE = 0.85
 TWIN_BITS = 10
+# Screenshots of the same app look alike in pixels and in what they show, whatever their words say:
+# on the tablet, four of a chat taken minutes apart were found "copies". They are never taken for copies.
+SCREENSHOT = re.compile(r"^(?:screenshot|schermata|screen[ _-]?shot)", re.IGNORECASE)
 
 
 def photo_id(relative: str) -> str:
@@ -79,7 +83,7 @@ def twins(entries: list[dict], vectors: np.ndarray, period: tuple | None = None)
     Each entry has its "look" and "name"; a picture with no look is left out. With a `period`, only the
     groups with a picture taken in it: a copy received in a chat later has the day it arrived.
     """
-    inside = [position for position, entry in enumerate(entries) if entry.get("look")]
+    inside = [position for position, entry in enumerate(entries) if entry.get("look") and not SCREENSHOT.match(entry["name"])]
     if len(inside) < 2:
         return []
     alike = vectors[inside]

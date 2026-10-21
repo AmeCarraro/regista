@@ -64,6 +64,18 @@ def test_copies_are_grouped_the_largest_first_and_other_pictures_are_left_alone(
     assert len(index.twins((today, today))) == 1
 
 
+def test_screenshots_are_never_copies_of_one_another(tmp_path):
+    folder = tmp_path / "foto"
+    folder.mkdir()
+    # the same screen twice: a chat that scrolled by a line looks the same in pixels
+    for name in ("Screenshot_20230702-104906.png", "Screenshot_20230702-105005.png", "Schermata 2024-01-01.png"):
+        drawn(4).save(folder / name)
+    index = PhotoIndex(str(folder), str(tmp_path / "index"), ColourEmbedder())
+    index.build()
+
+    assert index.twins() == []
+
+
 def test_a_library_read_before_looks_were_kept_gets_them_when_it_is_read_again(folder, tmp_path):
     index = PhotoIndex(str(folder), str(tmp_path / "index"), ColourEmbedder())
     index.build()

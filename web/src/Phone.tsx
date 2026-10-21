@@ -183,6 +183,12 @@ export default function PhoneCard({ phone, onChange }: { phone: PhoneState | nul
               {phone.refused.what}.
             </p>
           )}
+          {paired === 0 && (
+            <p className="fine">
+              Prima metti l'app sul telefono: la trovi nella cartella di Regista, in «Per il telefono». Copiala sul telefono e aprila; Android
+              chiede di permettere l'installazione.
+            </p>
+          )}
           <p className="fine">
             Un telefono collegato manda qui una copia piccola delle sue foto, così le posso cercare. Gli originali restano sul telefono finché non
             me li chiedi. Tutto viaggia cifrato, e solo tra il telefono e questo computer.

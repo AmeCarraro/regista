@@ -1,5 +1,6 @@
-﻿# Downloads, once, the two models with which the phone app looks at pictures by itself, into
-# models\phone. A paired phone then takes them from this computer, over the home network.
+﻿# Downloads, once, the two small models that read pictures and sentences, into models\phone: this
+# computer reads its pictures with them (app/embedder.py), and a paired phone takes them from here,
+# over the home network, to do the same by itself.
 #   - what sentences say, in Italian and many other languages: sentence-transformers/clip-ViT-B-32-multilingual-v1
 #     (Hugging Face, licence Apache 2.0), its version made small for phones, about 138 MB
 #   - what pictures show: CLIP ViT-B/32 (OpenAI, licence MIT), as Xenova/clip-vit-base-patch32 made it small, about 89 MB
@@ -33,4 +34,4 @@ foreach ($file in $files) {
     }
     Move-Item -LiteralPath $partial -Destination $path -Force
 }
-Write-Host 'I modelli per il telefono sono pronti: un telefono collegato li prende da qui.' -ForegroundColor Green
+Write-Host 'I modelli che leggono le foto sono pronti: li usa questo computer, e un telefono collegato li prende da qui.' -ForegroundColor Green
