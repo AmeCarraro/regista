@@ -94,13 +94,16 @@ export default function PhotoResults({ found }: { found: Found }) {
   // with nothing sure to show, the maybes are all there is: no point in hiding them
   const unsureOnly = found.sure.length === 0
   const shown = more || unsureOnly ? [...found.sure, ...found.maybe] : found.sure
-  if (shown.length === 0) return null
+  // pictures still being looked at one by one: what is confirmed is already here, the rest follows
+  const looking = (found.checking ?? 0) > 0 && (found.looked ?? 0) < (found.checking ?? 0)
+  if (shown.length === 0 && !looking) return null
   // only what is still there can be opened
   const there = shown.filter((photo) => !gone.has(photo.id))
   const at = there.findIndex((photo) => photo.id === open)
 
   return (
     <div className="results">
+      {shown.length > 0 && (
       <div className="grid">
         {shown.map((photo, index) => {
           const away = gone.has(photo.id)
@@ -126,6 +129,17 @@ export default function PhotoResults({ found }: { found: Found }) {
           )
         })}
       </div>
+      )}
+      {looking && (
+        <p className="looking" role="status">
+          <span className="dots">
+            <i />
+            <i />
+            <i />
+          </span>
+          Le guardo una per una: {found.looked ?? 0} di {found.checking}
+        </p>
+      )}
       {found.maybe.length > 0 && !unsureOnly && (
         <button type="button" className="link" onClick={() => setMore(!more)}>
           {more

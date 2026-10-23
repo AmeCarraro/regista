@@ -2,6 +2,7 @@
 
 Ollama is the only thing that knows the models. Nothing here chooses one: that is catalog.py.
 """
+import base64
 import json
 import os
 
@@ -44,6 +45,26 @@ async def installed() -> list[dict]:
                 "gpu_share": round(in_memory["size_vram"] / in_memory["size"], 2) if in_memory and in_memory["size"] else None,
             })
     return models
+
+
+async def sees(model: str, picture: bytes, question: str) -> bool:
+    """Whether a model that looks at pictures answers yes to a question about one: what it sees, not what numbers guess.
+
+    The same context size as every other call, so that a model that directs and looks too is not loaded again.
+    """
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": question, "images": [base64.b64encode(picture).decode()]}],
+        "stream": False,
+        "think": False,
+        "options": {"temperature": 0, "num_ctx": NUM_CTX, "num_predict": 3},
+    }
+    async with httpx2.AsyncClient(timeout=300) as client:
+        response = await client.post(f"{OLLAMA_URL}/api/chat", json=payload)
+    if response.status_code != 200:
+        raise RuntimeError(f"Ollama answered {response.status_code}: {response.text[:300]}")
+    answer = response.json().get("message", {}).get("content", "").strip().lower()
+    return answer.startswith(("yes", "sì", "si"))
 
 
 async def stream(model: str, messages: list[dict], max_tokens: int = 700, schema: dict | None = None):

@@ -133,6 +133,21 @@ test('a proposal says what stops it from being carried out', () => {
   expect(undo.picked).toEqual([])
 })
 
+test('pictures confirmed one by one join the reply where their day puts them, and the looking ends', () => {
+  const reply = play([
+    { type: 'photos', description: 'a pizza', sure: [], maybe: [], matching: 0, indexed: 200, partial: false, checking: 3, looked: 0 },
+    { type: 'photo', photo: { id: 'a', name: 'a.jpg', score: 0.27, day: '2024-05-01' } },
+    { type: 'looked', looked: 1, of: 3 },
+    { type: 'photo', photo: { id: 'b', name: 'b.jpg', score: 0.3, day: '2026-08-15' } },
+    { type: 'photo', photo: { id: 'c', name: 'c.jpg', score: 0.25, day: '' } },
+    { type: 'looked', looked: 3, of: 3 },
+  ])
+
+  const found = reply.parts.find((part) => part.kind === 'photos')
+  expect(found?.kind === 'photos' && found.sure.map((photo) => photo.id)).toEqual(['b', 'a', 'c'])
+  expect(found?.kind === 'photos' && [found.matching, found.looked, found.checking]).toEqual([3, 3, 3])
+})
+
 test('the albums of the trips are named after them and start with every picture ticked', () => {
   const albums = proposalOf(
     play([

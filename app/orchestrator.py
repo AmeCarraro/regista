@@ -28,7 +28,9 @@ from period import in_words as period_in_words
 from period import read as read_period
 from period import without_time
 from phone import on_phone
+from photos import LOOK_MOST, LOOK_STOP
 from places import IN_COUNTRY, REGIONS
+from understand import own_words
 
 ACTIONS = ("answer", "find_photos", "count_photos", "trash_photos", "copy_photos", "undo")
 # the decisions that would change the pictures: they are proposed, never carried out here
@@ -63,6 +65,18 @@ ALBUMS = re.compile(
     r"|\btrip\s+albums?\b",
     re.IGNORECASE,
 )
+# A request that plainly asks to see pictures, and says so: "trovami le foto con una motosega", "le foto di
+# un mangianastri". A small model sometimes takes one for a question and answers it; it is a search all the
+# same. Not "mostrami un esempio", which names no pictures, nor "le foto sono belle", nor a question on how
+# to do something: "come si cercano le foto?".
+FIND = re.compile(
+    r"^\W*(?:(?:ehi|ciao|dai|per favore)\W+)?(?:(?:trov|cerc|mostr)\w*|fammi\s+vedere|fai\s+vedere|voglio\s+vedere|vorrei\s+vedere)\b"
+    r".*\b(?:foto|fotografie|immagini|scatti)\b"
+    r"|^\W*(?:(?:tutte|solo)\s+)?(?:le\s+|delle\s+)?(?:mie\s+)?(?:foto|fotografie|immagini|scatti)\s+"
+    r"(?:di|del|dello|della|dei|degli|delle|dell['’]|d['’]|con|col|coi|da|dal|dalla|in|nel|nella|a|al|alla|sul|sulla)\b",
+    re.IGNORECASE,
+)
+HOW = re.compile(r"\b(?:come|perch[eé]|consigl\w*|spieg\w*|cos['’]\s*[eè]|cosa\s+(?:significa|vuol)|how|why)\b", re.IGNORECASE)
 # what a model may leave in a caption about the place, and that the pictures do not show
 PLACE_WORDS = re.compile(r"\b(?:on|onto|to|from|in|of)\s+(?:my\s+|the\s+)?(?:phone|smartphone|cellphone|mobile|tablet|computer|pc)\b", re.IGNORECASE)
 
@@ -88,6 +102,8 @@ DECIDE = (
     'mostrami le foto della montagna -> {"action": "find_photos", "caption": "a mountain", "folder": ""}\n'
     'solo quelle con la neve (after a search for "a mountain") -> {"action": "find_photos", "caption": "a mountain with snow", "folder": ""}\n'
     'hai delle immagini di bambini che giocano? -> {"action": "find_photos", "caption": "children playing", "folder": ""}\n'
+    'trovami una bicicletta -> {"action": "find_photos", "caption": "a bicycle", "folder": ""}\n'
+    'trovami una ricetta per la torta di mele -> {"action": "answer", "caption": "", "folder": ""}\n'
     'come faccio a fotografare la luna? -> {"action": "answer", "caption": "", "folder": ""}\n'
     'quale obiettivo mi consigli per i ritratti? -> {"action": "answer", "caption": "", "folder": ""}\n'
     'perfetto, grazie -> {"action": "answer", "caption": "", "folder": ""}\n'
@@ -130,6 +146,9 @@ DECISION_TOKENS = 80
 MOST = 300
 # the most pictures of a phone an answer for its own screen names
 PHONE_SHOWN = 120
+# the most pictures an answer shows when the request asks for all those of a period or of a place, the newest first;
+# their small copies are loaded only as the page comes to them
+EVERY = 3000
 
 NO_MODEL = "Non trovo nessun modello locale. Controlla che Ollama sia acceso e che ci sia almeno un modello installato."
 NO_PHOTOS = "Non ho ancora nessuna foto in cui cercare: metti delle foto nella cartella che mi hai indicato."
@@ -611,6 +630,80 @@ async def _albums(asked: str, photos, actions, phones):
     yield {"type": "done", "memory": f"Found {len(trips)} trips: {names}. Proposed to copy the photos of each into a folder with its name. Nothing was done: the user must confirm."}
 
 
+# What the eyes said of a picture for a description, so that a search made again does not ask again.
+_seen: dict[tuple, bool] = {}
+
+
+async def _one_by_one(library, phone: bool, caption: str, when, spot: dict | None, period: str, eyes: str, english: bool = True):
+    """A search whose pictures are looked at one by one by a model that sees, as events: the ones it confirms
+    are sent as they are confirmed, and the page keeps them the newest first.
+
+    The period and the place are kept exactly, as the pictures' own notes say them; what the pictures
+    show is first ranked by numbers (photos.to_look_at), likeliest first, and then looked at. The
+    looking stops after LOOK_STOP wrong in a row, and never asks twice about the same picture.
+    The model is asked in English, which it reads best; in Italian when the caption is not a
+    translation but the user's own words (`english` False).
+    """
+    place = "phone" if phone else "computer"
+    candidates = await asyncio.to_thread(library.to_look_at, spot["rest"], when, spot) if spot and spot["rest"] else []
+    there = bool(candidates)
+    looking_for = spot["rest"] if there else caption
+    if not there:
+        candidates = await asyncio.to_thread(library.to_look_at, caption, when, None)
+    yield {"type": "step", "tool": "find_photos", "arguments": {"description": looking_for, "place": place, "period": period, "spot": _at(spot) if there else ""}}
+    partial = False if phone else library.state["running"]
+    yield {"type": "photos", "description": looking_for, "place": place, "sure": [], "maybe": [], "matching": 0,
+           "indexed": len(library.photos), "partial": partial, "checking": len(candidates), "looked": 0}
+    if spot and not there:
+        yield {"type": "text", "text": f"Nessuna foto risulta scattata {_at(spot)}: cerco quelle che ci somigliano."}
+    if english:
+        question = f"Does this photo show {looking_for}? Answer only yes or no."
+    else:
+        question = f"Questa foto mostra: {looking_for}? Rispondi solo sì o no."
+    found, looked, wrong, broken = 0, 0, 0, ""
+    for candidate in candidates:
+        key = (place, candidate["id"], question)
+        if key not in _seen:
+            picture = await asyncio.to_thread(library.thumbnail, candidate["id"])
+            try:
+                _seen[key] = bool(picture) and await llm.sees(eyes, picture, question)
+            except Exception as exc:  # Ollama stopped, or the model failed: what was confirmed stays
+                broken = f"{type(exc).__name__}: {exc}"
+                break
+            if len(_seen) > 20_000:
+                _seen.pop(next(iter(_seen)))
+        looked += 1
+        if _seen[key]:
+            found += 1
+            wrong = 0
+            yield {"type": "photo", "photo": {"id": candidate["id"], "name": candidate["name"], "day": candidate["day"], "score": candidate["score"]}}
+        else:
+            wrong += 1
+        yield {"type": "looked", "looked": looked, "of": len(candidates)}
+        if wrong >= LOOK_STOP:
+            break
+    # the looking is over: the page stops saying it goes on
+    yield {"type": "looked", "looked": looked, "of": looked}
+    taken = f"scattat{'a' if found == 1 else 'e'} {_at(spot)}" if there else ""
+    where = " ".join(filter(None, [" sul telefono" if phone else "", taken, period])).strip()
+    where = f" {where}" if where else ""
+    if found:
+        words = f"Ho trovato {_photos(found)}{where}: le ho guardate una per una, dalla più recente."
+    elif candidates:
+        words = f"Ne ho guardate {looked}{where} una per una: nessuna mostra quello che hai chiesto."
+    else:
+        words = NO_PHOTOS if not library.photos and not phone else f"Non ho foto{where} in cui cercare."
+    if broken:
+        words += " Mi sono fermato prima della fine: il modello che guarda le foto non risponde."
+    elif found and looked == len(candidates) == LOOK_MOST and wrong < LOOK_STOP:
+        words += f" Mi sono fermato dopo averne guardate {LOOK_MOST}: potrebbero essercene altre."
+    if partial:
+        words += " Sto ancora leggendo le foto, quindi il risultato è parziale."
+    yield {"type": "text", "text": words}
+    memory = f'{_searched(looking_for, phone, when, spot["name"] if there else "")}: looked at {looked} one by one, {found} show it.'
+    yield {"type": "done", "memory": memory}
+
+
 async def on_the_phone(text: str, device: str, phones, places, models: list[dict], machine, tests: dict) -> dict | None:
     """A request typed on a phone's own screen, understood here: the pictures of that phone it asks for, and the words.
 
@@ -619,7 +712,7 @@ async def on_the_phone(text: str, device: str, phones, places, models: list[dict
     for what the pictures show. The pictures are named as the phone names them. None when this
     computer has nothing to add: then the phone's own answer stands.
     """
-    director = catalog.pick("tools", models, machine, tests)
+    director, _ = catalog.director_and_eyes(models, machine, tests)
     if director is None or not any(photo["device"] == device for photo in phones.photos):
         return None
     started = time.perf_counter()
@@ -685,8 +778,8 @@ async def reply(history: list[dict], wanted: str, models: list[dict], machine, t
     closes with what to remember of this turn.
     """
     started = time.perf_counter()
-    director = catalog.pick("tools", models, machine, tests)
-    writer = catalog.pick("chat", models, machine, tests, wanted)
+    director, eyes = catalog.director_and_eyes(models, machine, tests)
+    writer = catalog.writer(models, machine, tests, wanted, director)
     if writer is None:
         yield {"type": "text", "text": NO_MODEL}
         yield {"type": "done", "model": "", "seconds": 0, "memory": NO_MODEL}
@@ -704,6 +797,9 @@ async def reply(history: list[dict], wanted: str, models: list[dict], machine, t
 
     # without a model that can direct, the app can still talk
     decision = await decide(director, history) if director else {"action": "answer", "caption": "", "folder": ""}
+    if director and decision["action"] == "answer" and FIND.search(asked) and not HOW.search(asked):
+        # the model gave no caption: what the pictures should show is said in the user's own words
+        decision = {"action": "find_photos", "caption": own_words(asked), "folder": "", "own": True}
     # the place is not something a picture shows: out of the caption, whatever the model left in it
     decision["caption"] = re.sub(r"\s+", " ", PLACE_WORDS.sub(" ", decision["caption"])).strip()
     # The period a request names is read here, in its words, and not asked to the model (period.py).
@@ -757,7 +853,14 @@ async def reply(history: list[dict], wanted: str, models: list[dict], machine, t
             yield done(director, "The search could not start: no description was given.")
             return
         place = "phone" if phone else "computer"
-        result, there = await asyncio.to_thread(look, phones if phone else photos, caption, 60, when, spot)
+        if eyes and (spot["rest"] if spot else caption):
+            # what the pictures show is checked by looking at them, one by one, as they are shown
+            async for event in _one_by_one(phones if phone else photos, phone, caption, when, spot, period, eyes, not decision.get("own")):
+                yield {**event, "model": director, "seconds": round(time.perf_counter() - started, 1)} if event["type"] == "done" else event
+            return
+        # what a period or a place asks for is all of its pictures, not the first few
+        every = not (spot["rest"] if spot else caption)
+        result, there = await asyncio.to_thread(look, phones if phone else photos, caption, EVERY if every else 60, when, spot)
         if there:
             caption = spot["rest"]
         yield {"type": "step", "tool": "find_photos", "arguments": {"description": caption, "place": place, "period": period, "spot": _at(spot) if there else ""}}

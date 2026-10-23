@@ -48,7 +48,8 @@ export type Models = {
   problem?: string
 }
 
-export type Photo = { id: string; name: string; score: number }
+/** A picture found; `day` is the day it was taken, as "2024-08-15", empty when not known. */
+export type Photo = { id: string; name: string; score: number; day?: string }
 
 export type Found = {
   description: string
@@ -60,6 +61,9 @@ export type Found = {
   partial: boolean
   /** Where the pictures are: on this computer, or on a phone that sent small copies of them. */
   place?: Place
+  /** When the pictures are looked at one by one: how many there are to look at, and how many were looked at. */
+  checking?: number
+  looked?: number
 }
 
 export type Place = 'computer' | 'phone'
@@ -90,6 +94,10 @@ export type ChatEvent =
   | { type: 'text'; text: string }
   | { type: 'step'; tool: string; arguments: Record<string, unknown> }
   | ({ type: 'photos' } & Found)
+  // a picture confirmed by the model that looks at them, as soon as it is
+  | { type: 'photo'; photo: Photo }
+  // how far the looking is; when looked and of are the same, it is over
+  | { type: 'looked'; looked: number; of: number }
   | ({ type: 'proposal' } & Proposal)
   | { type: 'done'; model: string; seconds: number; tokens_per_second?: number; memory: string }
   | { type: 'error'; message: string }

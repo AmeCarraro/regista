@@ -554,6 +554,16 @@
   outline-offset: 2px;
 }
 
+/* while the pictures are looked at one by one */
+.looking {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 2px 0;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
 /* the albums of the trips: one row each, its name, how many pictures, and the first few */
 .albums {
   display: flex;

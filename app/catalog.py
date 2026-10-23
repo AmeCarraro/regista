@@ -174,6 +174,11 @@ def suggest(models: list[dict], machine: Hardware) -> dict | None:
 def describe(models: list[dict], machine: Hardware, tests: dict) -> dict:
     """Everything the page shows about the models: each one with what it is for, and who gets each job."""
     order = {job: [model["name"] for model in ranked(job, models, machine, tests)] for job in JOBS}
+    # first, what "automatic" really uses: one model for every job it does as well as the others
+    director, _ = director_and_eyes(models, machine, tests)
+    for job, first in (("tools", director), ("chat", writer(models, machine, tests, "auto", director))):
+        if first in order[job]:
+            order[job] = [first, *(name for name in order[job] if name != first)]
     listed = []
     for model in sorted(models, key=lambda model: (not can(model), -_billions(model))):
         listed.append({
@@ -193,6 +198,32 @@ def describe(models: list[dict], machine: Hardware, tests: dict) -> dict:
         # the model worth having on this computer, whether it is installed or not
         "suggested": suggest(models, machine),
     }
+
+
+def director_and_eyes(models: list[dict], machine: Hardware, tests: dict) -> tuple[str | None, str | None]:
+    """The model that directs, and the one that looks at pictures. When the one that looks directs as well as
+    the other, it does both: two would take turns in a small graphics card, each loaded again every time."""
+    director = pick("tools", models, machine, tests)
+    eyes = pick("vision", models, machine, tests)
+    if eyes and director and eyes != director:
+        named = {model["name"]: model for model in models}
+        if "tools" in can(named[eyes]) and runs_well(named[eyes], machine, tests) and _tool_score(named[eyes], tests) >= _tool_score(named[director], tests):
+            director = eyes
+    return director, eyes
+
+
+def writer(models: list[dict], machine: Hardware, tests: dict, wanted: str = "auto", director: str | None = None) -> str | None:
+    """The model that answers in words: the one the user chose if it can, else the best. With nothing chosen,
+    the director when it is as large as the best and runs well: two models would take turns in a small
+    graphics card, and the next search would wait for the director to be loaded again."""
+    best = pick("chat", models, machine, tests, wanted)
+    if wanted != "auto" or director is None or best in (None, director):
+        return best
+    named = {model["name"]: model for model in models}
+    one = named.get(director)
+    if one and "chat" in can(one) and runs_well(one, machine, tests) and _billions(one) >= _billions(named[best]):
+        return director
+    return best
 
 
 def pick(job: str, models: list[dict], machine: Hardware, tests: dict, wanted: str = "auto") -> str | None:

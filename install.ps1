@@ -6,7 +6,8 @@
 #   Docker Desktop     runs the app. If missing, installs it with winget (Windows' own installer).
 #   Ollama             runs the model that directs. The same.
 #   the director       the lightest model that does the job well on this computer: qwen3.5:4b with an
-#                      NVIDIA card of 4 GB or more, or 16 GB of memory; granite4.1:3b otherwise.
+#                      NVIDIA card of 4 GB or more, or 16 GB of memory; granite4.1:3b otherwise. Qwen also
+#                      sees: it looks at the pictures a search finds, one by one, and keeps the right ones.
 #   the picture models two small models that read pictures and sentences, here and on the phone (220 MB).
 # Nothing is downloaded or installed without a yes typed here: one yes, for the list it shows.
 # At the least: Windows 10 or 11 at 64 bits, 8 GB of memory, 10 GB free on the disk.
@@ -72,9 +73,9 @@ if ($short) { Stop-Here "Questo computer non basta per Regista: servono $($short
 # (selftest.py): qwen3.5:4b right in 17 cases of 17 and 98 decisions of 99, granite4.1:3b in 13 of 17.
 # Qwen wants a graphics card of 4 GB, or the memory to run on the processor at a bearable speed.
 if (($computer.GpuKind -eq 'nvidia' -and $computer.GpuGB -ge 4) -or $computer.RamGB -ge 16) {
-    $model = [pscustomobject]@{ Name = 'qwen3.5:4b'; Use = 'qwen3.5-testo:4b'; GB = 3.3; Why = 'il migliore che ci sta: alle prove ha capito 98 richieste su 99' }
+    $model = [pscustomobject]@{ Name = 'qwen3.5:4b'; GB = 3.3; Why = 'il migliore che ci sta: alle prove ha capito 98 richieste su 99, e guarda le foto trovate una per una' }
 } else {
-    $model = [pscustomobject]@{ Name = 'granite4.1:3b'; Use = 'granite4.1:3b'; GB = 2.1; Why = 'il più leggero che fa bene il lavoro con questa memoria' }
+    $model = [pscustomobject]@{ Name = 'granite4.1:3b'; GB = 2.1; Why = 'il più leggero che fa bene il lavoro con questa memoria' }
 }
 Say "   Modello regista: $($model.Name), $($model.Why)." 'Green'
 
@@ -90,8 +91,9 @@ try {
     $ollamaOn = $true
 } catch {}
 $ollama = $ollamaOn -or (Test-Command 'ollama')
-# a model that directs well already there is enough: nothing is downloaded twice
-$present = $models | Where-Object { $_ -in @('qwen3.5-testo:4b', 'qwen3.5:4b', 'granite4.1:3b') } | Select-Object -First 1
+# a model that directs well already there is enough: nothing is downloaded twice. A copy of Qwen made
+# without its eyes, by an earlier version of this file, is not: Qwen whole shares its files, and adds the eyes.
+$present = $models | Where-Object { $_ -in @('qwen3.5:4b', 'granite4.1:3b') } | Select-Object -First 1
 $sees = @('vision.onnx', 'text.onnx', 'vocab.txt', 'dense.safetensors') | Where-Object { -not (Test-Path (Join-Path $here "models\phone\$_")) }
 
 Say "`n2. Cosa serve" 'Cyan'
@@ -131,20 +133,6 @@ if (-not (Test-Command 'ollama')) { $env:Path += ";$env:LOCALAPPDATA\Programs\Ol
 if (-not $present) {
     ollama pull $model.Name
     if ($LASTEXITCODE -ne 0) { Stop-Here "Non sono riuscito a scaricare il modello. Riprova più tardi rilanciando questo file." }
-    if ($model.Use -ne $model.Name) {
-        # A copy without the part that looks at images, which Regista does not use: it takes 0.6 GB
-        # less, of the graphics card too. The part is the smaller of the two the model is made of.
-        $lines = @(ollama show $model.Name --modelfile)
-        $parts = @($lines | Where-Object { $_ -match '^FROM (.+)$' } | ForEach-Object { $_.Substring(5).Trim() })
-        if ($parts.Count -gt 1) {
-            $eyes = $parts | Sort-Object { (Get-Item -LiteralPath $_).Length } | Select-Object -First 1
-            $file = Join-Path $env:TEMP 'regista-modelfile'
-            [IO.File]::WriteAllLines($file, [string[]]($lines | Where-Object { $_ -ne "FROM $eyes" }))
-            ollama create $model.Use -f $file
-            if ($LASTEXITCODE -eq 0) { ollama rm $model.Name | Out-Null }
-            Remove-Item -LiteralPath $file -ErrorAction SilentlyContinue
-        }
-    }
 }
 
 if ($sees) {

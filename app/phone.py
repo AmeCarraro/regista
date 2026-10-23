@@ -37,7 +37,7 @@ from PIL import Image, ImageOps
 
 from actions import Refused
 from embedder import NAME as EMBEDDER_NAME
-from photos import BATCH, THUMB, closest, look_of, twins
+from photos import BATCH, THUMB, closest, look_of, to_look_at, twins
 
 # How long the code that lets a phone ask to come in stays good: the page shows a new one every half
 # minute, so a picture taken of the screen is soon of no use.
@@ -451,13 +451,30 @@ class Phones:
             photos, vectors = [photos[position] for position in mine], (vectors[mine] if mine else vectors[:0])
         if not photos:
             return closest(vectors, None, [], limit)
-        if spot and spot["kind"] == "region" and self.places:
+        only = self._inside(spot, photos)
+        return closest(vectors, self.embedder.text(description) if description else None, photos, limit, period, only)
+
+    def to_look_at(self, description: str, period: tuple | None = None, spot: dict | None = None, device: str | None = None) -> list[dict]:
+        """The pictures of the phones worth looking at one by one for a description, the likeliest first, of one phone or all."""
+        with self._lock:
+            photos, vectors = self.photos, self.vectors
+        if device is not None:
+            mine = [position for position, photo in enumerate(photos) if photo["device"] == device]
+            photos, vectors = [photos[position] for position in mine], (vectors[mine] if mine else vectors[:0])
+        if not photos:
+            return []
+        return to_look_at(vectors, self.embedder.text(description), photos, period, self._inside(spot, photos))
+
+    def _inside(self, spot: dict | None, photos: list[dict]) -> list[int] | None:
+        """The pictures taken in a spot, by their position in the list; None when there is no spot to be in."""
+        if not (spot and self.places):
+            return None
+        if spot["kind"] == "region":
             # pictures kept before regions were known get theirs from the position they have
             for photo in photos:
                 if "region" not in photo:
                     photo["region"] = self.places.where((photo["lat"], photo["lon"]) if photo.get("lat") is not None else None)[1]
-        only = self.places.inside(spot, photos) if spot and self.places else None
-        return closest(vectors, self.embedder.text(description) if description else None, photos, limit, period, only)
+        return self.places.inside(spot, photos)
 
     def twins(self, period: tuple | None = None) -> list[list[dict]]:
         """The pictures of the phones that are copies of one another, in groups, the one to keep first: each {"id", "name", "day"}.

@@ -1,6 +1,6 @@
 // What the chat knows that is not drawing: how the events of a reply become
 // what is on screen, and what of a conversation is sent back to the model.
-import type { ChatEvent, Found, Job, Message, ModelInfo, Models, Place, Proposal } from './api.ts'
+import type { ChatEvent, Found, Job, Message, ModelInfo, Models, Photo, Place, Proposal } from './api.ts'
 
 /**
  * A change the app proposed, and what became of it. It waits ("asked") until
@@ -88,6 +88,11 @@ export function apply(reply: Reply, event: ChatEvent): Reply {
       const { type: _, ...found } = event
       return { ...reply, parts: [...reply.parts, { kind: 'photos', ...found }] }
     }
+    case 'photo':
+      // into the pictures of the reply, where its day puts it: the newest first
+      return withPictures(reply, (found) => ({ ...found, sure: newestFirst([...found.sure, event.photo]), matching: found.matching + 1 }))
+    case 'looked':
+      return withPictures(reply, (found) => ({ ...found, looked: event.looked, checking: event.of }))
     case 'proposal': {
       const { type: _, ...proposal } = event
       const asked: Proposed = {
@@ -117,6 +122,22 @@ export function apply(reply: Reply, event: ChatEvent): Reply {
     case 'error':
       return { ...reply, status: 'error', loading: false, error: event.message }
   }
+}
+
+/** The newest first, as a gallery shows them; on the same day by name; a picture with no day at the end. */
+export function newestFirst(photos: Photo[]): Photo[] {
+  return [...photos].sort((one, other) => (other.day || '').localeCompare(one.day || '') || one.name.localeCompare(other.name))
+}
+
+/** A reply with the last pictures it shows changed. */
+function withPictures(reply: Reply, change: (found: Found) => Found): Reply {
+  const at = reply.parts.findLastIndex((part) => part.kind === 'photos')
+  if (at < 0) return reply
+  const part = reply.parts[at] as Extract<Part, { kind: 'photos' }>
+  const { kind: _, ...found } = part
+  const parts = [...reply.parts]
+  parts[at] = { kind: 'photos', ...change(found) }
+  return { ...reply, parts }
 }
 
 function shown(reply: Reply): string {

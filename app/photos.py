@@ -26,6 +26,8 @@ from trips import trips
 KINDS = {".jpg", ".jpeg", ".png", ".webp"}
 BATCH = 16
 THUMB = 384
+# the fewest pixels a picture is read with for the model, on its shorter side: twice the 224 it sees (embedder.py)
+READ = 448
 # How close a picture must be to a sentence to count as a match: the same as on the phone. Measured
 # with the small models (embedder.py) on the 200 sample pictures and 20 captions as the director
 # writes them: from 0.26, 94% of the pictures shown are right and 77% of the right ones are shown;
@@ -43,6 +45,18 @@ TWIN_BITS = 10
 # Screenshots of the same app look alike in pixels and in what they show, whatever their words say:
 # on the tablet, four of a chat taken minutes apart were found "copies". They are never taken for copies.
 SCREENSHOT = re.compile(r"^(?:screenshot|schermata|screen[ _-]?shot)", re.IGNORECASE)
+# a day written in a name: 20230812, 2023-08-12, 2023_08_12, with no other figure stuck to it
+NAMED_DAY = re.compile(r"(?<!\d)((?:19|20)\d{2})[-_.]?(0[1-9]|1[0-2])[-_.]?(0[1-9]|[12]\d|3[01])(?!\d)")
+# what is noted of each picture: a picture noted by an older version is noted again, from its file
+NOTES = 2
+# The pictures looked at one by one after the first search, by a model that sees (orchestrator.py):
+# the likeliest first, by the words and by what the sure ones look like together, and no more than
+# LOOK_MOST; the looking stops after LOOK_STOP wrong in a row. Measured on the 200 samples with the
+# eyes taken as always right: 33 looks per search found 98% of the right pictures. LOOK_MOST is there
+# for a large library, where a common subject can be in hundreds: about seven minutes of looking.
+LOOK_SHIFT = 0.35
+LOOK_MOST = 500
+LOOK_STOP = 10
 
 
 def photo_id(relative: str) -> str:
@@ -57,6 +71,14 @@ def look_of(picture: Image.Image) -> str:
     """
     small = np.asarray(picture.convert("L").resize((9, 8), Image.LANCZOS), dtype=np.int16)
     return np.packbits(small[:, 1:] > small[:, :-1]).tobytes().hex()
+
+
+def opened(file: Path, side: int) -> Image.Image:
+    """A picture upright and in colour, with at least `side` pixels each way if it has them. A JPEG is reduced
+    while it is decoded, by a half, a quarter or an eighth: many times faster than reading it whole."""
+    image = Image.open(file)
+    image.draft("RGB", (side, side))
+    return ImageOps.exif_transpose(image).convert("RGB")
 
 
 def looked(file: Path) -> dict:
@@ -115,8 +137,22 @@ def twins(entries: list[dict], vectors: np.ndarray, period: tuple | None = None)
     return found
 
 
+def day_in_name(name: str) -> str:
+    """The day a name says a picture was taken: "IMG_20230812_142530.jpg", "IMG-20230812-WA0003.jpg",
+    "WhatsApp Image 2023-08-12 at 14.25.30.jpeg", "Screenshot_20230702-104906.png". Empty when it says none."""
+    for found in NAMED_DAY.finditer(name):
+        try:
+            day = datetime.date(int(found.group(1)), int(found.group(2)), int(found.group(3)))
+        except ValueError:
+            continue
+        if datetime.date(1990, 1, 1) <= day <= datetime.date.today() + datetime.timedelta(days=1):
+            return day.isoformat()
+    return ""
+
+
 def day_of(file: Path) -> str:
-    """The day a picture was taken, as "2024-08-15": the one the camera wrote in it, or else the date of the file."""
+    """The day a picture was taken, as "2024-08-15": the one the camera wrote in it; else the one in its name,
+    which a picture received in a chat keeps when the camera's note is gone; else the date of the file."""
     try:
         with Image.open(file) as image:
             written = image.getexif()
@@ -126,7 +162,7 @@ def day_of(file: Path) -> str:
             return datetime.datetime.strptime(str(when)[:10], "%Y:%m:%d").date().isoformat()
     except (OSError, ValueError):
         pass
-    return datetime.date.fromtimestamp(file.stat().st_mtime).isoformat()
+    return day_in_name(file.name) or datetime.date.fromtimestamp(file.stat().st_mtime).isoformat()
 
 
 def closest(vectors: np.ndarray, sentence: np.ndarray | None, entries: list[dict], limit: int, period: tuple | None = None, only: list[int] | None = None) -> dict:
@@ -149,18 +185,53 @@ def closest(vectors: np.ndarray, sentence: np.ndarray | None, entries: list[dict
     if not entries:
         return {"sure": [], "maybe": [], "matching": 0, "indexed": known}
     if sentence is None:
-        newest = sorted(entries, key=lambda entry: entry.get("day", ""), reverse=True)[:limit]
-        return {"sure": [{"id": entry["id"], "name": entry["name"], "score": 1.0} for entry in newest], "maybe": [], "matching": len(entries), "indexed": known}
+        newest = sorted(entries, key=_newest)[:limit]
+        return {"sure": [{"id": entry["id"], "name": entry["name"], "day": entry.get("day", ""), "score": 1.0} for entry in newest], "maybe": [], "matching": len(entries), "indexed": known}
     # rounded once, so that what is counted and what is shown agree on which side of a threshold a picture is
     scores = np.round((vectors @ sentence).astype(np.float64), 3)
     order = np.argsort(-scores, kind="stable")[:limit]
-    found = [{"id": entries[i]["id"], "name": entries[i]["name"], "score": float(scores[i])} for i in order]
+    found = [{"id": entries[i]["id"], "name": entries[i]["name"], "day": entries[i].get("day", ""), "score": float(scores[i])} for i in order]
+    # the closest are chosen; they are shown the newest first, as a gallery does
     return {
-        "sure": [photo for photo in found if photo["score"] >= SURE],
-        "maybe": [photo for photo in found if MAYBE <= photo["score"] < SURE],
+        "sure": sorted((photo for photo in found if photo["score"] >= SURE), key=_newest),
+        "maybe": sorted((photo for photo in found if MAYBE <= photo["score"] < SURE), key=_newest),
         "matching": int((scores >= SURE).sum()),
         "indexed": known,
     }
+
+
+def _newest(entry: dict) -> tuple:
+    """The newest first; on the same day, by name; a picture with no day at the end."""
+    day = entry.get("day", "")
+    return (not day, tuple(-ord(char) for char in day), entry.get("name", ""))
+
+
+def to_look_at(vectors: np.ndarray, sentence: np.ndarray, entries: list[dict], period: tuple | None = None, only: list[int] | None = None,
+               most: int = LOOK_MOST) -> list[dict]:
+    """The pictures worth looking at one by one for a sentence, the likeliest first: {"id", "name", "day", "score"}.
+
+    Likeliest by the words, and by the words together with what the sure ones look like: a picture
+    the words alone rank low is found through the ones that show it plainly. With a `period` and with
+    `only`, as in closest().
+    """
+    if period or only is not None:
+        inside = list(range(len(entries))) if only is None else only
+        if period:
+            since, until = period[0].isoformat(), period[1].isoformat()
+            inside = [position for position in inside if since <= entries[position].get("day", "") <= until]
+        entries = [entries[position] for position in inside]
+        vectors = vectors[inside] if inside else vectors[:0]
+    if not entries:
+        return []
+    words = vectors @ sentence
+    key = words
+    sure = words >= SURE
+    if sure.any():
+        mean = vectors[sure].mean(axis=0)
+        both = sentence + mean / np.linalg.norm(mean)
+        key = np.maximum(words, vectors @ (both / np.linalg.norm(both)) - LOOK_SHIFT)
+    return [{"id": entries[i]["id"], "name": entries[i]["name"], "day": entries[i].get("day", ""), "score": round(float(words[i]), 3)}
+            for i in np.argsort(-key, kind="stable")[:most]]
 
 
 class PhotoIndex:
@@ -211,6 +282,7 @@ class PhotoIndex:
             "country": country,
             "region": region,
             **seen,
+            "notes": NOTES,
         }
 
     def _files(self) -> list[Path]:
@@ -252,7 +324,7 @@ class PhotoIndex:
             if relative in known and known[relative][0]["stamp"] == stamp:
                 # a picture read before days and places were kept gets them now: they are written in the file,
                 # and the picture itself is not read again
-                noted = all(key in known[relative][0] for key in ("day", "lat", "region", "look"))
+                noted = known[relative][0].get("notes") == NOTES and all(key in known[relative][0] for key in ("day", "lat", "region", "look"))
                 kept.append(known[relative][0] if noted else {**known[relative][0], **self._noted(file)})
                 vectors.append(known[relative][1])
             else:
@@ -264,7 +336,7 @@ class PhotoIndex:
             for file, entry in todo[first:first + BATCH]:
                 try:
                     # a picture taken with the phone held upright is stored lying down, with a note: apply the note
-                    images.append(ImageOps.exif_transpose(Image.open(file)).convert("RGB"))
+                    images.append(opened(file, READ))
                     entries.append(entry)
                 except OSError:
                     continue  # a file that is not a readable picture is skipped, not fatal
@@ -300,6 +372,16 @@ class PhotoIndex:
         entries = [{**photo, "name": Path(photo["path"]).name} for photo in photos]
         only = self.places.inside(spot, entries) if spot and self.places else None
         return closest(vectors, self.embedder.text(description) if description else None, entries, limit, period, only)
+
+    def to_look_at(self, description: str, period: tuple | None = None, spot: dict | None = None) -> list[dict]:
+        """The pictures worth looking at one by one for a description, the likeliest first (to_look_at)."""
+        with self._swap:
+            photos, vectors = self.photos, self.vectors
+        if not photos:
+            return []
+        entries = [{**photo, "name": Path(photo["path"]).name} for photo in photos]
+        only = self.places.inside(spot, entries) if spot and self.places else None
+        return to_look_at(vectors, self.embedder.text(description), entries, period, only)
 
     def twins(self, period: tuple | None = None) -> list[list[dict]]:
         """The pictures that are copies of one another, in groups, the one to keep first: each {"id", "name", "day"}."""
@@ -349,7 +431,7 @@ class PhotoIndex:
         path = self.photos_dir / photo["path"]
         if not path.exists():
             return None
-        image = ImageOps.exif_transpose(Image.open(path)).convert("RGB")
+        image = opened(path, THUMB)
         image.thumbnail((THUMB, THUMB))
         data = io.BytesIO()
         image.save(data, "JPEG", quality=82)
