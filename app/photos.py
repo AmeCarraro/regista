@@ -185,22 +185,22 @@ def closest(vectors: np.ndarray, sentence: np.ndarray | None, entries: list[dict
     if not entries:
         return {"sure": [], "maybe": [], "matching": 0, "indexed": known}
     if sentence is None:
-        newest = sorted(entries, key=_newest)[:limit]
-        return {"sure": [{"id": entry["id"], "name": entry["name"], "day": entry.get("day", ""), "score": 1.0} for entry in newest], "maybe": [], "matching": len(entries), "indexed": known}
+        latest = sorted(entries, key=newest)[:limit]
+        return {"sure": [{"id": entry["id"], "name": entry["name"], "day": entry.get("day", ""), "score": 1.0} for entry in latest], "maybe": [], "matching": len(entries), "indexed": known}
     # rounded once, so that what is counted and what is shown agree on which side of a threshold a picture is
     scores = np.round((vectors @ sentence).astype(np.float64), 3)
     order = np.argsort(-scores, kind="stable")[:limit]
     found = [{"id": entries[i]["id"], "name": entries[i]["name"], "day": entries[i].get("day", ""), "score": float(scores[i])} for i in order]
     # the closest are chosen; they are shown the newest first, as a gallery does
     return {
-        "sure": sorted((photo for photo in found if photo["score"] >= SURE), key=_newest),
-        "maybe": sorted((photo for photo in found if MAYBE <= photo["score"] < SURE), key=_newest),
+        "sure": sorted((photo for photo in found if photo["score"] >= SURE), key=newest),
+        "maybe": sorted((photo for photo in found if MAYBE <= photo["score"] < SURE), key=newest),
         "matching": int((scores >= SURE).sum()),
         "indexed": known,
     }
 
 
-def _newest(entry: dict) -> tuple:
+def newest(entry: dict) -> tuple:
     """The newest first; on the same day, by name; a picture with no day at the end."""
     day = entry.get("day", "")
     return (not day, tuple(-ord(char) for char in day), entry.get("name", ""))

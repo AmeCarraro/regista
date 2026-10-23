@@ -95,9 +95,9 @@ def eyes_that_see(monkeypatch, index, red_but_wrong=()):
     return asked
 
 
-def ask(text, index):
+def ask(text, index, actions=None):
     async def collect():
-        return [event async for event in orchestrator.reply([{"role": "user", "content": text}], "auto", [EYES], LAPTOP, TESTS, index, None, [], None)]
+        return [event async for event in orchestrator.reply([{"role": "user", "content": text}], "auto", [EYES], LAPTOP, TESTS, index, actions, [], None)]
 
     return asyncio.run(collect())
 
@@ -202,7 +202,7 @@ def test_when_the_most_pictures_were_looked_at_the_answer_says_there_may_be_more
 
     events = ask("trovami le foto rosse", index)
 
-    assert said(events) == "Ho trovato 4 foto: le ho guardate una per una, dalla più recente. Mi sono fermato dopo averne guardate 6: potrebbero essercene altre."
+    assert said(events) == "Ho trovato 4 foto: le ho guardate una per una, dalla più recente. Mi sono fermato prima di guardarle tutte: potrebbero essercene altre."
 
 
 def test_a_question_on_how_to_find_pictures_is_still_answered(monkeypatch):
@@ -256,3 +256,61 @@ def test_one_model_also_answers_in_words_when_it_is_as_large_so_that_nothing_is_
     # and the page is told what "automatic" really uses
     order = describe([EYES, TEXT_ONLY], LAPTOP, TESTS)["order"]
     assert order["tools"][0] == order["chat"][0] == order["vision"][0] == "qwen3.5:4b"
+
+
+def test_pictures_to_throw_away_are_looked_at_one_by_one_and_only_the_confirmed_ones_are_proposed(tmp_path, monkeypatch):
+    from test_orchestrator import Changes
+
+    index = library(tmp_path)
+    orchestrator._seen.clear()
+    eyes_that_see(monkeypatch, index, red_but_wrong=("red_3.jpg",))
+    script(monkeypatch, ['{"action": "trash_photos", "caption": "something red", "folder": ""}'])
+    changes = Changes()
+
+    events = ask("elimina le foto rosse", index, changes)
+
+    kinds = [event["type"] for event in events]
+    # how far the looking is, and then the proposal: the pictures are shown once, in it
+    assert kinds[:3] == ["start", "step", "photos"] and "looked" in kinds and "photo" not in kinds
+    proposal = next(event for event in events if event["type"] == "proposal")
+    assert proposal["action"] == "trash" and sorted(photo["name"] for photo in proposal["photos"]) == ["red_0.jpg", "red_2.jpg", "red_5.jpg"]
+    assert said(events) == "Sposto nel cestino queste 3 foto? Restano sul disco, e le riporto dov'erano quando vuoi."
+    assert events[-1]["memory"] == 'Searched the photos for "something red": 3 found. Proposed to move them to the trash (3 photos). Nothing was done: the user must confirm.'
+    assert changes.done == []
+
+    # when the eyes confirm none, nothing is proposed
+    orchestrator._seen.clear()
+    eyes_that_see(monkeypatch, index, red_but_wrong=("red_0.jpg", "red_2.jpg", "red_3.jpg", "red_5.jpg"))
+    script(monkeypatch, ['{"action": "trash_photos", "caption": "something red", "folder": ""}'])
+    events = ask("elimina le foto rosse", index, Changes())
+    assert said(events) == orchestrator.NONE_LIKE_THAT and "proposal" not in [event["type"] for event in events]
+
+
+def test_a_request_typed_on_the_phone_is_looked_at_one_by_one_too(tmp_path, monkeypatch):
+    import io
+
+    from PIL import Image
+
+    from fakes import shot
+    from phone import Phones
+
+    phones = Phones(str(tmp_path / "phone"), ColourEmbedder(), ["192.168.1.23"], 8443)
+    phones.devices.append({"id": "d1", "name": "Pixel", "key": "", "paired": "", "seen": ""})
+    phones.add("d1", [shot("1", "red", name="a.jpg", day="2026-08-01"), shot("2", "red", name="b.jpg", day="2026-08-20"), shot("3", "blue", name="c.jpg")])
+    orchestrator._seen.clear()
+    asked = []
+
+    async def sees(model, data, question):
+        asked.append(question)
+        red, green, _ = Image.open(io.BytesIO(data)).convert("RGB").getpixel((0, 0))
+        return red > 150 and green < 100
+
+    monkeypatch.setattr(llm, "sees", sees)
+    script(monkeypatch, ['{"action": "find_photos", "caption": "something red", "folder": ""}'])
+
+    found = asyncio.run(orchestrator.on_the_phone("le foto rosse", "d1", phones, None, [EYES], LAPTOP, TESTS))
+
+    # the red ones, the newest first, named as the phone names them; nothing left to doubt
+    assert found["sure"] == ["2", "1"] and found["maybe"] == []
+    assert found["words"] == "Ho trovato 2 foto: le ho guardate una per una, dalla più recente."
+    assert found["model"] == "qwen3.5:4b" and asked
