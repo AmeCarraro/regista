@@ -26,7 +26,6 @@ import json
 import os
 import re
 import secrets
-import subprocess
 import threading
 import time
 from pathlib import Path
@@ -66,6 +65,28 @@ def _now() -> str:
 def phone_photo_id(device: str, media: str) -> str:
     """The short name of a picture of a phone. It starts with a letter that no picture of this computer starts with."""
     return "t" + hashlib.sha1(f"{device}:{media}".encode()).hexdigest()[:12]
+
+
+def self_signed() -> tuple[bytes, bytes]:
+    """A certificate signed by itself and its key, both as PEM: a key on the curve P-256, good for ten years.
+    Nobody vouches for it, and nobody needs to: a phone knows it by its fingerprint, from the pairing."""
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    secret = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "regista")])
+    now = datetime.datetime.now(datetime.timezone.utc)
+    made = (
+        x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(secret.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(days=1)).not_valid_after(now + datetime.timedelta(days=3650))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .sign(secret, hashes.SHA256())
+    )
+    return made.public_bytes(serialization.Encoding.PEM), secret.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
 
 
 def on_phone(identifier: str) -> bool:
@@ -141,11 +162,9 @@ class Phones:
         with self._lock:
             if not (certificate.exists() and key.exists()):
                 self.folder.mkdir(parents=True, exist_ok=True)
-                subprocess.run(
-                    ["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes",
-                     "-keyout", str(key), "-out", str(certificate), "-days", "3650", "-subj", "/CN=regista"],
-                    check=True, capture_output=True,
-                )
+                made, secret = self_signed()
+                key.write_bytes(secret)
+                certificate.write_bytes(made)
         return certificate, key
 
     def fingerprint(self) -> str:

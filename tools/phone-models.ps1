@@ -6,7 +6,10 @@
 #   - what pictures show: CLIP ViT-B/32 (OpenAI, licence MIT), as Xenova/clip-vit-base-patch32 made it small, about 89 MB
 # Each file must be exactly the one this app was measured with: its SHA-256 is written below, and a
 # file that does not match it is not kept.
-$target = Join-Path (Split-Path $PSScriptRoot -Parent) 'models\phone'
+# Usage: tools\phone-models.ps1              into models\phone next to tools
+#        tools\phone-models.ps1 -Into <folder>   into that folder: the installer's, for the program it installs
+param([string]$Into = (Join-Path (Split-Path $PSScriptRoot -Parent) 'models\phone'))
+$target = $Into
 $text = 'https://huggingface.co/sentence-transformers/clip-ViT-B-32-multilingual-v1/resolve/main'
 $vision = 'https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main'
 $files = @(

@@ -24,6 +24,7 @@ HOME = ".regista"
 COLLECTIONS = "Raccolte"
 # folders of the picture folder that are not part of the library
 NOT_LIBRARY = {HOME, COLLECTIONS}
+READ_ONLY = "La cartella delle foto mi è stata data in sola lettura: posso cercare, ma non spostare né copiare."
 
 
 class Refused(Exception):
@@ -49,8 +50,11 @@ def free(path: Path) -> Path:
 
 
 class Actions:
-    def __init__(self, root: str):
+    def __init__(self, root: str, read_only: bool = False):
+        """`read_only`: the folder was given to look at only. Then every change is refused here, by the app
+        itself; in a container the folder is also mounted read-only, and the system refuses as well."""
         self.root = Path(root)
+        self.read_only = read_only
         self.trash_dir = self.root / HOME / "cestino"
         self.journal = self.root / HOME / "registro.jsonl"
         # one change at a time: two at once could pick the same free name, or mix their lines in the journal
@@ -127,10 +131,15 @@ class Actions:
 
     def writable(self) -> bool:
         """Whether the picture folder can be changed at all: it may have been given to the app to read only."""
-        return os.access(self.root, os.W_OK)
+        return not self.read_only and os.access(self.root, os.W_OK)
+
+    def _changing(self) -> None:
+        if not self.writable():
+            raise Refused(READ_ONLY)
 
     def trash(self, relatives: list[str]) -> dict:
         """Moves pictures into the trash. They stay on the disk, and `undo` brings them back."""
+        self._changing()
         with self._lock:
             # every name is checked before anything is touched
             sources = [(relative, self._picture(relative)) for relative in relatives]
@@ -154,6 +163,7 @@ class Actions:
 
     def copy(self, relatives: list[str], folder: str) -> dict:
         """Copies pictures into a folder of the collections. The originals stay where they are."""
+        self._changing()
         with self._lock:
             target = self.root / COLLECTIONS / collection_name(folder)
             sources = [(relative, self._picture(relative)) for relative in relatives]
@@ -184,6 +194,7 @@ class Actions:
 
         `groups` is (folder, pictures) for each album. The originals stay where they are.
         """
+        self._changing()
         with self._lock:
             # every name, of folder and of picture, is checked before anything is touched
             planned = [(self.root / COLLECTIONS / collection_name(folder), [(relative, self._picture(relative)) for relative in relatives]) for folder, relatives in groups]
@@ -214,6 +225,7 @@ class Actions:
 
     def incoming(self, folder: str) -> Path:
         """A temporary file in a folder of the collections, for a picture that is arriving from a phone."""
+        self._changing()
         directory = self.root / COLLECTIONS / collection_name(folder)
         directory.mkdir(parents=True, exist_ok=True)
         # under another name while it arrives: a picture that stops halfway must never look like one
@@ -262,6 +274,7 @@ class Actions:
         Pictures in the trash go home; copies leave their folder for the trash. If a file
         cannot be moved the change stays open, so that asking again finishes the job.
         """
+        self._changing()
         with self._lock:
             entry = next((one for one in self.history() if one["id"] == of and one["kind"] != "undo"), None) if of else self.last()
             if entry is None:

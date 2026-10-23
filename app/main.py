@@ -37,6 +37,9 @@ PHOTOS_DIR = os.getenv("PHOTOS_DIR", "foto")
 HOSTS = os.getenv("ALLOWED_HOSTS", "127.0.0.1,localhost").split(",")
 # the door of the phones, inside the container and as it is seen from outside
 PHONE_PORT = int(os.getenv("PHONE_PORT", "8443"))
+# where that door listens: in a container, everywhere inside it, and Docker decides what reaches it from outside;
+# as a program of the PC, on the PC's address in the home network alone (desktop.py), or on 127.0.0.1 when closed
+PHONE_HOSTS = [host for host in os.getenv("PHONE_HOST", "0.0.0.0").split(",") if host]
 # whether whoever started the app opened that door to the network (run.ps1 -Phone)
 PHONE_OPEN = os.getenv("PHONE_OPEN", "") == "1"
 # the largest picture a phone may send
@@ -64,7 +67,8 @@ BROWSER_RULES = [
 # the table of the places of the world, to know in which country and near which city a picture was taken
 places = Places(os.getenv("PLACES_DIR", "geonames"))
 photos = PhotoIndex(PHOTOS_DIR, INDEX_DIR, ClipEmbedder(PHONE_MODELS), places)
-actions = Actions(PHOTOS_DIR)
+# given to look at only, when whoever started the app said so: then the app refuses every change itself
+actions = Actions(PHOTOS_DIR, read_only=os.getenv("PHOTOS_READ_ONLY", "") in ("1", "true"))
 phones = Phones(
     str(Path(INDEX_DIR) / "phone"),
     photos.embedder,
@@ -115,10 +119,11 @@ def _read() -> None:
 
 
 def open_phone_door() -> None:
-    """Starts the door of the phones: the same service, encrypted, on a port of its own."""
+    """Starts the door of the phones: the same service, encrypted, on a port of its own, at each of its addresses."""
     certificate, key = phones.certificate()
-    door = uvicorn.Config(app, host="0.0.0.0", port=PHONE_PORT, ssl_certfile=str(certificate), ssl_keyfile=str(key), lifespan="off", log_level="info")
-    threading.Thread(target=uvicorn.Server(door).run, daemon=True).start()
+    for host in PHONE_HOSTS:
+        door = uvicorn.Config(app, host=host, port=PHONE_PORT, ssl_certfile=str(certificate), ssl_keyfile=str(key), lifespan="off", log_level="info")
+        threading.Thread(target=uvicorn.Server(door).run, daemon=True).start()
 
 
 @asynccontextmanager
@@ -867,6 +872,7 @@ def _arrived(finished: dict | None) -> None:
     phones.close(finished["id"], actions.arrived(files, finished["folder"])["id"])
 
 
-# The page, built into "static" when the image is made. Mounted last: everything above wins.
-if Path("static").is_dir():
-    app.mount("/", StaticFiles(directory="static", html=True), name="page")
+# The page, built into "static" when the image is made, or where the program of the PC keeps it. Mounted last: everything above wins.
+PAGE_DIR = os.getenv("PAGE_DIR", "static")
+if Path(PAGE_DIR).is_dir():
+    app.mount("/", StaticFiles(directory=PAGE_DIR, html=True), name="page")

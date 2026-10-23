@@ -1,0 +1,12 @@
+# What the program of the PC carries (tools\desktop.ps1): the service's libraries and its window, at the versions it was tried with.
+fastapi==0.142.2
+uvicorn==0.54.0
+httpx2==2.13.1
+numpy==2.4.6
+pillow==12.3.0
+onnxruntime==1.31.0
+segno==1.6.6
+# the certificate of the door of the phones
+cryptography==50.0.2
+# the window of the program: the page in Edge's WebView2, which Windows 10 and 11 have
+pywebview==6.2.1

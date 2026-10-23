@@ -1,5 +1,7 @@
 __pycache__/
 .venv/
+# what tools\desktop.ps1 and tools\package.ps1 build: Regista.exe and the folder another PC installs from
+build/
 .pytest_cache/
 
 # the pictures the app looks at are personal: never in the repository

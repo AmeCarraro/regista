@@ -23,7 +23,7 @@ import time
 
 import catalog
 import llm
-from actions import Refused, collection_name
+from actions import READ_ONLY, Refused, collection_name
 from period import in_words as period_in_words
 from period import read as read_period
 from period import without_time
@@ -156,7 +156,6 @@ UNCLEAR = "Non ho capito cosa cercare nelle foto. Prova a dirmelo con altre paro
 WHICH_ONES = "Dimmi prima quali foto: cercale, e poi dimmi cosa farne."
 NONE_LIKE_THAT = "Non ho trovato foto così, quindi non tocco niente."
 NOTHING_TO_UNDO = "Non c'è niente da annullare: non ho ancora spostato né copiato nulla."
-READ_ONLY = "La cartella delle foto mi è stata data in sola lettura: posso cercare, ma non spostare né copiare."
 NO_PHONE = "Non c'è nessun telefono collegato. Collegane uno dal pannello, alla voce «Telefono»."
 PHONE_EMPTY = "Il telefono è collegato, ma non mi ha ancora mandato le sue foto: apri Regista sul telefono e lascialo finire."
 # where the copies of pictures taken off a phone are kept, among the collections

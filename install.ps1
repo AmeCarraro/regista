@@ -1,14 +1,15 @@
 ﻿# Sets Regista up on a Windows PC, step by step: measures the computer, chooses the model that fits
-# it, says what it will download and asks once, installs what is missing, starts the app and leaves
-# an icon on the desktop. Run it by double-clicking install.cmd.
+# it, says what it will download and asks once, installs what is missing, puts the program in its
+# folder, leaves an icon on the desktop and starts it. Run it by double-clicking install.cmd.
 #
 # What Regista needs, and what this does about each:
-#   Docker Desktop     runs the app. If missing, installs it with winget (Windows' own installer).
-#   Ollama             runs the model that directs. The same.
+#   Ollama             runs the models. If missing, installs it with winget (Windows' own installer).
 #   the director       the lightest model that does the job well on this computer: qwen3.5:4b with an
 #                      NVIDIA card of 4 GB or more, or 16 GB of memory; granite4.1:3b otherwise. Qwen also
 #                      sees: it looks at the pictures a search finds, one by one, and keeps the right ones.
 #   the picture models two small models that read pictures and sentences, here and on the phone (220 MB).
+#   the program        Regista itself, with the official Python inside it, signed by those who make it:
+#                      copied from this folder, nothing to download, no Docker.
 # Nothing is downloaded or installed without a yes typed here: one yes, for the list it shows.
 # At the least: Windows 10 or 11 at 64 bits, 8 GB of memory, 10 GB free on the disk.
 #
@@ -18,18 +19,23 @@
 #        .\install.ps1 -Yes                  yes to the downloads, without asking
 #        .\install.ps1 -Icon D:\Avvio        puts the icon in that folder instead of on the desktop
 #        .\install.ps1 -Phone yes            the app will be used from a phone too, without asking
+#        .\install.ps1 -Into D:\Regista      installs there, instead of in the user's own programs
 #        .\install.ps1 -Port 8091 -PhonePort 8444   other doors: a second Regista on the same PC
-#        .\install.ps1 -NoOpen               does not open the page in the browser at the end
-# Windows lets a .ps1 file run only when asked for that one time: install.cmd and the icon do it,
-# so nothing in the settings of Windows has to change.
+#        .\install.ps1 -FromDocker regista-regista-1   takes along what the Docker version of Regista knew:
+#                                            the pictures it read, the results of the model tests, the phones paired
+#        .\install.ps1 -NoOpen               does not start it at the end
+# Windows lets a .ps1 file run only when asked for that one time: install.cmd does it, so nothing in
+# the settings of Windows has to change.
 param(
     [string]$Photos = '',
     [switch]$Check,
     [switch]$Yes,
     [string]$Icon = [Environment]::GetFolderPath('Desktop'),
     [ValidateSet('', 'yes', 'no')][string]$Phone = '',
+    [string]$Into = (Join-Path $env:LOCALAPPDATA 'Programs\Regista'),
     [int]$Port = 8090,
     [int]$PhonePort = 8443,
+    [string]$FromDocker = '',
     [switch]$NoOpen
 )
 
@@ -53,6 +59,11 @@ function Install-With-Winget($name, $id) {
     winget install --exact --id $id --accept-source-agreements
     if ($LASTEXITCODE -ne 0) { Stop-Here "L'installazione di $name non è andata a buon fine. Installalo dal suo sito e rilancia questo file." }
 }
+
+# the program to install: next to this file in the folder made by tools\package.ps1, in build\ in the repository
+$program = @((Join-Path $here 'Regista'), (Join-Path $here 'build\Regista')) | Where-Object { Test-Path (Join-Path $_ 'app\desktop.py') } | Select-Object -First 1
+if (-not $program) { Stop-Here "Manca il programma da installare: qui accanto dovrebbe esserci la cartella «Regista» (nel repository la fa tools\desktop.ps1)." }
+$Into = [IO.Path]::GetFullPath($Into)
 
 Say "`nRegista: preparo questo computer.`n" 'Cyan'
 
@@ -81,48 +92,43 @@ Say "   Modello regista: $($model.Name), $($model.Why)." 'Green'
 
 # ---- 2. what is there, and what is missing
 
-$docker = Test-Command 'docker'
-$dockerOn = $false
-if ($docker) { docker info 2>$null | Out-Null; $dockerOn = $LASTEXITCODE -eq 0 }
 $ollamaOn = $false
 $models = @()
 try {
     $models = @((Invoke-RestMethod http://127.0.0.1:11434/api/tags -TimeoutSec 5).models | ForEach-Object { $_.name })
     $ollamaOn = $true
 } catch {}
-$ollama = $ollamaOn -or (Test-Command 'ollama')
+$ollama = $ollamaOn -or (Test-Command 'ollama') -or (Test-Path (Join-Path $env:LOCALAPPDATA 'Programs\Ollama\ollama.exe'))
 # a model that directs well already there is enough: nothing is downloaded twice. A copy of Qwen made
 # without its eyes, by an earlier version of this file, is not: Qwen whole shares its files, and adds the eyes.
 $present = $models | Where-Object { $_ -in @('qwen3.5:4b', 'granite4.1:3b') } | Select-Object -First 1
-$sees = @('vision.onnx', 'text.onnx', 'vocab.txt', 'dense.safetensors') | Where-Object { -not (Test-Path (Join-Path $here "models\phone\$_")) }
+$sees = @('vision.onnx', 'text.onnx', 'vocab.txt', 'dense.safetensors') | Where-Object { -not (Test-Path (Join-Path $Into "models\phone\$_")) }
+$size = (Get-ChildItem $program -Recurse -File | Measure-Object -Property Length -Sum).Sum / 1GB
 
 Say "`n2. Cosa serve" 'Cyan'
 $downloads = @()
-Say ("   Docker Desktop:  " + $(if ($dockerOn) { 'c''è ed è acceso' } elseif ($docker) { 'c''è, ma è spento' } else { 'manca' }))
-if (-not $docker) { $downloads += [pscustomobject]@{ What = 'Docker Desktop'; GB = 0.6 } }
 Say ("   Ollama:          " + $(if ($ollamaOn) { 'c''è ed è acceso' } elseif ($ollama) { 'c''è, ma è spento' } else { 'manca' }))
 if (-not $ollama) { $downloads += [pscustomobject]@{ What = 'Ollama'; GB = 1.0 } }
 Say ("   Modello regista: " + $(if ($present) { "c'è ($present)" } else { "da scaricare ($($model.Name), $(Size $model.GB))" }))
 if (-not $present) { $downloads += [pscustomobject]@{ What = $model.Name; GB = $model.GB } }
 Say ("   Modelli che leggono le foto: " + $(if ($sees) { 'da scaricare (0,2 GB)' } else { 'ci sono' }))
 if ($sees) { $downloads += [pscustomobject]@{ What = 'i modelli che leggono le foto'; GB = 0.2 } }
-Say '   Il programma:    lo costruisce Docker la prima volta (0,4 GB)'
-$downloads += [pscustomobject]@{ What = 'il programma'; GB = 0.4 }
+Say "   Il programma:    è in questa cartella ($(Size $size)): lo copio in $Into"
 if ($Check) { exit 0 }
 
-$total = ($downloads | Measure-Object -Property GB -Sum).Sum
-Say "`n   In tutto scarico circa $(Size $total): $(($downloads | ForEach-Object { $_.What }) -join ', ')."
-if (-not (Confirm-Step '   Procedo?')) { Stop-Here 'Non ho scaricato né installato niente. Rilancia questo file quando vuoi.' }
-
-if (-not $docker) {
-    Install-With-Winget 'Docker Desktop' 'Docker.DockerDesktop'
-    Stop-Here "Docker Desktop è installato. Aprilo una volta dal menu Start, accetta le sue condizioni e aspetta che dica di essere acceso (può chiedere di riavviare il PC). Poi rilancia questo file: il resto lo fa da solo."
+if ($downloads) {
+    $total = ($downloads | Measure-Object -Property GB -Sum).Sum
+    Say "`n   In tutto scarico circa $(Size $total): $(($downloads | ForEach-Object { $_.What }) -join ', ')."
+    if (-not (Confirm-Step '   Procedo?')) { Stop-Here 'Non ho scaricato né installato niente. Rilancia questo file quando vuoi.' }
 }
-if (-not $dockerOn) { Stop-Here "Docker Desktop è spento: aprilo dal menu Start, aspetta che dica di essere acceso e rilancia questo file." }
 
 if (-not $ollama) {
     Install-With-Winget 'Ollama' 'Ollama.Ollama'
-    # it starts by itself once installed: a minute to answer
+}
+if (-not $ollamaOn) {
+    # Ollama starts by itself once installed, and at every start of Windows; after it was closed, from here
+    $ollamaApp = Join-Path $env:LOCALAPPDATA 'Programs\Ollama\ollama app.exe'
+    if (Test-Path $ollamaApp) { Start-Process $ollamaApp }
     foreach ($second in 1..60) {
         try { Invoke-RestMethod http://127.0.0.1:11434/api/version -TimeoutSec 2 | Out-Null; $ollamaOn = $true; break } catch { Start-Sleep -Seconds 1 }
     }
@@ -136,14 +142,19 @@ if (-not $present) {
 }
 
 if ($sees) {
-    & (Join-Path $here 'tools\phone-models.ps1')
+    & (Join-Path $here 'tools\phone-models.ps1') -Into (Join-Path $Into 'models\phone')
     if ($LASTEXITCODE -ne 0) { Stop-Here 'I modelli che leggono le foto non sono arrivati interi. Rilancia questo file.' }
 }
+
+# what an earlier installation chose, offered again
+$before = $null
+$written = Join-Path $Into 'settings.json'
+if (Test-Path $written) { try { $before = Get-Content $written -Raw -Encoding UTF8 | ConvertFrom-Json } catch {} }
 
 # ---- 3. which pictures
 
 if (-not $Photos) {
-    $usual = [Environment]::GetFolderPath('MyPictures')
+    $usual = if ($before -and $before.photos) { $before.photos } else { [Environment]::GetFolderPath('MyPictures') }
     Say "`n3. Le foto" 'Cyan'
     Say "   Su quale cartella lavoro? Regista non cancella mai niente: quello che butta va in un suo cestino dentro la cartella, e solo dopo un tuo sì."
     $typed = Read-Host "   Cartella delle foto (Invio per $usual)"
@@ -160,33 +171,50 @@ if (-not $Phone) {
     $Phone = if ((Read-Host '   Anche dal telefono? [s/N]') -match '^(s|si|sì|y|yes)$') { 'yes' } else { 'no' }
 }
 
-# ---- 5. an icon to start it again, and the first start
+# ---- 5. the program in its folder, an icon to start it, and the first start
 
-$more = @()
-if ($Phone -eq 'yes') { $more += '-Phone' }
-if ($Port -ne 8090) { $more += "-Port $Port" }
-if ($PhonePort -ne 8443) { $more += "-PhonePort $PhonePort" }
-# A file that starts Regista on that folder and opens its page: the icon on the desktop points to it.
-$starter = Join-Path $here 'Regista.cmd'
-# in the alphabet cmd reads its files in, so that a folder with an accent in its name still works
-Set-Content -Path $starter -Encoding Oem -Value @(
-    '@echo off',
-    "powershell -NoProfile -ExecutionPolicy Bypass -File `"%~dp0run.ps1`" -Photos `"$Photos`" $($more -join ' ') -Open",
-    'if errorlevel 1 pause'
-)
+try { Invoke-RestMethod "http://127.0.0.1:$Port/healthz" -TimeoutSec 2 | Out-Null; Stop-Here "Regista è aperto: chiudi la sua finestra e rilancia questo file." } catch {}
+New-Item -ItemType Directory -Force $Into | Out-Null
+# its parts are put in again; what it knows stays: the index, settings.json, the models
+foreach ($part in 'python', 'app', 'web', 'data', 'tools') { Remove-Item -Recurse -Force (Join-Path $Into $part) -ErrorAction SilentlyContinue }
+robocopy $program $Into /E /NFL /NDL /NJH /NJS /NP | Out-Null
+if ($LASTEXITCODE -ge 8) { Stop-Here "Non sono riuscito a copiare il programma in $Into." }
+
+if ($FromDocker) {
+    $index = Join-Path $Into 'index'
+    if (Test-Path (Join-Path $index 'photos.json')) {
+        Say "   Quello che sapeva la versione con Docker c'è già qui: non lo copio di nuovo."
+    } else {
+        New-Item -ItemType Directory -Force $index | Out-Null
+        docker cp "$($FromDocker):/data/." $index
+        if ($LASTEXITCODE -ne 0) { Stop-Here "Non sono riuscito a prendere i dati di ${FromDocker}: Docker Desktop è acceso?" }
+        Say "   Ho preso dalla versione con Docker le foto già lette, le prove dei modelli e i telefoni collegati." 'Green'
+    }
+}
+
+$settings = [ordered]@{ photos = $Photos; read_only = $false; phone = ($Phone -eq 'yes'); port = $Port; phone_port = $PhonePort; addresses = @() }
+[IO.File]::WriteAllText((Join-Path $Into 'settings.json'), ($settings | ConvertTo-Json), (New-Object Text.UTF8Encoding $false))
+
+$python = Join-Path $Into 'python\pythonw.exe'
+$start = "`"$(Join-Path $Into 'app\desktop.py')`""
 $shell = New-Object -ComObject WScript.Shell
 $shortcut = $shell.CreateShortcut((Join-Path $Icon 'Regista.lnk'))
-$shortcut.TargetPath = $starter
-$shortcut.WorkingDirectory = $here
+$shortcut.TargetPath = $python
+$shortcut.Arguments = $start
+$shortcut.WorkingDirectory = $Into
+$shortcut.IconLocation = Join-Path $Into 'tools\regista.ico'
 $shortcut.Description = 'Regista: il tuo assistente, in locale'
 $shortcut.Save()
-Say "`n5. Fatto: l'icona «Regista» è in $Icon, da lì si avvia." 'Green'
-$app = Join-Path $here 'Per il telefono'
-if ($Phone -eq 'yes' -and (Test-Path $app)) {
-    Say "   L'app per il telefono è nella cartella «$app»: copiala sul telefono e aprila (Android chiede di permettere l'installazione). Poi collegalo dalla pagina di Regista, alla voce «Telefono»."
+Say "`n5. Fatto: Regista è in $Into, e l'icona «Regista» è in ${Icon}: da lì si avvia." 'Green'
+if ($Phone -eq 'yes') {
+    Say "   La prima volta Windows può chiederti se «Python» può usare la rete: è Regista, che apre la porta del telefono. Rispondi «Consenti»."
+    $app = Join-Path $here 'Per il telefono'
+    if (Test-Path $app) {
+        Say "   L'app per il telefono è nella cartella «$app»: copiala sul telefono e aprila (Android chiede di permettere l'installazione). Poi collegalo dalla pagina di Regista, alla voce «Telefono»."
+    }
 }
-Say "`nAvvio Regista. La prima volta costruisce il programma e ci mette qualche minuto.`n" 'Cyan'
-$start = @{ Photos = $Photos; Port = $Port; PhonePort = $PhonePort; Open = -not $NoOpen }
-if ($Phone -eq 'yes') { $start.Phone = $true }
-& (Join-Path $here 'run.ps1') @start
-exit $LASTEXITCODE
+if (-not $NoOpen) {
+    Say "`nAvvio Regista: la sua finestra si apre tra qualche secondo.`n" 'Cyan'
+    Start-Process $python -ArgumentList $start -WorkingDirectory $Into
+}
+exit 0
