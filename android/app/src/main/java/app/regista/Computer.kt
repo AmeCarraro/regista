@@ -10,6 +10,11 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 import java.io.InputStream
+import java.net.Inet4Address
+import java.net.InetSocketAddress
+import java.net.NetworkInterface
+import java.net.Socket
+import java.net.SocketException
 import java.net.URL
 import java.security.GeneralSecurityException
 import java.security.KeyStore
@@ -17,6 +22,8 @@ import java.security.ProviderException
 import java.security.MessageDigest
 import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
+import java.util.concurrent.Callable
+import java.util.concurrent.Executors
 import javax.net.ssl.HostnameVerifier
 import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SSLContext
@@ -56,6 +63,43 @@ fun readInvite(text: String): Invite? {
     // the name is shown to the user in the question that pairs: one line of it, so that it cannot pass for the rest of the question
     val computer = (link.getQueryParameter("n") ?: "").filter { !it.isISOControl() }.trim().take(40)
     return Invite(addresses.filter(::isPrivate), port, secret, fingerprint, computer)
+}
+
+/**
+ * The other addresses of the network this phone is on by Wi-Fi or by cable, where the computer may be: the same
+ * first three numbers as the phone's own, and the last from 1 to 254. None on the mobile network.
+ */
+fun neighbours(): List<String> = try {
+    NetworkInterface.getNetworkInterfaces().toList()
+        .filter { it.isUp && !it.isLoopback && (it.name.startsWith("wlan") || it.name.startsWith("eth")) }
+        .flatMap { it.inetAddresses.toList() }
+        .filterIsInstance<Inet4Address>()
+        .mapNotNull { it.hostAddress }
+        .filter(::isPrivate)
+        .flatMap { own -> (1..254).map { "${own.substringBeforeLast('.')}.$it" }.filter { it != own } }
+        .distinct()
+} catch (problem: SocketException) {
+    emptyList()
+}
+
+/** Which of these addresses take a connection at the port, within a moment: many are knocked at together. */
+fun listening(addresses: List<String>, port: Int): List<String> {
+    val pool = Executors.newFixedThreadPool(32)
+    try {
+        val knocks = addresses.map { address ->
+            pool.submit(Callable {
+                try {
+                    Socket().use { it.connect(InetSocketAddress(address, port), 400) }
+                    address
+                } catch (closed: IOException) {
+                    null
+                }
+            })
+        }
+        return knocks.mapNotNull { knock -> runCatching { knock.get() }.getOrNull() }
+    } finally {
+        pool.shutdownNow()
+    }
 }
 
 fun fingerprintOf(certificate: X509Certificate): String =
@@ -251,10 +295,13 @@ class Memory(context: Context) {
     }
 
 
-    /** The computer at each of its addresses, to be tried in turn. */
-    fun ways(): List<Computer> {
+    /** The port of the computer's door for the phones. */
+    val port get() = kept.getInt("port", 8443)
+
+    /** The computer at each of its addresses, to be tried in turn; or at others, where it may be now. */
+    fun ways(at: List<String> = addresses): List<Computer> {
         val key = key
-        return addresses.map { Computer(it, kept.getInt("port", 8443), fingerprint, key) }
+        return at.map { Computer(it, port, fingerprint, key) }
     }
 
     fun worked(address: String) {

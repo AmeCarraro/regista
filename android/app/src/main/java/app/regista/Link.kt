@@ -152,9 +152,11 @@ class Link(
         }
     }
 
-    /** The computer at the first of its addresses that answers. */
-    private fun reach(): Computer? {
-        for (way in memory.ways()) {
+    /** The computer at the first of its addresses that answers; when none does, looked for on this phone's network. */
+    private fun reach(): Computer? = first(memory.ways()) ?: search()
+
+    private fun first(ways: List<Computer>): Computer? {
+        for (way in ways) {
             try {
                 way.ask("GET", "/phone/hello")
                 memory.worked(way.address)
@@ -162,10 +164,31 @@ class Link(
             } catch (refused: Refused) {
                 throw refused
             } catch (unreachable: IOException) {
+                // off, or another machine: one that does not show the certificate of the pairing gets nothing
                 continue
             }
         }
         return null
+    }
+
+    /** When the computer was last looked for on the network: at most once a minute, as it takes a few seconds. */
+    @Volatile private var searched = 0L
+
+    /**
+     * The home router may give the computer another address, and then none of the ones it had answers. So it
+     * is looked for at every address of the network this phone is on, at its port. Only the computer that
+     * shows the certificate of the pairing passes for it (Computer), and only to it does the phone show its
+     * key; found, its new address is the first one tried from then on.
+     */
+    private fun search(): Computer? {
+        val now = System.currentTimeMillis()
+        if (now - searched < 60_000) return null
+        searched = now
+        val known = memory.ways().map { it.address }.toSet()
+        val near = neighbours().filter { it !in known }
+        if (near.isEmpty()) return null
+        tell("Cerco il computer sulla rete di casa…")
+        return first(memory.ways(listening(near, memory.port)))
     }
 
     /** Tells the computer which pictures the phone has, and sends the small copies it asks for. */
