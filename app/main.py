@@ -3,6 +3,7 @@
 It has two doors. One is for this computer, and answers only here. The other is for the
 phones the user has let in: encrypted, on a port of its own, and closed to everyone else.
 """
+import asyncio
 import hashlib
 import json
 import logging
@@ -126,6 +127,20 @@ def open_phone_door() -> None:
         threading.Thread(target=uvicorn.Server(door).run, daemon=True).start()
 
 
+async def ready_the_director() -> None:
+    """The model that directs, and looks too, is put in memory as the app starts: the first request does not wait for it."""
+    try:
+        models = await llm.installed()
+        tests = selftest.load(INDEX_DIR)
+        director, _ = catalog.director_and_eyes(models, catalog.hardware(models, tests), tests)
+        if director:
+            share = await llm.ready(director, tests.get(director, {}).get("gpu_share"))
+            logger.info("%s is in memory, %s of it in video memory", director, share)
+    except Exception:
+        # Ollama is off, or slow to start: the model is loaded at the first request instead
+        logger.exception("the director could not be put in memory in advance")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     read_photos()
@@ -134,7 +149,9 @@ async def lifespan(app: FastAPI):
     except Exception:
         # without it the app still does everything else: the page says that no phone can connect
         logger.exception("the door of the phones did not open")
+    readying = asyncio.create_task(ready_the_director())
     yield
+    readying.cancel()
 
 
 # no page that lists what the service can do: nobody needs it, and it would load its parts from elsewhere

@@ -2,6 +2,7 @@
 
 Ollama is the only thing that knows the models. Nothing here chooses one: that is catalog.py.
 """
+import asyncio
 import base64
 import json
 import os
@@ -11,6 +12,10 @@ import httpx2
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
 # 6144 is the largest context that keeps a 3B model entirely inside 4 GB of video memory
 NUM_CTX = int(os.getenv("NUM_CTX", "6144"))
+# How long a model stays in memory after it was last asked something. Ollama's own is five minutes:
+# then a search after a pause waits 15 to 20 seconds for the model to be loaded again. Half an hour,
+# and the memory goes back to the computer when Regista is not being used.
+KEEP_ALIVE = os.getenv("KEEP_ALIVE", "30m")
 
 
 async def installed() -> list[dict]:
@@ -47,6 +52,40 @@ async def installed() -> list[dict]:
     return models
 
 
+async def ready(model: str, share: float | None = None) -> float | None:
+    """Puts a model in memory before it is asked anything, so that the first request does not wait for it.
+
+    `share` is how much of it was once seen in video memory (selftest.py). Ollama decides how much goes
+    there when it loads the model, by what is free in the card at that moment: loaded while other
+    programs held some of it, the model is slower until it is loaded again (on a 4 GB card, 37% of
+    Qwen against 48%: 1.3 seconds a picture against 0.8). So a model with clearly less than that is
+    taken out once, and loaded again. Returns how much of it is in video memory now, None if not known.
+    """
+    async with httpx2.AsyncClient(timeout=300) as client:
+
+        async def now() -> float | None:
+            running = (await client.get(f"{OLLAMA_URL}/api/ps")).json().get("models", [])
+            found = next((one for one in running if model in (one.get("name"), one.get("model"))), None)
+            return round(found["size_vram"] / found["size"], 2) if found and found.get("size") else None
+
+        loaded = await now()
+        if loaded is not None and share is not None and loaded < share - 0.05:
+            await client.post(f"{OLLAMA_URL}/api/generate", json={"model": model, "keep_alive": 0})
+            for _ in range(40):
+                if await now() is None:
+                    break
+                await asyncio.sleep(0.25)
+            loaded = None
+        if loaded is None:
+            # a request with nothing to answer only loads the model: with the context size of every other call,
+            # or the first real request would load it again
+            response = await client.post(f"{OLLAMA_URL}/api/generate", json={"model": model, "keep_alive": KEEP_ALIVE, "options": {"num_ctx": NUM_CTX}})
+            if response.status_code != 200:
+                raise RuntimeError(f"Ollama answered {response.status_code}: {response.text[:300]}")
+            loaded = await now()
+    return loaded
+
+
 async def sees(model: str, picture: bytes, question: str) -> bool:
     """Whether a model that looks at pictures answers yes to a question about one: what it sees, not what numbers guess.
 
@@ -58,6 +97,7 @@ async def sees(model: str, picture: bytes, question: str) -> bool:
         "stream": False,
         "think": False,
         "options": {"temperature": 0, "num_ctx": NUM_CTX, "num_predict": 3},
+        "keep_alive": KEEP_ALIVE,
     }
     async with httpx2.AsyncClient(timeout=300) as client:
         response = await client.post(f"{OLLAMA_URL}/api/chat", json=payload)
@@ -82,6 +122,7 @@ async def stream(model: str, messages: list[dict], max_tokens: int = 700, schema
         # a decision of a few words: it answers straight away. Models that cannot think ignore this.
         "think": False,
         "options": {"temperature": 0, "num_ctx": NUM_CTX, "num_predict": max_tokens},
+        "keep_alive": KEEP_ALIVE,
     }
     if schema:
         payload["format"] = schema
