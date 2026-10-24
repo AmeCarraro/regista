@@ -73,7 +73,8 @@ def library(tmp_path):
 
 
 def eyes_that_see(monkeypatch, index, red_but_wrong=()):
-    """In place of the model that sees: yes to the red pictures, except the ones named."""
+    """In place of the model that sees: yes to the red pictures, except the ones named. Each question is
+    recorded as (model, the pictures asked about, the question about one of them)."""
     asked = []
     names = {photo["id"]: photo["path"] for photo in index.photos}
     by_bytes = {}
@@ -81,17 +82,17 @@ def eyes_that_see(monkeypatch, index, red_but_wrong=()):
     real = index.thumbnail
 
     def thumbnail(identifier):
-        data = real(identifier)
+        # two red pictures have the same small copy: its name is added, so that the eyes can tell them apart
+        data = real(identifier) + names[identifier].encode()
         by_bytes[data] = names[identifier]
         return data
 
-    async def sees(model, data, question):
-        asked.append((model, by_bytes[data], question))
-        name = by_bytes[data]
-        return name.startswith("red") and name not in red_but_wrong
+    async def sees_many(model, pictures, what, english=True):
+        asked.append((model, [by_bytes[data] for data in pictures], llm.question(what, english)))
+        return [by_bytes[data].startswith("red") and by_bytes[data] not in red_but_wrong for data in pictures]
 
     monkeypatch.setattr(index, "thumbnail", thumbnail)
-    monkeypatch.setattr(llm, "sees", sees)
+    monkeypatch.setattr(llm, "sees_many", sees_many)
     return asked
 
 
@@ -117,6 +118,9 @@ def test_the_pictures_are_looked_at_one_by_one_and_sent_as_they_are_confirmed(tm
     # the red ones the eyes said yes to; the one they did not, left out
     assert sorted(confirmed) == ["red_0.jpg", "red_2.jpg", "red_5.jpg"]
     assert all(question == "Does this photo show something red? Answer only yes or no." and model == "qwen3.5:4b" for model, _, question in asked)
+    # asked about GROUP at a time, the likeliest first: the red ones, then the blue
+    assert [len(pictures) for _, pictures, _ in asked] == [min(orchestrator.GROUP, 6 - first) for first in range(0, 6, orchestrator.GROUP)]
+    assert asked[0][1][0].startswith("red") and asked[-1][1][-1].startswith("blue")
     # each picture sent as soon as it was confirmed, between the steps of the looking
     assert kinds.index("photo") < max(index for index, kind in enumerate(kinds) if kind == "looked")
     assert events[-3] == {"type": "looked", "looked": 6, "of": 6}
@@ -300,12 +304,12 @@ def test_a_request_typed_on_the_phone_is_looked_at_one_by_one_too(tmp_path, monk
     orchestrator._seen.clear()
     asked = []
 
-    async def sees(model, data, question):
-        asked.append(question)
-        red, green, _ = Image.open(io.BytesIO(data)).convert("RGB").getpixel((0, 0))
-        return red > 150 and green < 100
+    async def sees_many(model, pictures, what, english=True):
+        asked.append(llm.question(what, english))
+        colours = [Image.open(io.BytesIO(data)).convert("RGB").getpixel((0, 0)) for data in pictures]
+        return [red > 150 and green < 100 for red, green, _ in colours]
 
-    monkeypatch.setattr(llm, "sees", sees)
+    monkeypatch.setattr(llm, "sees_many", sees_many)
     script(monkeypatch, ['{"action": "find_photos", "caption": "something red", "folder": ""}'])
 
     found = asyncio.run(orchestrator.on_the_phone("le foto rosse", "d1", phones, None, [EYES], LAPTOP, TESTS))
@@ -314,3 +318,8 @@ def test_a_request_typed_on_the_phone_is_looked_at_one_by_one_too(tmp_path, monk
     assert found["sure"] == ["2", "1"] and found["maybe"] == []
     assert found["words"] == "Ho trovato 2 foto: le ho guardate una per una, dalla più recente."
     assert found["model"] == "qwen3.5:4b" and asked
+
+
+def test_before_the_models_were_tried_the_one_that_looks_directs_too():
+    # nothing measured yet: the copy without eyes would be loaded for every decision, and Qwen again for every search
+    assert director_and_eyes([EYES, TEXT_ONLY], LAPTOP, {}) == ("qwen3.5:4b", "qwen3.5:4b")

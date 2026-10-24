@@ -28,6 +28,10 @@ BATCH = 16
 THUMB = 384
 # the fewest pixels a picture is read with for the model, on its shorter side: twice the 224 it sees (embedder.py)
 READ = 448
+# The size of the pictures the model that looks is shown, on their longer side. Measured on 3060 pictures of
+# 1280x960: at 256 pixels it answered as at 384 (159 of 160 right, the same yes to what was not there) in two
+# thirds of the time. The page keeps its small copies of THUMB.
+EYES = 256
 # How close a picture must be to a sentence to count as a match: the same as on the phone. Measured
 # with the small models (embedder.py) on the 200 sample pictures and 20 captions as the director
 # writes them: from 0.26, 94% of the pictures shown are right and 77% of the right ones are shown;
@@ -79,6 +83,22 @@ def opened(file: Path, side: int) -> Image.Image:
     image = Image.open(file)
     image.draft("RGB", (side, side))
     return ImageOps.exif_transpose(image).convert("RGB")
+
+
+def for_the_eyes(data: bytes) -> bytes:
+    """A small copy made smaller for the model that looks at pictures: EYES pixels on its longer side."""
+    try:
+        with Image.open(io.BytesIO(data)) as picture:
+            if max(picture.size) <= EYES:
+                return data
+            picture.draft("RGB", (EYES, EYES))
+            smaller = picture.convert("RGB")
+    except OSError:
+        return data  # not one that can be made smaller here: the model gets it as it is
+    smaller.thumbnail((EYES, EYES))
+    out = io.BytesIO()
+    smaller.save(out, "JPEG", quality=85)
+    return out.getvalue()
 
 
 def looked(file: Path) -> dict:

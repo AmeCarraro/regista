@@ -202,12 +202,14 @@ def describe(models: list[dict], machine: Hardware, tests: dict) -> dict:
 
 def director_and_eyes(models: list[dict], machine: Hardware, tests: dict) -> tuple[str | None, str | None]:
     """The model that directs, and the one that looks at pictures. When the one that looks directs as well as
-    the other, it does both: two would take turns in a small graphics card, each loaded again every time."""
+    the other, it does both: two would take turns in a small graphics card, each loaded again every time,
+    15 to 20 seconds a request on a 4 GB card. Also before the models were tried, when neither has a score:
+    the one that looks is loaded for the search anyway."""
     director = pick("tools", models, machine, tests)
     eyes = pick("vision", models, machine, tests)
     if eyes and director and eyes != director:
         named = {model["name"]: model for model in models}
-        if "tools" in can(named[eyes]) and runs_well(named[eyes], machine, tests) and _tool_score(named[eyes], tests) >= _tool_score(named[director], tests):
+        if "tools" in can(named[eyes]) and _tool_score(named[eyes], tests) >= _tool_score(named[director], tests):
             director = eyes
     return director, eyes
 

@@ -6,6 +6,7 @@ import asyncio
 import base64
 import json
 import os
+import re
 
 import httpx2
 
@@ -84,6 +85,50 @@ async def ready(model: str, share: float | None = None) -> float | None:
                 raise RuntimeError(f"Ollama answered {response.status_code}: {response.text[:300]}")
             loaded = await now()
     return loaded
+
+
+def question(what: str, english: bool = True) -> str:
+    """The question about one picture: in English, which the models read best, or in the user's own words."""
+    if english:
+        return f"Does this photo show {what}? Answer only yes or no."
+    return f"Questa foto mostra: {what}? Rispondi solo sì o no."
+
+
+async def sees_many(model: str, pictures: list[bytes], what: str, english: bool = True) -> list[bool]:
+    """For each of a few pictures, whether it shows `what`: asked about them together. Measured on the 200
+    samples, 4 at a time took 0.67 seconds a picture against 1.06 one by one, and were as right about what
+    is there (171 of 173 against 169 of 171); but about what is not there they said yes twice as often, 6
+    times in 200 against 3, so Regista asks one at a time (orchestrator.GROUP). 8 at a time were no faster.
+    One picture is asked about alone.
+    """
+    if len(pictures) == 1:
+        return [await sees(model, pictures[0], question(what, english))]
+    count = len(pictures)
+    if english:
+        text = (f"Here are {count} photos, numbered from 1 to {count} in the order given. For each one: does it show {what}? "
+                "Answer with one line per photo, like '1: yes', and nothing else.")
+    else:
+        text = (f"Ecco {count} foto, numerate da 1 a {count} nell'ordine in cui sono date. Per ciascuna: mostra {what}? "
+                "Rispondi con una riga per foto, come '1: sì', e nient'altro.")
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": text, "images": [base64.b64encode(picture).decode() for picture in pictures]}],
+        "stream": False,
+        "think": False,
+        "options": {"temperature": 0, "num_ctx": NUM_CTX, "num_predict": 8 * count},
+        "keep_alive": KEEP_ALIVE,
+    }
+    async with httpx2.AsyncClient(timeout=300) as client:
+        response = await client.post(f"{OLLAMA_URL}/api/chat", json=payload)
+    if response.status_code != 200:
+        raise RuntimeError(f"Ollama answered {response.status_code}: {response.text[:300]}")
+    answer = response.json().get("message", {}).get("content", "").lower()
+    said = []
+    for number in range(1, count + 1):
+        line = re.search(rf"(?<!\d){number}\s*[:.)\-]\s*(yes|no|sì|si)\b", answer)
+        # a picture the answer does not name counts as not showing it: better one missing than one wrong
+        said.append(bool(line) and line.group(1) != "no")
+    return said
 
 
 async def sees(model: str, picture: bytes, question: str) -> bool:

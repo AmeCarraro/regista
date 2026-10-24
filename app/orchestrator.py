@@ -18,6 +18,7 @@ calls them too often: asked for advice on taking pictures, it searched the pictu
 import asyncio
 import functools
 import json
+import logging
 import re
 import time
 
@@ -28,9 +29,11 @@ from period import in_words as period_in_words
 from period import read as read_period
 from period import without_time
 from phone import on_phone
-from photos import LOOK_MOST, LOOK_STOP, newest
+from photos import LOOK_MOST, LOOK_STOP, for_the_eyes, newest
 from places import IN_COUNTRY, REGIONS
 from understand import own_words
+
+logger = logging.getLogger("uvicorn.error")
 
 ACTIONS = ("answer", "find_photos", "count_photos", "trash_photos", "copy_photos", "undo")
 # the decisions that would change the pictures: they are proposed, never carried out here
@@ -640,6 +643,37 @@ async def _albums(asked: str, photos, actions, phones):
 _seen: dict[tuple, bool] = {}
 # how long a request typed on a phone may look at pictures: the phone waits a minute for the answer
 PHONE_LOOKING = 40
+def _for_the_eyes(library, identifier: str) -> bytes | None:
+    """The small copy of a picture, as the model that looks is shown it (photos.EYES)."""
+    picture = library.thumbnail(identifier)
+    return for_the_eyes(picture) if picture else None
+
+
+# When the model that looks was last made sure to sit in the graphics card as much as it can (_ready_to_look).
+_checked = 0.0
+CHECK_EVERY = 600
+
+
+async def _ready_to_look(model: str | None, tests: dict) -> None:
+    """Before a request: since Regista started, Ollama may have loaded the model again (after half an hour of rest)
+    with less of it in the graphics card than it can have, as when other programs held some of the card; then a
+    picture takes 1.5 to 2.5 seconds instead of 1. So it is loaded again (llm.ready), but at most every ten
+    minutes, as a reload that helps nothing costs seconds; and only for a model whose share the test measured."""
+    global _checked
+    share = tests.get(model, {}).get("gpu_share") if model else None
+    if share is None or time.monotonic() - _checked < CHECK_EVERY:
+        return
+    _checked = time.monotonic()
+    try:
+        await llm.ready(model, share)
+    except Exception:
+        logger.exception("the model could not be loaded again: the request goes on with it as it is")
+
+
+# How many pictures the eyes are asked about at once (llm.sees_many). Four at a time took 0.69 seconds a picture
+# against 1.04, and found as many of the right ones; but asked about things none of the 200 samples shows, they
+# said yes 6 times in 200 against 3. Being right comes first: one at a time.
+GROUP = 1
 
 
 async def _looking(library, phone: bool, caption: str, when, spot: dict | None, period: str, eyes: str, english: bool, outcome: dict,
@@ -649,7 +683,8 @@ async def _looking(library, phone: bool, caption: str, when, spot: dict | None, 
     is left in `outcome`.
 
     The period and the place are kept exactly, as the pictures' own notes say them; what the pictures
-    show is first ranked by numbers (photos.to_look_at), likeliest first, and then looked at. The
+    show is first ranked by numbers (photos.to_look_at), likeliest first, and then looked at, GROUP at a
+    time, each judged by itself. The
     looking stops after LOOK_STOP wrong in a row, at LOOK_MOST or after `seconds`, and never asks twice
     about the same picture. The model is asked in English, which it reads best; in Italian when the
     caption is not a translation but the user's own words (`english` False). With a `device`, only the
@@ -668,37 +703,43 @@ async def _looking(library, phone: bool, caption: str, when, spot: dict | None, 
            "indexed": len(library.photos), "partial": partial, "checking": len(candidates), "looked": 0}
     if spot and not there:
         yield {"type": "text", "text": f"Nessuna foto risulta scattata {_at(spot)}: cerco quelle che ci somigliano."}
-    if english:
-        question = f"Does this photo show {looking_for}? Answer only yes or no."
-    else:
-        question = f"Questa foto mostra: {looking_for}? Rispondi solo sì o no."
+    # what the answers are remembered under: the picture, and the question about it
+    question = llm.question(looking_for, english)
     found, looked, wrong, broken, late = [], 0, 0, "", False
     started = time.perf_counter()
-    for candidate in candidates:
+    for first in range(0, len(candidates), GROUP):
+        if wrong >= LOOK_STOP:
+            break
         if seconds is not None and time.perf_counter() - started > seconds:
             late = True
             break
-        key = (place, candidate["id"], question)
-        if key not in _seen:
-            picture = await asyncio.to_thread(library.thumbnail, candidate["id"])
+        group = candidates[first:first + GROUP]
+        unknown = [candidate for candidate in group if (place, candidate["id"], question) not in _seen]
+        if unknown:
+            pictures = [await asyncio.to_thread(_for_the_eyes, library, candidate["id"]) for candidate in unknown]
+            shown = [(candidate, picture) for candidate, picture in zip(unknown, pictures) if picture]
             try:
-                _seen[key] = bool(picture) and await llm.sees(eyes, picture, question)
+                said = await llm.sees_many(eyes, [picture for _, picture in shown], looking_for, english) if shown else []
             except Exception as exc:  # Ollama stopped, or the model failed: what was confirmed stays
                 broken = f"{type(exc).__name__}: {exc}"
                 break
-            if len(_seen) > 20_000:
+            while len(_seen) > 20_000 - GROUP:
                 _seen.pop(next(iter(_seen)))
-        looked += 1
-        if _seen[key]:
-            photo = {"id": candidate["id"], "name": candidate["name"], "day": candidate["day"], "score": candidate["score"]}
-            found.append(photo)
-            wrong = 0
-            yield {"type": "photo", "photo": photo}
-        else:
-            wrong += 1
-        yield {"type": "looked", "looked": looked, "of": len(candidates)}
-        if wrong >= LOOK_STOP:
-            break
+            # a picture whose small copy cannot be made shows nothing
+            _seen.update({(place, candidate["id"], question): False for candidate in unknown})
+            _seen.update({(place, candidate["id"], question): yes for (candidate, _), yes in zip(shown, said)})
+        for candidate in group:
+            looked += 1
+            if _seen[(place, candidate["id"], question)]:
+                photo = {"id": candidate["id"], "name": candidate["name"], "day": candidate["day"], "score": candidate["score"]}
+                found.append(photo)
+                wrong = 0
+                yield {"type": "photo", "photo": photo}
+            else:
+                wrong += 1
+            yield {"type": "looked", "looked": looked, "of": len(candidates)}
+            if wrong >= LOOK_STOP:
+                break
     # the looking is over: the page stops saying it goes on
     yield {"type": "looked", "looked": looked, "of": looked}
     outcome.update({
@@ -756,6 +797,7 @@ async def on_the_phone(text: str, device: str, phones, places, models: list[dict
     if director is None or not any(photo["device"] == device for photo in phones.photos):
         return None
     started = time.perf_counter()
+    await _ready_to_look(eyes or director, tests)
     decision = await decide(director, [{"role": "user", "content": text}])
     if decision["action"] == "answer" and FIND.search(text) and not HOW.search(text):
         decision = {"action": "find_photos", "caption": own_words(text), "folder": "", "own": True}
@@ -833,6 +875,7 @@ async def reply(history: list[dict], wanted: str, models: list[dict], machine, t
     started = time.perf_counter()
     director, eyes = catalog.director_and_eyes(models, machine, tests)
     writer = catalog.writer(models, machine, tests, wanted, director)
+    await _ready_to_look(eyes or director, tests)
     if writer is None:
         yield {"type": "text", "text": NO_MODEL}
         yield {"type": "done", "model": "", "seconds": 0, "memory": NO_MODEL}

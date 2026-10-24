@@ -246,12 +246,17 @@ def main(argv: list[str] | None = None) -> int:
     chosen["phone"] = chosen["phone"] or options.phone
     url = f"http://127.0.0.1:{chosen['port']}/"
 
-    if _answers(f"{url}healthz"):
-        # Regista is open already: one more window on it, and nothing started twice
-        if not options.no_window:
-            show(url)
-        return 0
-    if not _free(int(chosen["port"])):
+    # a Regista closed a moment ago may still hold its door for a few seconds: it is given them
+    for _ in range(20):
+        if _answers(f"{url}healthz"):
+            # Regista is open already: one more window on it, and nothing started twice
+            if not options.no_window:
+                show(url)
+            return 0
+        if _free(int(chosen["port"])):
+            break
+        time.sleep(0.5)
+    else:
         say(f"Un altro programma usa già la porta {chosen['port']}: chiudilo, o reinstalla Regista scegliendo un'altra porta.", problem=True)
         return 1
     photos = Path(chosen["photos"] or Path.home() / "Pictures").resolve()

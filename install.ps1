@@ -174,6 +174,12 @@ if (-not $Phone) {
 # ---- 5. the program in its folder, an icon to start it, and the first start
 
 try { Invoke-RestMethod "http://127.0.0.1:$Port/healthz" -TimeoutSec 2 | Out-Null; Stop-Here "Regista è aperto: chiudi la sua finestra e rilancia questo file." } catch {}
+# a Regista closed a moment ago may still be ending, and hold its files: a few seconds for it
+$python = Join-Path $Into 'python\pythonw.exe'
+foreach ($second in 1..20) {
+    if (-not (Get-CimInstance Win32_Process -Filter "Name='pythonw.exe'" | Where-Object { $_.ExecutablePath -eq $python })) { break }
+    Start-Sleep -Seconds 1
+}
 New-Item -ItemType Directory -Force $Into | Out-Null
 # its parts are put in again; what it knows stays: the index, settings.json, the models
 foreach ($part in 'python', 'app', 'web', 'data', 'tools') { Remove-Item -Recurse -Force (Join-Path $Into $part) -ErrorAction SilentlyContinue }
