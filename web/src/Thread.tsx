@@ -52,12 +52,13 @@ function PartView({ part, answers }: { part: Part; answers: Answers }) {
           {part.place === 'phone' ? <icons.Phone /> : <icons.Search />}
           {part.description ? (
             <>
-              {part.place === 'phone' ? 'Cerco nelle foto del telefono:' : 'Cerco nelle foto:'} <q>{part.description}</q>
+              {part.place === 'phone' ? 'Cerco nelle foto del telefono:' : part.place === 'both' ? 'Cerco nelle foto del computer e del telefono:' : 'Cerco nelle foto:'}{' '}
+              <q>{part.description}</q>
               {(part.spot || part.period) && <span>{[part.spot && `scattate ${part.spot}`, part.period].filter(Boolean).join(' ')}</span>}
             </>
           ) : (
             <>
-              {part.place === 'phone' ? 'Cerco le foto del telefono' : 'Cerco le foto'}
+              {part.place === 'phone' ? 'Cerco le foto del telefono' : part.place === 'both' ? 'Cerco le foto del computer e del telefono' : 'Cerco le foto'}
               {part.spot && ` scattate ${part.spot}`} {part.period}
             </>
           )}

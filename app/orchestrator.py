@@ -17,6 +17,7 @@ calls them too often: asked for advice on taking pictures, it searched the pictu
 """
 import asyncio
 import functools
+import heapq
 import json
 import logging
 import re
@@ -29,7 +30,7 @@ from period import in_words as period_in_words
 from period import read as read_period
 from period import without_time
 from phone import on_phone
-from photos import LOOK_MOST, LOOK_STOP, for_the_eyes, newest
+from photos import LOOK_MOST, LOOK_STOP, SURE, for_the_eyes, newest
 from places import IN_COUNTRY, REGIONS
 from understand import own_words
 
@@ -424,11 +425,20 @@ def cleared_in_words(arrived: int, trashed: int, missing: int, why: str, folder:
     return text, f'{arrived} photos were copied from the phone into the folder "{folder}"; {trashed} of them were then moved to the trash of the phone.'
 
 
-def _searched(caption: str, phone: bool, when: tuple | None, there: str = "") -> str:
+def _searched(caption: str, phone: bool, when: tuple | None, there: str = "", both: bool = False) -> str:
     """A search as the model will remember it: in English, with what was looked for, on which device, of which place and days."""
     what = f' for "{caption}"' if caption else ""
     taken = (f" in {there}" if there else "") + (f" from {when[0]} to {when[1]}" if when else "")
-    return f'Searched the photos{" on the phone" if phone else ""}{what}{" taken" + taken if taken else ""}'
+    device = " on the computer and the phone" if both else " on the phone" if phone else ""
+    return f'Searched the photos{device}{what}{" taken" + taken if taken else ""}'
+
+
+def _also_on_the_phone(photos: list[dict]) -> str:
+    """For a search of the computer and the phone together: how many of the pictures found are on the phone."""
+    count = sum(1 for photo in photos if on_phone(photo["id"]))
+    if not count:
+        return ""
+    return " Una è sul telefono." if count == 1 else f" {count} sono sul telefono."
 
 
 def _at(spot: dict) -> str:
@@ -438,6 +448,40 @@ def _at(spot: dict) -> str:
     if spot["kind"] == "region":
         return REGIONS[spot["code"]][2]
     return IN_COUNTRY.get(spot["code"], f"in {spot['name']}")
+
+
+class Both:
+    """The pictures of this computer and those of the phones, for a request that names neither: searched as one
+    library, each picture still where it is. The ones of a phone say so ("place"), and on_phone tells them apart."""
+
+    def __init__(self, photos, phones):
+        self.parts = (photos, phones)
+        self.state = photos.state
+
+    @property
+    def photos(self) -> list[dict]:
+        return [*self.parts[0].photos, *self.parts[1].photos]
+
+    def thumbnail(self, identifier: str) -> bytes | None:
+        return (self.parts[1] if on_phone(identifier) else self.parts[0]).thumbnail(identifier)
+
+    def to_look_at(self, description: str, period: tuple | None = None, spot: dict | None = None) -> list[dict]:
+        here, there = (part.to_look_at(description, period, spot) for part in self.parts)
+        there = [{**candidate, "place": "phone"} for candidate in there]
+        # each list keeps its own order, the likeliest first; of the two, the one whose next picture is closer to the words goes first
+        return list(heapq.merge(here, there, key=lambda candidate: -candidate["score"]))[:LOOK_MOST]
+
+    def search(self, description: str, limit: int = 60, period: tuple | None = None, spot: dict | None = None) -> dict:
+        here, there = (part.search(description, limit, period, spot) for part in self.parts)
+        marked = [{**photo, "place": "phone"} for photo in [*there["sure"], *there["maybe"]]]
+        # the closest of both, as one search would choose them; shown the newest first
+        found = sorted([*here["sure"], *here["maybe"], *marked], key=lambda photo: (-photo["score"], newest(photo)))[:limit]
+        return {
+            "sure": sorted((photo for photo in found if photo["score"] >= SURE), key=newest),
+            "maybe": sorted((photo for photo in found if photo["score"] < SURE), key=newest),
+            "matching": here["matching"] + there["matching"],
+            "indexed": here["indexed"] + there["indexed"],
+        }
 
 
 def look(library, caption: str, limit: int, when: tuple | None, spot: dict | None, device: str | None = None) -> tuple[dict, bool]:
@@ -525,6 +569,7 @@ def propose(decision: dict, photos, actions, selection: list[str], phones=None, 
             folder = collection_name(decision["folder"])
         except Refused:
             pass  # no usable name: the proposal is made all the same, and the page asks for the name
+    left = 0
     if looked is not None:
         # the pictures were looked at one by one: the ones the eyes confirmed, and no other
         there, caption = looked["there"], looked["looking_for"]
@@ -550,6 +595,8 @@ def propose(decision: dict, photos, actions, selection: list[str], phones=None, 
         every = len(chosen)
         if not chosen:
             return only(WHICH_ONES, "No photos were chosen, so nothing was proposed.")
+        # pictures of the computer and of a phone on screen together: the ones of the phone are not touched from here
+        left = 0 if away or kind == "send" else sum(1 for identifier in dict.fromkeys(selection) if on_phone(identifier))
 
     # a phone with no trash an app can use can only be copied from: said before the question, and not hidden in it
     old = kind == "clear" and not phones.can_trash([photo["id"] for photo in chosen])
@@ -568,8 +615,9 @@ def propose(decision: dict, photos, actions, selection: list[str], phones=None, 
     searched = f"{_searched(caption, away, when, spot['name'] if there else '')}: {every} found. " if caption or when or there else ""
     if old:
         searched += "The phone has no trash an app can use (its Android is older than 11), so the photos cannot be taken off it. "
+    aside = f"{_photos(left).capitalize()} del telefono non {'la' if left == 1 else 'le'} tocco da qui: per {'quella' if left == 1 else 'quelle'} dimmelo con «dal telefono». " if left else ""
     return {
-        "text": (f"{no_trash_in_words(len(chosen))} " if old else "") + proposed_in_words(kind, len(chosen), folder, every),
+        "text": aside + (f"{no_trash_in_words(len(chosen))} " if old else "") + proposed_in_words(kind, len(chosen), folder, every),
         # nothing has changed yet, and the model must not think it has
         "memory": f"{searched}Proposed to {what} ({len(chosen)} photos). Nothing was done: the user must confirm.",
         "proposal": {"action": kind, "folder": folder, "photos": [{"id": photo["id"], "name": photo["name"]} for photo in chosen]},
@@ -716,7 +764,7 @@ async def _looking(library, phone: bool, caption: str, when, spot: dict | None, 
     caption is not a translation but the user's own words (`english` False). With a `device`, only the
     pictures of that phone.
     """
-    place = "phone" if phone else "computer"
+    place = "phone" if phone else "both" if isinstance(library, Both) else "computer"
     to_look_at = functools.partial(library.to_look_at, device=device) if device else library.to_look_at
     candidates = await asyncio.to_thread(to_look_at, spot["rest"], when, spot) if spot and spot["rest"] else []
     there = bool(candidates)
@@ -758,6 +806,8 @@ async def _looking(library, phone: bool, caption: str, when, spot: dict | None, 
             looked += 1
             if _seen[(place, candidate["id"], question)]:
                 photo = {"id": candidate["id"], "name": candidate["name"], "day": candidate["day"], "score": candidate["score"]}
+                if on_phone(candidate["id"]):
+                    photo["place"] = "phone"
                 found.append(photo)
                 wrong = 0
                 yield {"type": "photo", "photo": photo}
@@ -769,7 +819,7 @@ async def _looking(library, phone: bool, caption: str, when, spot: dict | None, 
     # the looking is over: the page stops saying it goes on
     yield {"type": "looked", "looked": looked, "of": looked}
     outcome.update({
-        "found": found, "looked": looked, "candidates": len(candidates), "there": there, "looking_for": looking_for,
+        "found": found, "looked": looked, "candidates": len(candidates), "there": there, "looking_for": looking_for, "place": place,
         "broken": broken, "partial": partial,
         # stopped with pictures still to look at, while they were still being confirmed
         "cut": late or (looked == len(candidates) == LOOK_MOST and wrong < LOOK_STOP),
@@ -786,6 +836,8 @@ def looked_in_words(outcome: dict, phone: bool, spot: dict | None, period: str, 
         words = "Non ho potuto guardare le foto: il modello che le guarda non risponde."
     elif found:
         words = f"Ho trovato {_photos(found)}{where}: le ho guardate una per una, dalla più recente."
+        if outcome.get("place") == "both":
+            words += _also_on_the_phone(outcome["found"])
     elif outcome["candidates"]:
         words = f"Ne ho guardate {looked}{where} una per una: nessuna mostra quello che hai chiesto."
     else:
@@ -807,7 +859,8 @@ async def _one_by_one(library, phone: bool, caption: str, when, spot: dict | Non
         yield event
     yield {"type": "text", "text": looked_in_words(outcome, phone, spot, period, bool(library.photos) or phone)}
     there = spot["name"] if outcome["there"] else ""
-    yield {"type": "done", "memory": f'{_searched(outcome["looking_for"], phone, when, there)}: looked at {outcome["looked"]} one by one, {len(outcome["found"])} show it.'}
+    both = outcome["place"] == "both"
+    yield {"type": "done", "memory": f'{_searched(outcome["looking_for"], phone, when, there, both)}: looked at {outcome["looked"]} one by one, {len(outcome["found"])} show it.'}
 
 
 async def on_the_phone(text: str, device: str, phones, places, models: list[dict], machine, tests: dict) -> dict | None:
@@ -947,6 +1000,8 @@ async def reply(history: list[dict], wanted: str, models: list[dict], machine, t
     # to the phone, moving is copying: the phone takes a copy, and the computer keeps its pictures
     to_phone = action in ("copy_photos", "move_photos") and goes
     phone = phones is not None and not to_phone and (bool(ON_PHONE.search(asked)) or (looking_there and not elsewhere))
+    # a search that names neither the computer nor the phone looks at both, once a phone has said what pictures it has
+    both = phones is not None and not phone and not elsewhere and action in ("find_photos", "count_photos") and bool(phones.photos)
 
     def done(model: str, memory: str, **more) -> dict:
         return {"type": "done", "model": model, "seconds": round(time.perf_counter() - started, 1), "memory": memory, **more}
@@ -960,6 +1015,11 @@ async def reply(history: list[dict], wanted: str, models: list[dict], machine, t
         library = phones if phone else photos
         indexed = library.search("", 1, when)["matching"] if when else len(library.photos)
         yield {"type": "step", "tool": "count_photos", "arguments": {}}
+        if both:
+            there = phones.search("", 1, when)["matching"] if when else len(phones.photos)
+            yield {"type": "text", "text": f"Conosco {_photos(indexed)} sul computer e {_photos(there)} sul telefono{f' {period}' if when else ''}."}
+            yield done(director, f"Counted the photos{f' taken from {when[0]} to {when[1]}' if when else ''}: {indexed} on the computer, {there} on the phone.")
+            return
         if phone:
             yield {"type": "text", "text": f"Conosco {_photos(indexed)} del telefono{f' {period}' if when else ''}." if indexed or when else PHONE_EMPTY}
         elif when:
@@ -975,15 +1035,16 @@ async def reply(history: list[dict], wanted: str, models: list[dict], machine, t
             yield {"type": "text", "text": UNCLEAR}
             yield done(director, "The search could not start: no description was given.")
             return
-        place = "phone" if phone else "computer"
+        place = "phone" if phone else "both" if both else "computer"
+        library = phones if phone else Both(photos, phones) if both else photos
         if eyes and (spot["rest"] if spot else caption):
             # what the pictures show is checked by looking at them, one by one, as they are shown
-            async for event in _one_by_one(phones if phone else photos, phone, caption, when, spot, period, eyes, not decision.get("own")):
+            async for event in _one_by_one(library, phone, caption, when, spot, period, eyes, not decision.get("own")):
                 yield {**event, "model": director, "seconds": round(time.perf_counter() - started, 1)} if event["type"] == "done" else event
             return
         # what a period or a place asks for is all of its pictures, not the first few
         every = not (spot["rest"] if spot else caption)
-        result, there = await asyncio.to_thread(look, phones if phone else photos, caption, EVERY if every else 60, when, spot)
+        result, there = await asyncio.to_thread(look, library, caption, EVERY if every else 60, when, spot)
         if there:
             caption = spot["rest"]
         yield {"type": "step", "tool": "find_photos", "arguments": {"description": caption, "place": place, "period": period, "spot": _at(spot) if there else ""}}
@@ -992,12 +1053,14 @@ async def reply(history: list[dict], wanted: str, models: list[dict], machine, t
         # "1 foto scattata", "3 foto scattate"
         taken = f"scattat{'a' if result['matching'] == 1 and len(result['sure']) <= 1 else 'e'} {_at(spot)}" if there else ""
         words = found_in_words(result, phone, " ".join(filter(None, [taken, period])), bool(caption))
+        if both and result["sure"]:
+            words += _also_on_the_phone(result["sure"])
         if spot and not there:
             # the place was understood, and no picture says it was taken there
             words = f"Nessuna foto risulta scattata {_at(spot)}: cerco quelle che ci somigliano. {words}"
         yield {"type": "text", "text": words}
         # in English and with the caption, so that "only the black ones" can build on it
-        yield done(director, f'{_searched(caption, phone, when, spot["name"] if there else "")}: {result["matching"]} found, {len(result["maybe"])} uncertain.')
+        yield done(director, f'{_searched(caption, phone, when, spot["name"] if there else "", both)}: {result["matching"]} found, {len(result["maybe"])} uncertain.')
         return
 
     if action in CHANGES and actions is not None:

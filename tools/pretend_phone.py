@@ -114,6 +114,7 @@ def main() -> None:
     parser.add_argument("--once", action="store_true", help="send what is asked for now and stop, instead of waiting for more")
     parser.add_argument("--trash", choices=["yes", "no"], default="no", help="what the user of this phone answers when asked whether pictures may go to its trash")
     parser.add_argument("--yes", action="store_true", help="say yes on the computer's page by itself, as its user would: for trials on this same PC")
+    parser.add_argument("--page", default="http://127.0.0.1:8090", help="the computer's page where --yes says yes: another port for a second Regista")
     arguments = parser.parse_args()
     # line by line also when the output goes to a file: whoever watches it sees what happens as it happens
     sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
@@ -135,9 +136,9 @@ def main() -> None:
         print(f"on the computer, say yes to the phone that shows {asked['code'][:3]} {asked['code'][3:]}")
         if arguments.yes:
             # the page's own door, which answers only on this PC
-            pending = json.loads(urlopen("http://127.0.0.1:8090/api/phone").read())["pending"]
+            pending = json.loads(urlopen(f"{arguments.page}/api/phone").read())["pending"]
             request = next(one for one in pending if one["code"] == asked["code"])
-            urlopen(Request(f"http://127.0.0.1:8090/api/phone/pending/{request['id']}", data=b'{"yes": true}', headers={"Content-Type": "application/json"}))
+            urlopen(Request(f"{arguments.page}/api/phone/pending/{request['id']}", data=b'{"yes": true}', headers={"Content-Type": "application/json"}))
         paired = {"state": "waiting"}
         until = time.monotonic() + asked["seconds"]
         while paired["state"] == "waiting" and time.monotonic() < until:

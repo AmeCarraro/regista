@@ -107,6 +107,8 @@ export default function PhotoResults({ found }: { found: Found }) {
       <div className="grid">
         {shown.map((photo, index) => {
           const away = gone.get(photo.id)
+          // on a phone: the whole search was there, or this picture is one of a phone's in a search of both
+          const phone = found.place === 'phone' || photo.place === 'phone'
           // the same button either way: the small copy already on screen stays there, faded, when its picture goes
           return (
             <button
@@ -119,7 +121,7 @@ export default function PhotoResults({ found }: { found: Found }) {
                   ? `${photo.name}, nel cestino`
                   : away === 'move'
                     ? `${photo.name}, spostata in un'altra cartella`
-                    : found.place === 'phone'
+                    : phone
                       ? `Apri ${photo.name}, sul telefono`
                       : `Apri ${photo.name}`
               }
@@ -129,7 +131,7 @@ export default function PhotoResults({ found }: { found: Found }) {
               <Thumb id={photo.id} />
               {away === 'trash' && <icons.Trash className="mark-gone" />}
               {away === 'move' && <icons.Folder className="mark-gone" />}
-              {found.place === 'phone' && (
+              {phone && (
                 <span className="on-phone" title="È sul telefono">
                   <icons.Phone />
                 </span>

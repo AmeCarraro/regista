@@ -49,7 +49,7 @@ export type Models = {
 }
 
 /** A picture found; `day` is the day it was taken, as "2024-08-15", empty when not known. */
-export type Photo = { id: string; name: string; score: number; day?: string }
+export type Photo = { id: string; name: string; score: number; day?: string; place?: 'phone' }
 
 export type Found = {
   description: string
@@ -66,7 +66,8 @@ export type Found = {
   looked?: number
 }
 
-export type Place = 'computer' | 'phone'
+/** Where a search looked: the computer, a phone, or both when the request named neither. */
+export type Place = 'computer' | 'phone' | 'both'
 
 /** A picture named in a proposal: its short name, and the name of its file. */
 export type Picked = { id: string; name: string }
