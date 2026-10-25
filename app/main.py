@@ -285,7 +285,7 @@ class ChatRequest(BaseModel):
 class Change(BaseModel):
     # "fetch" asks a phone for the originals of pictures that are on it; "clear" asks for them and then
     # has the phone move them to its trash; "send" prepares pictures of this computer for the phone
-    action: Literal["trash", "copy", "fetch", "clear", "send"]
+    action: Literal["trash", "copy", "move", "fetch", "clear", "send"]
     # pictures by their short names: the page never names a file
     ids: list[str] = Field(min_length=1, max_length=1000)
     folder: str = Field(default="", max_length=200)
@@ -514,11 +514,17 @@ def act(body: Change):
     if body.action == "send":
         return _send_to_phone(body)
     known = {identifier: relative for identifier in dict.fromkeys(body.ids) if (relative := photos.relative_of(identifier))}
-    result = _carried_out(lambda: actions.trash(list(known.values())) if body.action == "trash" else actions.copy(list(known.values()), body.folder))
+    relatives = list(known.values())
+    if body.action == "trash":
+        result = _carried_out(lambda: actions.trash(relatives))
+    elif body.action == "move":
+        result = _carried_out(lambda: actions.move(relatives, body.folder))
+    else:
+        result = _carried_out(lambda: actions.copy(relatives, body.folder))
     # a picture the index no longer knows is one that is no longer there
     result["missing"] += len(set(body.ids)) - len(known)
     gone = []
-    if body.action == "trash":
+    if body.action in ("trash", "move"):
         moved = {file["from"] for file in result["files"]}
         gone = [identifier for identifier, relative in known.items() if relative in moved]
         # at once, so that a search made right now does not show what was just thrown away
@@ -547,7 +553,8 @@ def _ask_phone(body: Change) -> dict:
         raise HTTPException(status_code=409, detail=orchestrator.READ_ONLY)
     clear = body.action == "clear"
     try:
-        folder = collection_name(orchestrator.REMOVED if clear else body.folder)
+        # taken off the phone: into the folder the user named, or into the one of the pictures taken off phones
+        folder = collection_name((body.folder or orchestrator.REMOVED) if clear else body.folder)
         asked = phones.ask(body.ids, folder, "trash" if clear else "")
     except Refused as refused:
         raise HTTPException(status_code=409, detail=str(refused))
@@ -581,7 +588,7 @@ def undo(body: Undo):
     """Takes back a change, the last one unless another is named. Asked by the page when the user says so."""
     result = _carried_out(lambda: actions.undo(body.of))
     # the pictures that came home have the short names they had: the page can show them again
-    back = [photo_id(file["to"]) for file in result["files"]] if result["undid"] == "trash" else []
+    back = [photo_id(file["to"]) for file in result["files"]] if result["undid"] in ("trash", "move") else []
     text, memory = orchestrator.undone_in_words(result)
     return _outcome(result, back, text, memory)
 

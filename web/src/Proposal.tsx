@@ -39,6 +39,13 @@ function wording(proposed: Proposed): { icon: ReactNode; title: string; hint: st
         hint: 'Gli originali restano dove sono.',
         yes: count === 1 ? 'Copia 1 foto' : `Copia ${count} foto`,
       }
+    case 'move':
+      return {
+        icon: <icons.Folder />,
+        title: 'Sposta in una cartella',
+        hint: 'Lasciano il posto dove sono. Con «annulla» tornano dove erano.',
+        yes: count === 1 ? 'Sposta 1 foto' : `Sposta ${count} foto`,
+      }
     case 'fetch':
       return {
         icon: <icons.Phone />,
@@ -74,6 +81,8 @@ function wording(proposed: Proposed): { icon: ReactNode; title: string; hint: st
       const what =
         proposal.undoes === 'trash'
           ? `${proposal.count} foto spostate nel cestino`
+          : proposal.undoes === 'move'
+            ? `${proposal.count} foto spostate in «${proposal.folder}»`
           : proposal.undoes === 'receive'
             ? `${proposal.count} foto arrivate dal telefono in «${proposal.folder}»`
             : proposal.undoes === 'albums'
@@ -83,7 +92,7 @@ function wording(proposed: Proposed): { icon: ReactNode; title: string; hint: st
         icon: <icons.Undo />,
         title: "Annulla l'ultima modifica",
         hint: at ? `${what}, alle ${at}.` : `${what}.`,
-        yes: proposal.undoes === 'trash' ? 'Rimettile a posto' : 'Togli le copie',
+        yes: proposal.undoes === 'trash' || proposal.undoes === 'move' ? 'Rimettile a posto' : 'Togli le copie',
       }
     }
   }
@@ -144,7 +153,7 @@ export default function ProposalCard({ proposed, answers }: { proposed: Proposed
         </div>
       </header>
 
-      {(proposal.action === 'copy' || proposal.action === 'fetch' || proposal.action === 'send') && (
+      {(proposal.action === 'copy' || proposal.action === 'move' || proposal.action === 'fetch' || proposal.action === 'send') && (
         <label className="folder-name">
           <icons.Folder />
           <span>{proposal.action === 'send' ? 'Album' : 'Cartella'}</span>

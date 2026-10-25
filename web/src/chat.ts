@@ -232,7 +232,7 @@ export function yesOrNo(text: string): 'yes' | 'no' | null {
  * (the sure ones, if there are any) or in a proposal (the ones left ticked). They
  * are what "these" means in the next request.
  */
-export function selection(turns: Turn[], gone: ReadonlySet<string> = new Set()): string[] {
+export function selection(turns: Turn[], gone: Pick<ReadonlySet<string>, 'has'> = new Set()): string[] {
   const shown = turns
     .flatMap((turn) => (turn.role === 'assistant' ? turn.parts : []))
     .findLast((part) => part.kind === 'photos' || (part.kind === 'proposal' && part.proposal.action !== 'undo'))

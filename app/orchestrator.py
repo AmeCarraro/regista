@@ -35,9 +35,9 @@ from understand import own_words
 
 logger = logging.getLogger("uvicorn.error")
 
-ACTIONS = ("answer", "find_photos", "count_photos", "trash_photos", "copy_photos", "undo")
+ACTIONS = ("answer", "find_photos", "count_photos", "trash_photos", "copy_photos", "move_photos", "undo")
 # the decisions that would change the pictures: they are proposed, never carried out here
-CHANGES = ("trash_photos", "copy_photos", "undo")
+CHANGES = ("trash_photos", "copy_photos", "move_photos", "undo")
 
 # A request is about the pictures of the phone when it names the phone as a place: "sul telefono",
 # "dal mio cellulare". This is read here, in the words of the user, and not asked to the model:
@@ -95,6 +95,8 @@ DECIDE = (
     "leave it empty when the user means the pictures just found ('these', 'them', 'le', 'quelle').\n"
     "- copy_photos: the user tells you to copy, save or put pictures into a folder. "
     "folder is the name the user gives to the folder, as written; caption as for trash_photos.\n"
+    "- move_photos: the user tells you to move pictures into a folder ('sposta', 'spostale'): they leave the place "
+    "where they are. folder and caption as for copy_photos.\n"
     "- undo: the user tells you to take back the last change: bring back what was deleted, cancel the copy.\n"
     "- answer: everything else. Greetings, thanks, questions, requests for advice or explanations, "
     "also when they are about photography, cameras, files, or HOW to delete or copy something.\n"
@@ -115,6 +117,8 @@ DECIDE = (
     'butta via le foto dei tramonti -> {"action": "trash_photos", "caption": "a sunset", "folder": ""}\n'
     'mettile in una cartella chiamata Vacanze -> {"action": "copy_photos", "caption": "", "folder": "Vacanze"}\n'
     'salva le foto dei fiori nella cartella Giardino -> {"action": "copy_photos", "caption": "flowers", "folder": "Giardino"}\n'
+    'sposta le foto del mare nella cartella Mare -> {"action": "move_photos", "caption": "the sea", "folder": "Mare"}\n'
+    'spostale in una cartella che si chiama Vacanze -> {"action": "move_photos", "caption": "", "folder": "Vacanze"}\n'
     'prendi tutte le foto di Parigi e mettimele in una cartella Parigi -> {"action": "copy_photos", "caption": "Paris", "folder": "Parigi"}\n'
     'trovami sul telefono le foto del lago -> {"action": "find_photos", "caption": "a lake", "folder": ""}\n'
     'trovami le foto dal 20 maggio al 20 luglio -> {"action": "find_photos", "caption": "", "folder": ""}\n'
@@ -220,6 +224,8 @@ def proposed_in_words(kind: str, count: int, folder: str, every: int = 0) -> str
         text = f"Copio dal telefono al computer {these}, {into} Sul telefono restano dove sono."
     elif kind == "send":
         text = f"Mando sul telefono {these}, nell'album «{folder}»? Sul computer restano dove sono."
+    elif kind == "move":
+        text = f"Sposto {these} {into} Lasciano il posto dove sono: con «annulla» tornano dov'erano."
     elif kind == "clear":
         text = (f"Tolgo dal telefono {these}? Prima le copio sul computer, nella cartella «{folder}», e controllo che siano arrivate intere. "
                 "Poi il telefono le sposta nel suo cestino, dove restano 30 giorni: te lo chiederà Android.")
@@ -236,6 +242,9 @@ def undo_proposed_in_words(entry: dict) -> str:
     if entry["kind"] == "trash":
         back = "La rimetto al suo posto?" if count == 1 else "Le rimetto al loro posto?"
         return f"L'ultima modifica è stata spostare {_photos(count)} nel cestino. {back}"
+    if entry["kind"] == "move":
+        back = "La rimetto dov'era?" if count == 1 else "Le rimetto dov'erano?"
+        return f"L'ultima modifica è stata spostare {_photos(count)} nella cartella «{entry.get('folder', '')}». {back}"
     copies = "quella copia" if count == 1 else "quelle copie"
     if entry["kind"] == "receive" and entry.get("cleared"):
         # the pictures left the phone: what can be taken back from here is only the copy, and the user must know
@@ -294,6 +303,10 @@ def done_in_words(result: dict) -> tuple[str, str]:
     if result["kind"] == "trash":
         text = f"Fatto: {_photos(count)} nel cestino. Per riaverl{'a' if count == 1 else 'e'} basta dirmi «annulla»." if count else "Non ho spostato niente."
         memory = f"The user confirmed: {count} photos were moved to the trash."
+    elif result["kind"] == "move":
+        back = f"Per rimetterl{'a' if count == 1 else 'e'} dov'er{'a' if count == 1 else 'ano'} basta dirmi «annulla»."
+        text = f"Fatto: {_photos(count)} spostat{'a' if count == 1 else 'e'} nella cartella «{result['folder']}». {back}" if count else "Non ho spostato niente."
+        memory = f'The user confirmed: {count} photos were moved into the folder "{result["folder"]}".'
     elif result["kind"] == "albums":
         folders = result["folders"]
         into = f"nell'album «{folders[0]}»" if len(folders) == 1 else f"in {len(folders)} album, in Raccolte"
@@ -314,6 +327,12 @@ def undone_in_words(result: dict) -> tuple[str, str]:
         else:
             text = "Nel cestino quelle foto non ci sono più: non ho potuto rimetterle a posto."
         memory = f"The change was undone: {count} photos were restored from the trash."
+    elif result["undid"] == "move":
+        if count:
+            text = f"Annullato: {_photos(count)} di nuovo dov'er{'a' if count == 1 else 'ano'}, fuori dalla cartella «{result['folder']}»."
+        else:
+            text = f"Nella cartella «{result['folder']}» quelle foto non ci sono più: non ho potuto rimetterle a posto."
+        memory = f'The change was undone: {count} photos were moved back out of the folder "{result["folder"]}".'
     elif result["undid"] == "albums":
         text = f"Annullato: ho tolto {'la copia' if count == 1 else f'le {count} copie'} dagli album dei viaggi. Gli originali sono al loro posto."
         memory = f"The change was undone: {count} copies were removed from the trip albums."
@@ -469,7 +488,7 @@ def propose(decision: dict, photos, actions, selection: list[str], phones=None, 
         memory = "Proposed to undo the last change. Nothing was done: the user must confirm."
         return {"text": undo_proposed_in_words(last), "memory": memory, "proposal": proposal, "searched": "", "period": "", "spot": ""}
 
-    kind = "trash" if decision["action"] == "trash_photos" else "copy"
+    kind = {"trash_photos": "trash", "move_photos": "move"}.get(decision["action"], "copy")
     caption, folder = decision["caption"], ""
     if to_phone:
         # pictures of the computer, to go to the phone
@@ -485,10 +504,16 @@ def propose(decision: dict, photos, actions, selection: list[str], phones=None, 
             return only(NO_PHONE, "No phone is connected.")
         if not phones.photos:
             return only(PHONE_EMPTY, "The phone has not sent its photos yet.")
-        # thrown away on a phone means: a copy here first, and then the phone's own trash
-        kind = "clear" if kind == "trash" else "fetch"
+        # thrown away or moved off a phone means: a copy here first, and then the phone's own trash
+        kind = "clear" if kind in ("trash", "move") else "fetch"
     if kind == "clear":
+        # moved off it, into the folder the user named; thrown away, into the folder of the ones taken off phones
         folder = REMOVED
+        if decision["action"] == "move_photos" and decision["folder"]:
+            try:
+                folder = collection_name(decision["folder"])
+            except Refused:
+                pass
     elif kind == "send":
         # an album on the phone: when the request names none, one with a name that says where its pictures came from
         try:
@@ -529,11 +554,12 @@ def propose(decision: dict, photos, actions, selection: list[str], phones=None, 
     # a phone with no trash an app can use can only be copied from: said before the question, and not hidden in it
     old = kind == "clear" and not phones.can_trash([photo["id"] for photo in chosen])
     if old:
-        kind, folder = "fetch", FROM_THE_PHONE
+        kind, folder = "fetch", FROM_THE_PHONE if folder == REMOVED else folder
     into = f'into the folder "{folder}"' if folder else "into a folder that has no name yet"
     what = {
         "trash": "move them to the trash",
         "copy": f"copy them {into}",
+        "move": f"move them {into}",
         "fetch": f"copy them from the phone to the computer, {into}",
         "clear": f"copy them from the phone to the computer, {into}, and then move them to the trash of the phone",
         "send": f'send them to the phone, into the album "{folder}"',
@@ -918,7 +944,8 @@ async def reply(history: list[dict], wanted: str, models: list[dict], machine, t
     goes = phones is not None and bool(TO_PHONE.search(asked)) and not FROM_PHONE.search(asked)
     if goes and action == "find_photos" and SENDS.search(asked):
         action = decision["action"] = "copy_photos"
-    to_phone = action == "copy_photos" and goes
+    # to the phone, moving is copying: the phone takes a copy, and the computer keeps its pictures
+    to_phone = action in ("copy_photos", "move_photos") and goes
     phone = phones is not None and not to_phone and (bool(ON_PHONE.search(asked)) or (looking_there and not elsewhere))
 
     def done(model: str, memory: str, **more) -> dict:

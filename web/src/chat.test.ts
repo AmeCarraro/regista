@@ -10,7 +10,7 @@ function play(events: ChatEvent[]) {
 const found = { description: 'a black dog', sure: [{ id: 'a', name: 'a.jpg', score: 0.3 }], maybe: [], matching: 1, indexed: 200, partial: false }
 
 /** A reply that proposes to throw away two pictures, as the service sends it. */
-function proposing(action: 'trash' | 'copy' = 'trash', folder = '') {
+function proposing(action: 'trash' | 'copy' | 'move' = 'trash', folder = '') {
   return play([
     { type: 'text', text: 'Sposto nel cestino queste 2 foto?' },
     { type: 'proposal', action, folder, photos: [{ id: 'a', name: 'a.jpg' }, { id: 'b', name: 'b.jpg' }] },
@@ -131,6 +131,17 @@ test('a proposal says what stops it from being carried out', () => {
   expect(missing({ ...copy, folder: 'Cani' })).toBe('')
   expect(missing(undo)).toBe('')
   expect(undo.picked).toEqual([])
+  // a move needs the name of its folder, as a copy does
+  const move = proposalOf(proposing('move'))
+  expect(missing(move)).toMatch(/nome della cartella/)
+  expect(missing({ ...move, folder: 'Mare' })).toBe('')
+})
+
+test('the pictures that went to the trash or to another folder are not what "these" means any more', () => {
+  const reply = proposing('move')
+  const shown = proposalOf(reply).picked
+  const gone = new Map([[shown[0], 'move' as const]])
+  expect(selection([reply], gone)).toEqual(shown.slice(1))
 })
 
 test('pictures confirmed one by one join the reply where their day puts them, and the looking ends', () => {

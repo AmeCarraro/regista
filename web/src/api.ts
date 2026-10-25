@@ -82,11 +82,11 @@ export type Proposal =
   // "fetch" copies pictures from a phone to this computer: the phone sends them when its app is open.
   // "clear" does the same and then has the phone move them to its own trash, after a yes given there.
   // "send" prepares pictures of this computer for the phone, which takes them into an album.
-  | { action: 'trash' | 'copy' | 'fetch' | 'clear' | 'send'; folder: string; photos: Picked[] }
+  | { action: 'trash' | 'copy' | 'move' | 'fetch' | 'clear' | 'send'; folder: string; photos: Picked[] }
   // a copy of the pictures of each trip into an album of its own; `photos` are all of them
   | { action: 'albums'; folder: string; photos: Picked[]; albums: Album[] }
   // "receive" is what a fetch becomes in the journal once the pictures have arrived
-  | { action: 'undo'; of: string; undoes: 'trash' | 'copy' | 'receive' | 'albums'; folder: string; count: number; when: string }
+  | { action: 'undo'; of: string; undoes: 'trash' | 'copy' | 'move' | 'receive' | 'albums'; folder: string; count: number; when: string }
 
 /** The events of POST /api/chat, one JSON object per line. */
 export type ChatEvent =
@@ -104,7 +104,7 @@ export type ChatEvent =
 
 /** What a change did, once carried out: in numbers, and in the words to show. */
 export type Outcome = {
-  kind: 'trash' | 'copy' | 'fetch' | 'clear' | 'send' | 'albums' | 'undo'
+  kind: 'trash' | 'copy' | 'move' | 'fetch' | 'clear' | 'send' | 'albums' | 'undo'
   /** The name of the change, to take it back later. Empty when nothing was touched, or for an undo. */
   id: string
   count: number
@@ -169,7 +169,7 @@ export type Changes = {
   writable: boolean
   /** How many files are in the app's trash. */
   trash: number
-  last: { id: string; kind: 'trash' | 'copy' | 'receive' | 'albums'; count: number; folder: string; when: string } | null
+  last: { id: string; kind: 'trash' | 'copy' | 'move' | 'receive' | 'albums'; count: number; folder: string; when: string } | null
 }
 
 /** The events of POST /api/models/test. */
@@ -278,7 +278,7 @@ export const fetchLibrary = () => get<Library>('/api/photos')
 export const fetchChanges = () => get<Changes>('/api/actions')
 
 /** Carries out a change the user said yes to. Nothing else in the page changes a picture. */
-export const carryOut = (action: 'trash' | 'copy' | 'fetch' | 'clear' | 'send', ids: string[], folder: string) =>
+export const carryOut = (action: 'trash' | 'copy' | 'move' | 'fetch' | 'clear' | 'send', ids: string[], folder: string) =>
   post<Outcome>('/api/actions', { action, ids, folder })
 
 /** Copies the pictures of each trip into its album, all at once: one change, taken back as one. */

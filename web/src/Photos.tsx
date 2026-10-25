@@ -106,7 +106,7 @@ export default function PhotoResults({ found }: { found: Found }) {
       {shown.length > 0 && (
       <div className="grid">
         {shown.map((photo, index) => {
-          const away = gone.has(photo.id)
+          const away = gone.get(photo.id)
           // the same button either way: the small copy already on screen stays there, faded, when its picture goes
           return (
             <button
@@ -114,12 +114,21 @@ export default function PhotoResults({ found }: { found: Found }) {
               type="button"
               className={`photo${index >= found.sure.length ? ' unsure' : ''}${away ? ' gone' : ''}`}
               style={{ '--i': Math.min(index, 24) } as CSSProperties}
-              aria-label={away ? `${photo.name}, nel cestino` : found.place === 'phone' ? `Apri ${photo.name}, sul telefono` : `Apri ${photo.name}`}
-              disabled={away}
+              aria-label={
+                away === 'trash'
+                  ? `${photo.name}, nel cestino`
+                  : away === 'move'
+                    ? `${photo.name}, spostata in un'altra cartella`
+                    : found.place === 'phone'
+                      ? `Apri ${photo.name}, sul telefono`
+                      : `Apri ${photo.name}`
+              }
+              disabled={Boolean(away)}
               onClick={() => setOpen(photo.id)}
             >
               <Thumb id={photo.id} />
-              {away && <icons.Trash className="mark-gone" />}
+              {away === 'trash' && <icons.Trash className="mark-gone" />}
+              {away === 'move' && <icons.Folder className="mark-gone" />}
               {found.place === 'phone' && (
                 <span className="on-phone" title="È sul telefono">
                   <icons.Phone />

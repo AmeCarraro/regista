@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import actions as module
 from actions import Actions, Refused, collection_name, free
 
 
@@ -178,16 +179,31 @@ def test_a_change_can_be_taken_back_by_name_whatever_came_after(library):
         actions.undo("no such change")
 
 
-def stuck(monkeypatch, name):
-    """Makes one file impossible to move, as when another program holds it open."""
+def stuck(monkeypatch, name, moments=None):
+    """Makes one file impossible to move, as when another program holds it open: always, or for its first `moments` tries."""
     real = os.rename
+    tried = []
 
     def rename(source, target):
-        if Path(source).name == name:
+        if Path(source).name == name and (moments is None or len(tried) < moments):
+            tried.append(source)
             raise PermissionError("in use")
         real(source, target)
 
     monkeypatch.setattr(os, "rename", rename)
+    # the tries again are not waited for here
+    monkeypatch.setattr(module.time, "sleep", lambda seconds: None)
+    return tried
+
+
+def test_a_picture_held_open_for_a_moment_is_moved_all_the_same(library, monkeypatch):
+    actions, root = library
+    tried = stuck(monkeypatch, "sea.jpg", moments=2)
+
+    done = actions.trash(["trip/sea.jpg"])
+
+    assert (done["count"], done["failed"], len(tried)) == (1, 0, 2)
+    assert not (root / "trip" / "sea.jpg").exists()
 
 
 def test_a_picture_that_cannot_be_moved_stays_and_the_others_go_ahead(library, monkeypatch):

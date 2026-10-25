@@ -7,6 +7,7 @@ import Composer from './Composer.tsx'
 import * as icons from './icons.tsx'
 import type { Answers } from './Proposal.tsx'
 import { Shelf } from './shelf.ts'
+import type { Gone } from './shelf.ts'
 import Side from './Side.tsx'
 import Thread from './Thread.tsx'
 
@@ -30,7 +31,7 @@ export default function App() {
   const [changes, setChanges] = useState<Changes | null>(null)
   const [phone, setPhone] = useState<PhoneState | null>(null)
   // the pictures that went to the trash since they were shown in this conversation
-  const [gone, setGone] = useState<ReadonlySet<string>>(new Set())
+  const [gone, setGone] = useState<ReadonlyMap<string, Gone>>(new Map())
   const [testing, setTesting] = useState<{ model: string; done: number; of: number } | null>(null)
   const [panel, setPanel] = useState(false)
   const controller = useRef<AbortController | null>(null)
@@ -83,7 +84,7 @@ export default function App() {
             if (now.state === 'done') {
               patch(one.reply, (current) => settle(current, { state: 'done', note: now.text, entry: now.entry, transfer: '' }, now.memory))
               // pictures that left the phone are no longer there to be shown or chosen
-              if (now.gone.length > 0) setGone((before) => new Set([...before, ...now.gone]))
+              if (now.gone.length > 0) setGone((before) => new Map([...before, ...now.gone.map((id): [string, Gone] => [id, 'trash'])]))
               loadChanges()
               loadPhone()
             } else {
@@ -144,9 +145,9 @@ export default function App() {
   function afterChange(outcome: Outcome) {
     if (outcome.kind !== 'copy' && outcome.ids.length > 0) {
       setGone((before) => {
-        const after = new Set(before)
+        const after = new Map(before)
         for (const id of outcome.ids) {
-          if (outcome.kind === 'trash') after.add(id)
+          if (outcome.kind === 'trash' || outcome.kind === 'move') after.set(id, outcome.kind)
           else after.delete(id)
         }
         return after

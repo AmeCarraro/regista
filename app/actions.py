@@ -16,6 +16,7 @@ import re
 import secrets
 import shutil
 import threading
+import time
 from pathlib import Path
 
 # the app's own folder inside the picture folder: the trash and the journal
@@ -24,6 +25,8 @@ HOME = ".regista"
 COLLECTIONS = "Raccolte"
 # folders of the picture folder that are not part of the library
 NOT_LIBRARY = {HOME, COLLECTIONS}
+# how many times a file that another program holds open is tried again, 0.2 seconds apart
+BUSY_TRIES = 10
 READ_ONLY = "La cartella delle foto mi è stata data in sola lettura: posso cercare, ma non spostare né copiare."
 
 
@@ -73,8 +76,17 @@ class Actions:
     def _move(self, source: Path, target: Path) -> Path:
         target = free(target)
         target.parent.mkdir(parents=True, exist_ok=True)
-        # a rename: the file changes name and folder, its content is never copied or touched
-        os.rename(source, target)
+        # A rename: the file changes name and folder, its content is never copied or touched. Windows does not
+        # rename a file another program has open for a moment, as the index reading a picture just moved, or the
+        # antivirus looking at it: it is tried again for two seconds before giving up.
+        for attempt in range(BUSY_TRIES):
+            try:
+                os.rename(source, target)
+                return target
+            except PermissionError:
+                if attempt == BUSY_TRIES - 1:
+                    raise
+                time.sleep(0.2)
         return target
 
     def _relative(self, path: Path) -> str:
@@ -189,6 +201,33 @@ class Actions:
             entry = self._record(self._name(), "copy", files, back=lambda file: (self.root / file["to"]).unlink(missing_ok=True), folder=target.name)
             return {**entry, "folder": target.name, "count": len(files), "missing": missing, "failed": failed}
 
+    def move(self, relatives: list[str], folder: str) -> dict:
+        """Moves pictures into a folder of the library, by that name: they stay pictures of the library, found as
+        before, in another place. Nothing is copied or lost, and `undo` brings them back where they were."""
+        self._changing()
+        name = collection_name(folder)
+        if name.lower() in {part.lower() for part in NOT_LIBRARY}:
+            raise Refused(f"«{name}» è una cartella di Regista: scegli un altro nome.")
+        with self._lock:
+            target = self.root / name
+            # every name is checked before anything is touched
+            sources = [(relative, self._picture(relative)) for relative in relatives]
+            files, missing, failed = [], 0, 0
+            for relative, source in sources:
+                if not source.is_file():
+                    missing += 1
+                    continue
+                if source.parent == target:
+                    continue  # it is there already
+                try:
+                    moved = self._move(source, target / source.name)
+                except OSError:
+                    failed += 1  # open in another program, perhaps: it stays where it is and the others go ahead
+                    continue
+                files.append({"from": relative, "to": self._relative(moved)})
+            entry = self._record(self._name(), "move", files, back=lambda file: self._move(self.root / file["to"], self.root / file["from"]), folder=name)
+            return {**entry, "folder": name, "count": len(files), "missing": missing, "failed": failed}
+
     def albums(self, groups: list[tuple[str, list[str]]]) -> dict:
         """Copies pictures into several folders of the collections at once, one per album: one change, taken back as one.
 
@@ -288,7 +327,7 @@ class Actions:
                     missing += 1
                     continue
                 try:
-                    if entry["kind"] == "trash":
+                    if entry["kind"] in ("trash", "move"):
                         # home again; if something else took its place meanwhile, next to it under another name
                         moved = self._move(where, self.root / file["from"])
                     else:
