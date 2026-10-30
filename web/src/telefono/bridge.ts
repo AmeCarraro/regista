@@ -27,6 +27,12 @@ export type Update = { newer: boolean; taking: boolean; got: number; size: numbe
 /** The computer's answer to a request typed here: its words, and the pictures of this phone, by the phone's own names. */
 export type Answer = { words: string; sure: string[]; maybe: string[]; model: string; seconds: number }
 
+/** What the computer says while it looks: a picture of this phone it found, by the phone's own name; how many it has looked at, of how many. */
+export type Heard = { type: 'photo'; photo: string } | { type: 'looked'; looked: number; of: number }
+
+/** What the app hands over of the computer's answer, a few at a time: what it says on the way, and last the answer. */
+type Said = Heard | { type: 'answer'; answer: Answer | null }
+
 export type App = {
   pictures(): Picture[]
   reading(): Reading
@@ -43,8 +49,11 @@ export type App = {
   wantSight(): void
   /** How close each picture the phone has looked at is to a sentence; null while it has no models. */
   scores(sentence: string): Record<string, number> | null
-  /** Asks the computer about a request, when it answers; null when it cannot be asked, or has nothing to add. */
-  ask(text: string): Promise<Answer | null>
+  /**
+   * Asks the computer about a request, when it answers; null when it cannot be asked, or has nothing to add.
+   * `heard` is told of each picture it finds on the way, and of how far it is.
+   */
+  ask(text: string, heard: (event: Heard) => void): Promise<Answer | null>
   autoCopy(): AutoCopy
   /** Starts or stops the copying of the new pictures by themselves: the ones added from now on. */
   setAutoCopy(on: boolean): void
@@ -76,25 +85,35 @@ type Native = {
 declare global {
   interface Window {
     Regista?: Native
-    /** Called by the app when the computer's answer to a request is there. */
+    /** Called by the app when the computer said more about a request: what it said is taken with answer(token). */
     registaAnswered?: (token: string) => void
   }
 }
 
-// how long the computer is waited for: its model may have to be loaded first
+// how long the computer is waited for when it says nothing: its model may have to be loaded first
 const PATIENCE = 45_000
+
+type Waiting = { heard: (event: Heard) => void; done: (answer: Answer | null) => void }
 
 export function connect(): App {
   const native = window.Regista
   if (!native) return pretend()
   const parse = <T>(text: string): T => JSON.parse(text) as T
   // the requests waiting for the computer, by the name each was given
-  const waiting = new Map<string, (answer: Answer | null) => void>()
+  const waiting = new Map<string, Waiting>()
+  // in each name, as the app may still be telling the requests of a page shown before this one
+  const page = Date.now().toString(36)
   let asked = 0
   window.registaAnswered = (token) => {
-    const done = waiting.get(token)
-    waiting.delete(token)
-    done?.(parse<Answer | null>(native.answer(token)))
+    for (const said of parse<Said[]>(native.answer(token))) {
+      const asking = waiting.get(token)
+      if (said.type !== 'answer') {
+        asking?.heard(said)
+        continue
+      }
+      waiting.delete(token)
+      asking?.done(said.answer)
+    }
   }
   return {
     pictures: () => parse<Picture[]>(native.pictures()),
@@ -114,15 +133,30 @@ export function connect(): App {
     setAutoCopy: (on) => native.setAutoCopy(on),
     update: () => parse<Update>(native.update()),
     takeUpdate: () => native.takeUpdate(),
-    ask: (text) =>
+    ask: (text, heard) =>
       new Promise((resolve) => {
         asked += 1
-        const token = `a${asked}`
-        waiting.set(token, resolve)
+        const token = `a${page}${asked}`
+        let patience = 0
+        // the computer is waited for as long as it says something now and then
+        const wait = () => {
+          clearTimeout(patience)
+          patience = window.setTimeout(() => {
+            if (waiting.delete(token)) resolve(null)
+          }, PATIENCE)
+        }
+        waiting.set(token, {
+          heard: (event) => {
+            wait()
+            heard(event)
+          },
+          done: (answer) => {
+            clearTimeout(patience)
+            resolve(answer)
+          },
+        })
         native.ask(text, token)
-        setTimeout(() => {
-          if (waiting.delete(token)) resolve(null)
-        }, PATIENCE)
+        wait()
       }),
   }
 }

@@ -782,24 +782,57 @@ async def only_the_last(device: str, work, gone) -> dict | None:
             del asking[device]
 
 
-@app.post("/phone/ask")
-async def phone_ask(body: Typed, request: Request):
-    """A request typed on a phone's own screen, understood by this computer's director: the pictures of that phone it asks for.
+async def _answer(text: str, device: str, gone, heard=None) -> dict | None:
+    """What this computer finds for a request typed on a phone, telling `heard` on the way (orchestrator.on_the_phone).
 
-    "answer" is null when this computer has nothing to add, or cannot ask its models now: then the phone answers alone.
-    It is null too when the same phone asks something else before the answer is ready.
+    None when this computer has nothing to add, or cannot ask its models now: then the phone answers alone.
+    None too when the same phone asks something else before the answer is ready, or goes away (`gone`).
     """
-    device = request.state.device
     try:
         installed = await llm.installed()
         tests = selftest.load(INDEX_DIR)
-        understood = orchestrator.on_the_phone(body.text, device, phones, places, installed, catalog.hardware(installed, tests), tests)
-        found = await only_the_last(device, understood, request.is_disconnected)
+        understood = orchestrator.on_the_phone(text, device, phones, places, installed, catalog.hardware(installed, tests), tests, heard)
+        return await only_the_last(device, understood, gone)
     except Exception:
         # Ollama is off, or a model failed: the phone has its own answer already
         logger.exception("a request from a phone could not be understood here")
+        return None
+
+
+@app.post("/phone/ask")
+async def phone_ask(body: Typed, request: Request):
+    """A request typed on a phone's own screen, understood by this computer's director: the pictures of that phone it
+    asks for, all at the end (_answer). The apps made before /phone/ask/stream ask here."""
+    return {"answer": await _answer(body.text, request.state.device, request.is_disconnected)}
+
+
+@app.post("/phone/ask/stream")
+async def phone_ask_stream(body: Typed, request: Request):
+    """The same, as it is found: JSON lines, "looked" after each picture looked at and "photo" for each one that
+    shows what was asked, by the phone's name of it; last "answer", as /phone/ask gives it."""
+    device = request.state.device
+    heard: asyncio.Queue = asyncio.Queue()
+
+    async def answer():
         found = None
-    return {"answer": found}
+        try:
+            found = await _answer(body.text, device, request.is_disconnected, heard.put_nowait)
+        finally:
+            heard.put_nowait({"type": "answer", "answer": found})
+
+    async def events():
+        task = asyncio.ensure_future(answer())
+        try:
+            while True:
+                event = await heard.get()
+                yield event
+                if event["type"] == "answer":
+                    return
+        finally:
+            # the phone went away: the looking for it stops
+            task.cancel()
+
+    return stream(events())
 
 
 @app.post("/phone/library/done")

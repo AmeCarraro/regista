@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest'
 import { iso } from './period.ts'
 import type { Day } from './period.ts'
-import { select, sentence } from './select.ts'
+import { partly, select, sentence } from './select.ts'
 import type { Picture } from './select.ts'
 import { understand } from './understand.ts'
 import type { Places } from './understand.ts'
@@ -145,6 +145,16 @@ test('with the model, what the pictures show is looked for, the sure ones first 
   expect(select(pictures, understand('un cane', TODAY, places), {}).words).toBe('Non ho trovato niente del genere tra le foto che ho guardato.')
   expect(select(pictures, understand('un cane', TODAY, places), { '2': 0.27 }).words).toBe('Non sono sicuro di averne trovate. Questa è la più vicina.')
   expect(select(pictures, understand('un cane', TODAY, places), { '2': 0.25 }).words).toBe('Non ho trovato niente del genere tra le foto che ho guardato.')
+})
+
+test('what the computer has found so far is shown the newest first, while it goes on looking', () => {
+  const soFar = partly(pictures, ['1', '5', '3', '99'])
+
+  // a name the phone does not know is left out
+  expect(soFar.pictures.map((picture) => picture.id)).toEqual(['5', '3', '1'])
+  expect(soFar.sure).toBe(3)
+  expect(soFar.words).toBe('Finora ne ho trovate 3: continuo a guardare le altre.')
+  expect(partly(pictures, ['2']).words).toBe('Finora ne ho trovata una: continuo a guardare le altre.')
 })
 
 test('the model is given what the pictures should show, as a sentence it reads best', () => {

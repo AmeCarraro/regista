@@ -22,6 +22,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import Callable
 
 import catalog
 import llm
@@ -863,13 +864,15 @@ async def _one_by_one(library, phone: bool, caption: str, when, spot: dict | Non
     yield {"type": "done", "memory": f'{_searched(outcome["looking_for"], phone, when, there, both)}: looked at {outcome["looked"]} one by one, {len(outcome["found"])} show it.'}
 
 
-async def on_the_phone(text: str, device: str, phones, places, models: list[dict], machine, tests: dict) -> dict | None:
+async def on_the_phone(text: str, device: str, phones, places, models: list[dict], machine, tests: dict,
+                       heard: Callable[[dict], None] | None = None) -> dict | None:
     """A request typed on a phone's own screen, understood here: the pictures of that phone it asks for, and the words.
 
     The phone reads a request by itself too (understand.ts), with no model. Here the director
     understands what that cannot, and this computer's model, which reads English best, looks
     for what the pictures show: with a model that sees, the likeliest are looked at one by one,
-    for at most PHONE_LOOKING seconds. The pictures are named as the phone names them. None when
+    for at most PHONE_LOOKING seconds, and `heard` is told on the way: "photo" for each one that
+    shows it, and "looked" after each. The pictures are named as the phone names them. None when
     this computer has nothing to add: then the phone's own answer stands.
     """
     director, eyes = catalog.director_and_eyes(models, machine, tests)
@@ -893,8 +896,12 @@ async def on_the_phone(text: str, device: str, phones, places, models: list[dict
     media = {photo["id"]: photo["media"] for photo in phones.photos if photo["device"] == device}
     if eyes and (spot["rest"] if spot else caption):
         outcome: dict = {}
-        async for _ in _looking(phones, True, caption, when, spot, period, eyes, not decision.get("own"), outcome, device, PHONE_LOOKING):
-            pass
+        async for event in _looking(phones, True, caption, when, spot, period, eyes, not decision.get("own"), outcome, device, PHONE_LOOKING):
+            # the phone shows each picture as soon as it is confirmed, and how far the looking is
+            if heard and event["type"] == "photo" and event["photo"]["id"] in media:
+                heard({"type": "photo", "photo": media[event["photo"]["id"]]})
+            elif heard and event["type"] == "looked":
+                heard(event)
         words = looked_in_words(outcome, False, spot, period)
         if spot and not outcome["there"]:
             words = f"Nessuna foto risulta scattata {_at(spot)}: cerco quelle che ci somigliano. {words}"

@@ -499,6 +499,40 @@ def test_a_request_typed_on_a_phone_is_answered_here_or_left_to_the_phone(home, 
     assert a_phone().post("/phone/ask", json={"text": "le foto del mare"}).status_code == 401
 
 
+def test_a_phone_sees_the_pictures_found_for_it_as_they_are_found(home, monkeypatch):
+    phone, key, _ = let_in()
+
+    async def answering(text, device, phones, places, models, machine, tests, heard):
+        heard({"type": "looked", "looked": 1, "of": 2})
+        heard({"type": "photo", "photo": "41"})
+        heard({"type": "looked", "looked": 2, "of": 2})
+        return {"words": "Ho trovato 1 foto.", "sure": ["41"], "maybe": [], "model": "m", "seconds": 0.1}
+
+    async def installed():
+        return []
+
+    monkeypatch.setattr(main.llm, "installed", installed)
+    monkeypatch.setattr(main.orchestrator, "on_the_phone", answering)
+    said = phone.post("/phone/ask/stream", json={"text": "le foto del mare"}, headers=key)
+    assert said.headers["content-type"].startswith("application/x-ndjson")
+    assert [json.loads(line) for line in said.text.splitlines()] == [
+        {"type": "looked", "looked": 1, "of": 2},
+        {"type": "photo", "photo": "41"},
+        {"type": "looked", "looked": 2, "of": 2},
+        {"type": "answer", "answer": {"words": "Ho trovato 1 foto.", "sure": ["41"], "maybe": [], "model": "m", "seconds": 0.1}},
+    ]
+
+    async def broken(*_):
+        raise RuntimeError("Ollama answered 500")
+
+    # a model that fails leaves the answer to the phone, and the phone learns it at once
+    monkeypatch.setattr(main.orchestrator, "on_the_phone", broken)
+    said = phone.post("/phone/ask/stream", json={"text": "le foto del mare"}, headers=key)
+    assert [json.loads(line) for line in said.text.splitlines()] == [{"type": "answer", "answer": None}]
+    assert a_phone().post("/phone/ask/stream", json={"text": "le foto del mare"}).status_code == 401
+    assert client.post("/phone/ask/stream", json={"text": "le foto del mare"}).status_code == 404
+
+
 def test_a_phone_finds_here_the_app_for_its_processor_and_takes_it(home, tmp_path, monkeypatch):
     apps = tmp_path / "apps"
     apps.mkdir()

@@ -1,9 +1,9 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import * as icons from '../icons.tsx'
 import { connect } from './bridge.ts'
-import type { Answer, State } from './bridge.ts'
+import type { Answer, Heard, State } from './bridge.ts'
 import type { Day } from './period.ts'
-import { select, sentence } from './select.ts'
+import { partly, select, sentence } from './select.ts'
 import type { Found } from './select.ts'
 import { understand } from './understand.ts'
 
@@ -47,6 +47,8 @@ export default function Telefono() {
   // the computer's answer to the request on screen, when it gave one; and whether it is still being asked
   const [answered, setAnswered] = useState<{ asked: string; answer: Answer } | null>(null)
   const [waiting, setWaiting] = useState(false)
+  // while the computer looks: the pictures it has found so far, and how many it has looked at, of how many
+  const [soFar, setSoFar] = useState<{ asked: string; photos: string[]; looked: number; of: number } | null>(null)
   // the computer can be wrong too: the user may go back to the phone's own answer
   const [phoneFirst, setPhoneFirst] = useState(false)
   const latest = useRef('')
@@ -78,15 +80,20 @@ export default function Telefono() {
     [understood, sight.ready, sight.seen, app],
   )
   const mine = useMemo(() => select(pictures, understood, scores), [pictures, understood, scores])
-  // the computer's answer, when there is one for this request, names the phone's own pictures
-  const both = answered !== null && answered.asked === asked
-  const found: Found = useMemo(() => {
-    if (!answered || answered.asked !== asked || phoneFirst) return mine
-    const byName = new Map(pictures.map((picture) => [picture.id, picture]))
-    const sure = answered.answer.sure.flatMap((id) => byName.get(id) ?? [])
-    const maybe = answered.answer.maybe.flatMap((id) => byName.get(id) ?? [])
-    return { pictures: [...sure, ...maybe], words: answered.answer.words, sure: sure.length }
-  }, [answered, asked, mine, pictures, phoneFirst])
+  // the computer's answer when there is one for this request, or while it looks what it has found so far: it names the phone's own pictures
+  const computer: Found | null = useMemo(() => {
+    if (answered?.asked === asked) {
+      const byName = new Map(pictures.map((picture) => [picture.id, picture]))
+      const sure = answered.answer.sure.flatMap((id) => byName.get(id) ?? [])
+      const maybe = answered.answer.maybe.flatMap((id) => byName.get(id) ?? [])
+      return { pictures: [...sure, ...maybe], words: answered.answer.words, sure: sure.length }
+    }
+    if (soFar?.asked !== asked) return null
+    const partial = partly(pictures, soFar.photos)
+    return partial.pictures.length > 0 ? partial : null
+  }, [answered, soFar, asked, pictures])
+  const both = computer !== null
+  const found = computer && !phoneFirst ? computer : mine
   const fromComputer = found !== mine
   const visible = found.pictures.slice(0, shown)
 
@@ -98,6 +105,7 @@ export default function Telefono() {
     setChoosing(null)
     setNote('')
     setAnswered(null)
+    setSoFar(null)
     setPhoneFirst(false)
     latest.current = typed
     // the phone answers at once, by itself; the computer, when it answers, understands more and has the last word
@@ -106,9 +114,18 @@ export default function Telefono() {
       return
     }
     setWaiting(true)
-    void app.ask(typed).then((answer) => {
+    // what the computer finds is shown as it finds it, in place of the phone's own answer
+    const heard = (event: Heard) => {
+      if (latest.current !== typed) return
+      setSoFar((before) => {
+        const now = before?.asked === typed ? before : { asked: typed, photos: [], looked: 0, of: 0 }
+        return event.type === 'photo' ? { ...now, photos: [...now.photos, event.photo] } : { ...now, looked: event.looked, of: event.of }
+      })
+    }
+    void app.ask(typed, heard).then((answer) => {
       if (latest.current !== typed) return
       setWaiting(false)
+      setSoFar(null)
       if (answer) setAnswered({ asked: typed, answer })
     })
   }
@@ -272,7 +289,13 @@ export default function Telefono() {
           {phoneFirst ? 'Mostra la risposta del computer' : 'Mostra la risposta del telefono'}
         </button>
       )}
-      {waiting && <p className="fine">Chiedo anche al computer, che capisce di più…</p>}
+      {waiting && (
+        <p className="fine">
+          {soFar?.asked === asked && soFar.of > 0
+            ? `Il computer guarda le foto una per una: ${soFar.looked} di ${soFar.of}…`
+            : 'Chiedo anche al computer, che capisce di più…'}
+        </p>
+      )}
       {note && (
         <p className="note">
           <icons.Check /> {note}

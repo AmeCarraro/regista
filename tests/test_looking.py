@@ -312,12 +312,16 @@ def test_a_request_typed_on_the_phone_is_looked_at_one_by_one_too(tmp_path, monk
     monkeypatch.setattr(llm, "sees_many", sees_many)
     script(monkeypatch, ['{"action": "find_photos", "caption": "something red", "folder": ""}'])
 
-    found = asyncio.run(orchestrator.on_the_phone("le foto rosse", "d1", phones, None, [EYES], LAPTOP, TESTS))
+    heard = []
+    found = asyncio.run(orchestrator.on_the_phone("le foto rosse", "d1", phones, None, [EYES], LAPTOP, TESTS, heard.append))
 
     # the red ones, the newest first, named as the phone names them; nothing left to doubt
     assert found["sure"] == ["2", "1"] and found["maybe"] == []
     assert found["words"] == "Ho trovato 2 foto: le ho guardate una per una, dalla più recente."
     assert found["model"] == "qwen3.5:4b" and asked
+    # and the phone was told of each on the way, and of how far the looking was
+    assert sorted(event["photo"] for event in heard if event["type"] == "photo") == ["1", "2"]
+    assert heard[-1]["type"] == "looked" and heard[-1]["looked"] == heard[-1]["of"]
 
 
 def test_before_the_models_were_tried_the_one_that_looks_directs_too():

@@ -4,10 +4,12 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import org.json.JSONArray
+import org.json.JSONException
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
 import kotlin.concurrent.thread
 
 /**
@@ -24,8 +26,8 @@ class Phone(
     private val sight: Sight,
     private val update: Update,
 ) {
-    // the computer's answers to requests typed here, until the page takes them
-    private val answers = ConcurrentHashMap<String, String>()
+    // what the computer said about requests typed here, until the page takes it
+    private val heard = ConcurrentHashMap<String, ConcurrentLinkedQueue<JSONObject>>()
 
     @JavascriptInterface
     fun pictures(): String = library.json()
@@ -80,25 +82,48 @@ class Phone(
 
     /**
      * Asks the computer about a request typed here, if it answers: its director understands more
-     * than the phone can by itself. The page is told when the answer is there, by `token`, and
-     * then takes it (answer); it is null when the computer has none.
+     * than the phone can by itself. What it finds comes a little at a time: each time the page is
+     * told, by `token`, and takes it (answer). Last comes the answer, null when the computer has none.
      */
     @JavascriptInterface
     fun ask(text: String, token: String) {
         if (!TOKEN.matches(token)) return
         val computer = app.reached
+        val said = ConcurrentLinkedQueue<JSONObject>()
+        heard[token] = said
         thread(name = "ask") {
-            answers[token] = try {
-                computer?.ask("POST", "/phone/ask", JSONObject().put("text", text.take(500)))?.opt("answer")?.toString() ?: "null"
+            var answered = false
+            try {
+                computer?.lines("/phone/ask/stream", JSONObject().put("text", text.take(500))) { event ->
+                    val kind = event.optString("type")
+                    if (kind !in SAID) return@lines
+                    answered = answered || kind == "answer"
+                    said.add(event)
+                    app.answered(token)
+                }
             } catch (unreachable: IOException) {
-                "null"
+            } catch (garbled: JSONException) {
             }
-            app.answered(token)
+            // the computer could not be asked, or stopped before the end: the page waits no more
+            if (!answered) {
+                said.add(JSONObject().put("type", "answer").put("answer", JSONObject.NULL))
+                app.answered(token)
+            }
         }
     }
 
+    /** What the computer said about a request since the page last took it, as a JSON list; the last of all is the answer. */
     @JavascriptInterface
-    fun answer(token: String): String = answers.remove(token) ?: "null"
+    fun answer(token: String): String {
+        val said = heard[token] ?: return "[]"
+        val taken = JSONArray()
+        while (true) {
+            val event = said.poll() ?: break
+            taken.put(event)
+            if (event.optString("type") == "answer") heard.remove(token)
+        }
+        return taken.toString()
+    }
 
     /** Whether the new pictures go to the computer by themselves, and when they last did: {"on", "at", "count"}. */
     @JavascriptInterface
@@ -174,6 +199,9 @@ class Phone(
     companion object {
         // what the page names an answer it waits for by: a few letters and figures, nothing that could be code
         private val TOKEN = Regex("[a-z0-9]{1,24}")
+
+        // what the page knows of what the computer says: the pictures it finds, how far it is, and the answer
+        private val SAID = setOf("photo", "looked", "answer")
 
         // a name reserved for pages that an app shows from its own files: no site in the world answers to it
         const val HOST = "appassets.androidplatform.net"

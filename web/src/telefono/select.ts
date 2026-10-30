@@ -61,6 +61,14 @@ function newestFirst(pictures: Picture[]): Picture[] {
   return [...pictures].sort((one, other) => other.day.localeCompare(one.day) || one.name.localeCompare(other.name))
 }
 
+/** What the computer has found so far for a request, while it goes on looking: all sure, the newest first. */
+export function partly(pictures: Picture[], ids: string[]): Found {
+  const found = new Set(ids)
+  const chosen = newestFirst(pictures.filter((picture) => found.has(picture.id)))
+  const words = chosen.length === 1 ? 'Finora ne ho trovata una: continuo a guardare le altre.' : `Finora ne ho trovate ${chosen.length}: continuo a guardare le altre.`
+  return { pictures: chosen, words, sure: chosen.length }
+}
+
 /** The sentence the phone's model is given for what a request says the pictures show: so it finds them best. */
 export function sentence(rest: string[]): string {
   return `una foto di ${rest.join(' ')}`

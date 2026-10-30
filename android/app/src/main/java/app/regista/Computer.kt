@@ -174,6 +174,26 @@ class Computer(val address: String, private val port: Int, private val fingerpri
         return answer(connection)
     }
 
+    /** Asks the computer something whose answer comes a line at a time, each a JSON object: each goes to `each` as it arrives. */
+    fun lines(path: String, body: JSONObject, each: (JSONObject) -> Unit) {
+        val connection = open("POST", path)
+        try {
+            val bytes = body.toString().toByteArray()
+            connection.doOutput = true
+            connection.setRequestProperty("Content-Type", "application/json")
+            connection.setFixedLengthStreamingMode(bytes.size)
+            connection.outputStream.use { it.write(bytes) }
+            val status = connection.responseCode
+            if (status >= 400) {
+                val said = runCatching { JSONObject(connection.errorStream?.bufferedReader()?.readText() ?: "") }.getOrDefault(JSONObject())
+                throw Refused(status, said.optString("detail", "errore $status"))
+            }
+            connection.inputStream.bufferedReader().useLines { lines -> lines.filter { it.isNotBlank() }.forEach { each(JSONObject(it)) } }
+        } finally {
+            connection.disconnect()
+        }
+    }
+
     /** Takes a file from the computer, with the fingerprint the computer gives of it, and hands both to `take`. */
     fun fetch(path: String, take: (InputStream, String) -> Boolean): Boolean {
         val connection = open("GET", path)
