@@ -305,6 +305,14 @@ export const thumbOf = (id: string) => `/api/photos/${id}/thumb`
 
 export const fullOf = (id: string) => `/api/photos/${id}/full`
 
+/** A kind the pictures fall into, how many it has, and one of them to show it. Nothing is moved on the disk. */
+export type Kind = { kind: string; label: string; count: number; cover: string }
+
+export const fetchKinds = () => get<{ kinds: Kind[]; total: number }>('/api/kinds')
+
+/** The pictures of a kind, as a search gives them: the sure ones, then the less sure. "tutte" for all of them. */
+export const fetchKind = (kind: string) => get<Found>(`/api/kinds/${kind}`)
+
 /** A song of the music folder: what its file says of it, or its name and its folder when it says nothing. */
 export type Tune = { id: string; title: string; artist: string; album: string; folder: string; kind: string; size: number }
 

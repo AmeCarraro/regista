@@ -29,7 +29,7 @@ from actions import Actions, Refused, collection_name
 from embedder import ClipEmbedder
 from music import KINDS, Music
 from phone import Phones, on_phone
-from photos import BATCH, PhotoIndex, photo_id
+from photos import BATCH, PhotoIndex, newest, photo_id
 from places import Places
 
 logger = logging.getLogger("uvicorn.error")
@@ -468,6 +468,37 @@ def photo_library(request: Request):
         # which door the page came through: inside a phone's app it does not show what is only the computer's business
         "door": "phone" if getattr(request.state, "device", None) else "computer",
     }
+
+
+@app.get("/api/kinds")
+async def kinds_of_the_photos():
+    """The kinds the pictures fall into (kinds.py), with how many each has and one to show it. Nothing is moved."""
+    sorted_out = await asyncio.to_thread(photos.by_kind)
+    return {
+        "kinds": [
+            {"kind": kind, "label": group["label"], "count": len(group["sure"]) + len(group["maybe"]), "cover": (group["sure"] or group["maybe"])[0]["id"]}
+            for kind, group in sorted_out.items()
+            if group["sure"] or group["maybe"]
+        ],
+        "total": len(photos.photos),
+    }
+
+
+@app.get("/api/kinds/{kind}")
+async def photos_of_a_kind(kind: str):
+    """The pictures of one kind as a search gives them: the sure ones, then the less sure; "tutte" for all of them,
+    the newest first."""
+    sorted_out = await asyncio.to_thread(photos.by_kind)
+    if kind == "tutte":
+        every = sorted((photo for group in sorted_out.values() for photo in group["sure"] + group["maybe"]), key=newest)
+        group = {"label": "Tutte", "sure": every, "maybe": []}
+    elif kind in sorted_out:
+        group = sorted_out[kind]
+    else:
+        raise HTTPException(status_code=404, detail="no such kind")
+    found = len(group["sure"]) + len(group["maybe"])
+    return {"description": group["label"], "sure": group["sure"], "maybe": group["maybe"], "matching": found, "indexed": len(photos.photos),
+            "partial": photos.state["running"], "place": "computer"}
 
 
 @app.post("/api/photos/read")

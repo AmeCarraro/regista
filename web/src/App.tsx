@@ -5,11 +5,13 @@ import { apply, lapse, missing, newReply, selection, settle, tail, toMessages, w
 import type { Proposed, Reply, Turn } from './chat.ts'
 import Composer from './Composer.tsx'
 import * as icons from './icons.tsx'
+import Kinds from './Kinds.tsx'
 import Music from './Music.tsx'
 import type { Answers } from './Proposal.tsx'
 import { Shelf } from './shelf.ts'
 import type { Gone } from './shelf.ts'
 import Side from './Side.tsx'
+import type { View } from './Side.tsx'
 import Thread from './Thread.tsx'
 
 const LEFT_ALONE = 'Va bene, non tocco niente.'
@@ -35,8 +37,8 @@ export default function App() {
   const [gone, setGone] = useState<ReadonlyMap<string, Gone>>(new Map())
   const [testing, setTesting] = useState<{ model: string; done: number; of: number } | null>(null)
   const [panel, setPanel] = useState(false)
-  // the music in place of the chat: the chat stays as it was, and the music goes on when it is shown again
-  const [listening, setListening] = useState(false)
+  // the pictures by kind or the music in place of the chat: the chat stays as it was, and the music goes on
+  const [view, setView] = useState<View>('chat')
   const controller = useRef<AbortController | null>(null)
   const nextId = useRef(1)
   const end = useRef<HTMLDivElement>(null)
@@ -334,16 +336,16 @@ export default function App() {
           onReadAgain={readAgain}
           theme={theme}
           onTheme={toggleTheme}
-          listening={listening}
-          onListen={(chosen) => {
-            setListening(chosen)
+          view={view}
+          onView={(chosen) => {
+            setView(chosen)
             setPanel(false)
           }}
         />
       </aside>
       {panel && <button type="button" className="scrim" aria-label="Chiudi il pannello" onClick={() => setPanel(false)} />}
 
-      <main className={listening ? 'chat listening' : 'chat'}>
+      <main className={view === 'chat' ? 'chat' : 'chat away'}>
         <header className="top">
           <button type="button" className="round ghost small" aria-label="Apri il pannello" onClick={() => setPanel(true)}>
             <icons.Menu />
@@ -357,7 +359,10 @@ export default function App() {
           </Shelf>
           <div ref={end} />
         </div>
-        <Music visible={listening} />
+        <Shelf value={shelf}>
+          <Kinds visible={view === 'photos'} />
+        </Shelf>
+        <Music visible={view === 'music'} />
         <Composer
           models={models}
           model={model}

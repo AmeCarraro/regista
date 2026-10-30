@@ -84,12 +84,13 @@ function Lightbox({ photos, at, onMove, onClose }: { photos: Photo[]; at: number
 
 /**
  * What a search found: the pictures the app is sure about, and behind a button
- * the ones it is less sure about. A click opens a picture at full size. A picture
- * that went to the trash since stays in its place, faded: it shows what happened.
+ * the ones it is less sure about; with `all`, those too at once, faded. A click opens
+ * a picture at full size. A picture that went to the trash since stays in its place,
+ * faded: it shows what happened.
  */
-export default function PhotoResults({ found }: { found: Found }) {
+export default function PhotoResults({ found, all = false }: { found: Found; all?: boolean }) {
   const { gone } = useContext(Shelf)
-  const [more, setMore] = useState(false)
+  const [more, setMore] = useState(all)
   const [open, setOpen] = useState<string | null>(null)
   // with nothing sure to show, the maybes are all there is: no point in hiding them
   const unsureOnly = found.sure.length === 0

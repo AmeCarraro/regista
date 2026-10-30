@@ -66,10 +66,12 @@ type Props = {
   onReadAgain: () => void
   theme: string
   onTheme: () => void
-  /** Whether the music is shown in place of the chat. */
-  listening: boolean
-  onListen: (listening: boolean) => void
+  /** What is shown beside the panel: the chat, the pictures by kind, or the music. */
+  view: View
+  onView: (view: View) => void
 }
+
+export type View = 'chat' | 'photos' | 'music'
 
 function ModelRow({ model, director }: { model: ModelInfo; director: boolean }) {
   const place = placement(model)
@@ -100,7 +102,7 @@ function ModelRow({ model, director }: { model: ModelInfo; director: boolean }) 
 }
 
 /** The side panel: the computer, the models on it with what each is for, and the pictures. */
-export default function Side({ models, library, changes, phone, onPhoneChange, testing, onTest, onReadAgain, theme, onTheme, listening, onListen }: Props) {
+export default function Side({ models, library, changes, phone, onPhoneChange, testing, onTest, onReadAgain, theme, onTheme, view, onView }: Props) {
   const machine = models?.hardware
   const director = models?.order.tools[0]
   const reading = library?.running
@@ -119,10 +121,13 @@ export default function Side({ models, library, changes, phone, onPhoneChange, t
       </header>
 
       <nav className="views" aria-label="Cosa mostrare">
-        <button type="button" aria-pressed={!listening} onClick={() => onListen(false)}>
+        <button type="button" aria-pressed={view === 'chat'} onClick={() => onView('chat')}>
           <icons.Talk /> Chat
         </button>
-        <button type="button" aria-pressed={listening} onClick={() => onListen(true)}>
+        <button type="button" aria-pressed={view === 'photos'} onClick={() => onView('photos')}>
+          <icons.Picture /> Foto
+        </button>
+        <button type="button" aria-pressed={view === 'music'} onClick={() => onView('music')}>
           <icons.Note /> Musica
         </button>
       </nav>

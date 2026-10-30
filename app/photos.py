@@ -20,6 +20,7 @@ import numpy as np
 from PIL import Image, ImageOps
 
 from actions import NOT_LIBRARY
+from kinds import Kinds
 from places import position_of
 from trips import trips
 
@@ -266,6 +267,8 @@ class PhotoIndex:
         self.photos: list[dict] = []
         self.vectors = np.zeros((0, 0), dtype=np.float32)
         self.state = {"running": False, "done": 0, "total": 0, "error": ""}
+        # the pictures by kind, a way of looking at them that moves nothing
+        self.kinds = Kinds(embedder, newest)
         self._lock = threading.Lock()
         # pictures and fingerprints change together: whoever reads or replaces them holds this
         self._swap = threading.Lock()
@@ -378,6 +381,12 @@ class PhotoIndex:
             self.photos, self.vectors = list(photos), stacked
 
     # ---- searching
+
+    def by_kind(self) -> dict[str, dict]:
+        """The pictures by kind (kinds.py), worked out again only when the library changed. Nothing is moved."""
+        with self._swap:
+            photos, vectors = self.photos, self.vectors
+        return self.kinds.sort(photos, vectors)
 
     def search(self, description: str, limit: int = 60, period: tuple | None = None, spot: dict | None = None) -> dict:
         """The pictures closest to a sentence, best first, split into sure matches and maybes.

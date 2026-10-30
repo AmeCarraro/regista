@@ -27,6 +27,7 @@ from collections.abc import Callable
 import catalog
 import llm
 from actions import READ_ONLY, Refused, collection_name
+from kinds import in_words as kinds_in_words
 from period import in_words as period_in_words
 from period import read as read_period
 from period import without_time
@@ -68,6 +69,12 @@ ALBUMS = re.compile(
     r"\balbum\w*\b[^.?!]*\bviagg|\bviagg\w*\b[^.?!]*\balbum"
     r"|\b(?:organizz|divid|raggrupp|smist|ordin|metti|separ)\w*\b[^.?!]*\bper\s+(?:ogni\s+)?viagg"
     r"|\btrip\s+albums?\b",
+    re.IGNORECASE,
+)
+# And one to see them by kind, "cataloga le foto per tipo", "dividi le foto per tipo": the app shows them so (kinds.py).
+BY_KIND = re.compile(
+    r"\bcatalog\w*\b[^.?!]*\b(?:foto|fotografie|immagini|scatti|tipo|tipi)\b|\b(?:foto|fotografie|immagini)\b[^.?!]*\bcatalog"
+    r"|\b(?:organizz|divid|raggrupp|smist|ordin|metti|separ|classific)\w*\b[^.?!]*\bper\s+(?:tipo|tipi|genere|categori\w*|soggett\w*|argoment\w*)\b",
     re.IGNORECASE,
 )
 # A request that plainly asks to see pictures, and says so: "trovami le foto con una motosega", "le foto di
@@ -682,6 +689,14 @@ async def _twins(asked: str, photos, actions, phones):
     yield {"type": "done", "memory": f"{found} Proposed to {what} ({len(chosen)} copies). Nothing was done: the user must confirm."}
 
 
+async def _by_kind(photos):
+    """The pictures by kind (kinds.py): counted here, and shown on the page under «Foto». Nothing is moved."""
+    yield {"type": "step", "tool": "sort_by_kind", "arguments": {}}
+    sorted_out = await asyncio.to_thread(photos.by_kind)
+    yield {"type": "text", "text": kinds_in_words(sorted_out, len(photos.photos))}
+    yield {"type": "done", "memory": "Sorted the pictures by kind: they are shown under «Foto», one folder for each kind. Nothing was moved."}
+
+
 async def _albums(asked: str, photos, actions, phones):
     """An album for each trip: the trips are worked out from where and when the pictures were taken (trips.py), and copying them is proposed."""
     yield {"type": "step", "tool": "make_albums", "arguments": {}}
@@ -968,10 +983,15 @@ async def reply(history: list[dict], wanted: str, models: list[dict], machine, t
         return
     loaded = {model["name"] for model in models if model["loaded"]}
     asked = next((str(message.get("content", "")) for message in reversed(history) if message.get("role") == "user"), "")
-    # copies of the same picture, and albums of trips, are worked out by the app: no model is asked
-    if TWINS.search(asked) or ALBUMS.search(asked):
+    # copies of the same picture, albums of trips and the pictures by kind are worked out by the app: no model is asked
+    if TWINS.search(asked) or ALBUMS.search(asked) or BY_KIND.search(asked):
         yield {"type": "start", "director": director, "writer": writer, "loading": False}
-        app_made = _twins(asked, photos, actions, phones) if TWINS.search(asked) else _albums(asked, photos, actions, phones)
+        if TWINS.search(asked):
+            app_made = _twins(asked, photos, actions, phones)
+        elif ALBUMS.search(asked):
+            app_made = _albums(asked, photos, actions, phones)
+        else:
+            app_made = _by_kind(photos)
         async for event in app_made:
             yield {**event, "model": director or writer, "seconds": round(time.perf_counter() - started, 1)} if event["type"] == "done" else event
         return
