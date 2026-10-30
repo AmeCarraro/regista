@@ -1,7 +1,13 @@
 """The door of the phones, with a phone played by the test: letting it in, learning its pictures, receiving the originals."""
+import asyncio
 import base64
 import hashlib
 import json
+import socket
+import ssl
+import time
+import urllib.error
+import urllib.request
 from urllib.parse import parse_qs, urlparse
 
 import numpy as np
@@ -491,6 +497,125 @@ def test_a_request_typed_on_a_phone_is_answered_here_or_left_to_the_phone(home, 
     assert phone.post("/phone/ask", json={"text": "le foto del mare"}, headers=key).json() == {"answer": None}
     assert phone.post("/phone/ask", json={"text": "x" * 501}, headers=key).status_code == 422
     assert a_phone().post("/phone/ask", json={"text": "le foto del mare"}).status_code == 401
+
+
+def test_a_phone_finds_here_the_app_for_its_processor_and_takes_it(home, tmp_path, monkeypatch):
+    apps = tmp_path / "apps"
+    apps.mkdir()
+    (apps / "app-arm64-v8a-release.apk").write_bytes(b"an app for most phones")
+    (apps / "app-x86_64-release.apk").write_bytes(b"an app for the emulator")
+    # as Android's build writes it: the file for old 32-bit phones is listed, but was not copied here
+    elements = [{"filters": [{"filterType": "ABI", "value": kind}], "versionCode": 437000, "outputFile": f"app-{kind}-release.apk"}
+                for kind in ("arm64-v8a", "x86_64", "armeabi-v7a")]
+    (apps / "output-metadata.json").write_text(json.dumps({"elements": elements}))
+    monkeypatch.setattr(main, "PHONE_APP", apps)
+    phone, key, _ = let_in()
+
+    offered = phone.get("/phone/app?kinds=arm64-v8a,armeabi-v7a,armeabi", headers=key).json()["app"]
+    assert offered == {"kind": "arm64-v8a", "version": 437000, "size": 22, "sha256": hashlib.sha256(b"an app for most phones").hexdigest()}
+    taken = phone.get("/phone/app/arm64-v8a", headers=key)
+    assert taken.content == b"an app for most phones" and taken.headers["x-regista-sha256"] == offered["sha256"]
+
+    assert phone.get("/phone/app?kinds=armeabi-v7a", headers=key).json() == {"app": None}
+    assert phone.get("/phone/app/mips", headers=key).status_code == 404
+    # only a phone that was let in, and only at the door of the phones
+    assert a_phone().get("/phone/app?kinds=arm64-v8a").status_code == 401
+    assert a_phone().get("/phone/app/arm64-v8a").status_code == 401
+    assert client.get("/phone/app/arm64-v8a").status_code == 404
+    # with no app built, none is offered
+    monkeypatch.setattr(main, "PHONE_APP", tmp_path / "nothing")
+    assert phone.get("/phone/app?kinds=arm64-v8a", headers=key).json() == {"app": None}
+
+
+def waited(condition, seconds=10) -> bool:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if condition():
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_the_door_of_the_phones_moves_to_the_new_address_of_this_pc(home, monkeypatch):
+    phones, _ = home
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    monkeypatch.setattr(main, "PHONE_PORT", port)
+    monkeypatch.setattr(main, "doors", {})
+    phones.addresses = ["127.0.0.1", "10.0.0.5"]
+    # a real certificate this time: the door is opened for real
+    made, secret = phone_module.self_signed()
+    certificate, key = phones.certificate()
+    certificate.write_bytes(made)
+    key.write_bytes(secret)
+
+    def answers(host):
+        try:
+            with urllib.request.urlopen(f"https://{host}:{port}/phone/hello", context=ssl._create_unverified_context(), timeout=1):
+                return True
+        except urllib.error.HTTPError:
+            # somebody is there, and asks for a key
+            return True
+        except OSError:
+            return False
+
+    main._open_door("127.0.0.1")
+    assert waited(lambda: answers("127.0.0.1"))
+    main.move_phone_door("127.0.0.1", "127.0.0.2")
+    try:
+        assert waited(lambda: answers("127.0.0.2")) and waited(lambda: not answers("127.0.0.1"))
+        # the link that lets a phone in says the new address
+        assert phones.addresses == ["127.0.0.2", "10.0.0.5"] and list(main.doors) == ["127.0.0.2"]
+    finally:
+        main.doors["127.0.0.2"].should_exit = True
+
+
+def test_a_new_request_of_a_phone_ends_the_one_before_and_the_looking_for_it(monkeypatch):
+    monkeypatch.setattr(main, "LISTEN", 0.01)
+    stopped = []
+
+    async def looking(what, seconds):
+        try:
+            await asyncio.sleep(seconds)
+            return {"words": what}
+        except asyncio.CancelledError:
+            stopped.append(what)
+            raise
+
+    async def there():
+        return False
+
+    async def three():
+        first = asyncio.create_task(main.only_the_last("tablet", looking("il mare", 5), there))
+        other = asyncio.create_task(main.only_the_last("pixel", looking("la neve", 0.2), there))
+        await asyncio.sleep(0.05)
+        second = await main.only_the_last("tablet", looking("un cane", 0.1), there)
+        return await first, second, await other
+
+    # another phone's request is not touched
+    assert asyncio.run(three()) == (None, {"words": "un cane"}, {"words": "la neve"})
+    assert stopped == ["il mare"] and main.asking == {}
+
+
+def test_a_phone_that_goes_away_stops_the_looking_for_it(monkeypatch):
+    monkeypatch.setattr(main, "LISTEN", 0.01)
+    stopped = []
+    checks = []
+
+    async def looking():
+        try:
+            await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            stopped.append("il mare")
+            raise
+
+    async def gone():
+        checks.append(1)
+        return len(checks) >= 3
+
+    assert asyncio.run(main.only_the_last("tablet", looking(), gone)) is None
+    assert stopped == ["il mare"] and main.asking == {}
 
 
 def test_a_picture_the_phone_cannot_send_ends_the_wait(home):

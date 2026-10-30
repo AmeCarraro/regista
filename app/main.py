@@ -16,7 +16,7 @@ from typing import Literal
 
 import segno
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -48,6 +48,9 @@ LARGEST = 400 * 1024 * 1024
 # The two models with which a phone looks at pictures by itself, and what they need: downloaded once
 # into models/phone on this computer, the phone takes them from here. Nothing else in that folder is given.
 PHONE_MODELS = Path(os.getenv("PHONE_MODELS", "/models/phone"))
+# The phone app this computer gives to its phones, one file for each kind of processor, with what Android's build
+# writes of them next to them (output-metadata.json): a phone takes a newer one by itself, with no cable.
+PHONE_APP = Path(os.getenv("PHONE_APP", Path(__file__).resolve().parent.parent / "android" / "app" / "build" / "outputs" / "apk" / "release"))
 MODEL_FILES = ("text.onnx", "vision.onnx", "vocab.txt", "dense.safetensors")
 # The most any other request may carry. Without a limit, whoever reaches a door could fill this
 # computer's memory with one endless request; at the door of the phones that is anyone on the
@@ -119,12 +122,33 @@ def _read() -> None:
     photos.embedder.text("a photo")
 
 
+# the doors of the phones that are open, by the address each one listens on
+doors: dict[str, uvicorn.Server] = {}
+
+
 def open_phone_door() -> None:
     """Starts the door of the phones: the same service, encrypted, on a port of its own, at each of its addresses."""
-    certificate, key = phones.certificate()
     for host in PHONE_HOSTS:
-        door = uvicorn.Config(app, host=host, port=PHONE_PORT, ssl_certfile=str(certificate), ssl_keyfile=str(key), lifespan="off", log_level="info")
-        threading.Thread(target=uvicorn.Server(door).run, daemon=True).start()
+        _open_door(host)
+
+
+def _open_door(host: str) -> None:
+    certificate, key = phones.certificate()
+    door = uvicorn.Server(uvicorn.Config(app, host=host, port=PHONE_PORT, ssl_certfile=str(certificate), ssl_keyfile=str(key), lifespan="off", log_level="info"))
+    threading.Thread(target=door.run, daemon=True).start()
+    doors[host] = door
+
+
+def move_phone_door(before: str, now: str) -> None:
+    """The door of the phones at `now` instead of `before`: the router gave this PC another address in the home network.
+    A phone that finds nobody at the old address looks for the computer in the network, and finds it at the new one."""
+    _open_door(now)
+    gone = doors.pop(before, None)
+    if gone:
+        gone.should_exit = True
+    # the link that lets a phone in says where the computer is
+    phones.addresses = [now, *(address for address in phones.addresses if address not in (before, now))]
+    logger.info("this PC is at %s in the home network, no longer at %s: the door of the phones moved there", now, before)
 
 
 async def ready_the_director() -> None:
@@ -730,16 +754,47 @@ def phone_vectors(body: Asked, request: Request):
     return {"vectors": phones.vectors_of(request.state.device, [photo.model_dump() for photo in body.photos])}
 
 
+# What each phone is asking now. A phone shows the answer to its last request only: a new one ends the
+# one before, so that the models stop looking at pictures for an answer nobody will see.
+asking: dict[str, asyncio.Task] = {}
+# how often a phone that waits is checked for being still there, in seconds
+LISTEN = 1.0
+
+
+async def only_the_last(device: str, work, gone) -> dict | None:
+    """What `work` finds for a phone; None when the phone asked something else meanwhile, or went away (`gone`)."""
+    before = asking.get(device)
+    if before:
+        before.cancel()
+    task = asyncio.ensure_future(work)
+    asking[device] = task
+    try:
+        while not task.done():
+            await asyncio.wait({task}, timeout=LISTEN)
+            # the app was closed, or the phone left the network: closing the request is all a phone can do
+            if not task.done() and await gone():
+                task.cancel()
+        return None if task.cancelled() else task.result()
+    finally:
+        if not task.done():
+            task.cancel()
+        if asking.get(device) is task:
+            del asking[device]
+
+
 @app.post("/phone/ask")
 async def phone_ask(body: Typed, request: Request):
     """A request typed on a phone's own screen, understood by this computer's director: the pictures of that phone it asks for.
 
     "answer" is null when this computer has nothing to add, or cannot ask its models now: then the phone answers alone.
+    It is null too when the same phone asks something else before the answer is ready.
     """
+    device = request.state.device
     try:
         installed = await llm.installed()
         tests = selftest.load(INDEX_DIR)
-        found = await orchestrator.on_the_phone(body.text, request.state.device, phones, places, installed, catalog.hardware(installed, tests), tests)
+        understood = orchestrator.on_the_phone(body.text, device, phones, places, installed, catalog.hardware(installed, tests), tests)
+        found = await only_the_last(device, understood, request.is_disconnected)
     except Exception:
         # Ollama is off, or a model failed: the phone has its own answer already
         logger.exception("a request from a phone could not be understood here")
@@ -814,6 +869,43 @@ def model_for_the_phone(name: str):
     if name not in MODEL_FILES or not path.is_file():
         raise HTTPException(status_code=404, detail="no such model")
     return FileResponse(path, headers={"X-Regista-Sha256": _fingerprint(path), "Cache-Control": "no-store"})
+
+
+def _phone_apps() -> dict[str, dict]:
+    """The phone apps this computer has, by kind of processor: {"arm64-v8a": {"path", "version"}}; none when the app was not built."""
+    try:
+        said = json.loads((PHONE_APP / "output-metadata.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    apps = {}
+    for element in said.get("elements", []):
+        kind = next((one.get("value") for one in element.get("filters", []) if one.get("filterType") == "ABI"), None)
+        path = PHONE_APP / Path(str(element.get("outputFile", ""))).name
+        if kind and path.suffix == ".apk" and path.is_file():
+            apps[kind] = {"path": path, "version": int(element.get("versionCode", 0))}
+    return apps
+
+
+@app.get("/phone/app")
+def app_for_the_phone(kinds: str = Query("", max_length=200)):
+    """The app this computer has for a phone's processor (`kinds`: the kinds it runs, the best first): its version,
+    size and fingerprint, for the phone to see whether it is newer than its own. Null when there is none for it."""
+    apps = _phone_apps()
+    for kind in kinds.split(","):
+        if kind in apps:
+            path = apps[kind]["path"]
+            return {"app": {"kind": kind, "version": apps[kind]["version"], "size": path.stat().st_size, "sha256": _fingerprint(path)}}
+    return {"app": None}
+
+
+@app.get("/phone/app/{kind}")
+def app_file_for_the_phone(kind: str):
+    """That app, with what it is, for the phone to check what arrives before Android installs it."""
+    found = _phone_apps().get(kind)
+    if not found:
+        raise HTTPException(status_code=404, detail="no app for this phone")
+    return FileResponse(found["path"], media_type="application/vnd.android.package-archive",
+                        headers={"X-Regista-Sha256": _fingerprint(found["path"]), "Cache-Control": "no-store"})
 
 
 @app.post("/phone/offer")

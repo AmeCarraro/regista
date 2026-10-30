@@ -32,7 +32,8 @@ READ = 448
 # 1280x960: at 256 pixels it answered as at 384 (159 of 160 right, the same yes to what was not there) in two
 # thirds of the time. The page keeps its small copies of THUMB.
 EYES = 256
-# How close a picture must be to a sentence to count as a match: the same as on the phone. Measured
+# How close a picture must be to a sentence to count as a match, for the English captions the director
+# writes (the phone asks in Italian, which comes closer: it has its own, in telefono/select.ts). Measured
 # with the small models (embedder.py) on the 200 sample pictures and 20 captions as the director
 # writes them: from 0.26, 94% of the pictures shown are right and 77% of the right ones are shown;
 # from 0.24, 77% and 92%. So above SURE it is almost always a match, and between the two a "maybe".

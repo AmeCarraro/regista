@@ -15,8 +15,10 @@ android {
         // is done another way, or said to the user; moving pictures to the trash needs Android 11
         minSdk = 24
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.3"
+        // A larger number at every build, the minutes since 2026 began: a phone takes from the computer an app
+        // with a larger one than its own, with no cable (Update.kt). The last number set by hand was 3.
+        versionCode = (System.currentTimeMillis() / 60_000 - 29_453_760).toInt()
+        versionName = "0.4"
     }
 
     // One app file for each kind of phone, each with only its own copy of the engine that runs the models:

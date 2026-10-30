@@ -22,6 +22,7 @@ class Phone(
     private val gallery: Gallery,
     private val memory: Memory,
     private val sight: Sight,
+    private val update: Update,
 ) {
     // the computer's answers to requests typed here, until the page takes them
     private val answers = ConcurrentHashMap<String, String>()
@@ -51,6 +52,23 @@ class Phone(
     fun wantSight() {
         memory.wantsSight = true
         app.runOnUiThread { app.sightWanted() }
+    }
+
+    /** Whether the computer has a newer app for this phone, and how much of it has arrived while it is taken. */
+    @JavascriptInterface
+    fun update(): String = JSONObject()
+        .put("newer", update.newer > 0)
+        .put("taking", update.size > 0)
+        .put("got", update.got)
+        .put("size", update.size)
+        .toString()
+
+    /** The user wants the newer app: it comes from the computer, and Android asks before installing it. */
+    @JavascriptInterface
+    fun takeUpdate() {
+        if (update.newer == 0L) return
+        update.wanted = true
+        app.runOnUiThread { app.updateWanted() }
     }
 
     /** How close each picture is to a sentence, {"id": score}; null while the phone has no models. */

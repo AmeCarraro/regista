@@ -1,6 +1,7 @@
 """The program of the PC without Docker (desktop.py): its settings, what it tells the service, and the folder it may only look at."""
 import json
 import sys
+import threading
 
 import pytest
 
@@ -42,6 +43,31 @@ def test_the_computer_is_measured_as_the_installer_measures_it():
     assert measured["HOST_GPU_KIND"] in ("", "nvidia", "other")
     address = desktop.home_address()
     assert address == "" or (address.count(".") == 3 and not address.startswith("127."))
+
+
+def test_the_door_of_the_phones_follows_the_address_the_router_gives_this_pc(monkeypatch):
+    seen = iter(["192.168.1.85", "", "192.168.1.90", "192.168.1.90", "127.0.0.1", "192.168.1.91"])
+    stop = threading.Event()
+    moved = []
+
+    def home_address():
+        now = next(seen, None)
+        if now is None:
+            stop.set()
+            return "192.168.1.91"
+        return now
+
+    class Service:
+        @staticmethod
+        def move_phone_door(before, now):
+            moved.append((before, now))
+
+    monkeypatch.setattr(desktop, "FOLLOW_EVERY", 0.001)
+    monkeypatch.setattr(desktop, "home_address", home_address)
+    desktop.follow(Service, "192.168.1.85", stop)
+
+    # no network for a while, or this PC alone, is not a new address
+    assert moved == [("192.168.1.85", "192.168.1.90"), ("192.168.1.90", "192.168.1.91")]
 
 
 def test_a_folder_given_to_look_at_only_is_never_changed(tmp_path):

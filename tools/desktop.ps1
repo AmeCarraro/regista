@@ -67,6 +67,14 @@ Copy-Tree (Join-Path $root 'web\dist') (Join-Path $out 'web\dist') @()
 Copy-Tree (Join-Path $root 'data\geonames') (Join-Path $out 'data\geonames') @()
 New-Item -ItemType Directory -Force (Join-Path $out 'tools') | Out-Null
 Copy-Item (Join-Path $PSScriptRoot 'regista.ico') (Join-Path $out 'tools')
+# the phone app, when it was built (android.ps1 build): the phones take it from here, with no cable, when it is newer than theirs
+$apps = Join-Path $root 'android\app\build\outputs\apk\release'
+if (Test-Path (Join-Path $apps 'output-metadata.json')) {
+    New-Item -ItemType Directory -Force (Join-Path $out 'phone-app') | Out-Null
+    Copy-Item (Join-Path $apps '*.apk'), (Join-Path $apps 'output-metadata.json') (Join-Path $out 'phone-app')
+} else {
+    Write-Host 'The phone app is not built (android.ps1 build): the phones will not find a newer one here.' -ForegroundColor Yellow
+}
 
 # its Python finds the app and every library it needs, as it will when its icon starts it
 & (Join-Path $runtime 'python.exe') -c "import importlib.util, desktop, uvicorn, fastapi, webview, onnxruntime, numpy, PIL, cryptography.x509, segno, httpx2; assert importlib.util.find_spec('main')"

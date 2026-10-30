@@ -46,6 +46,7 @@ class MainActivity : Activity() {
     private lateinit var places: Places
     private lateinit var library: Library
     private lateinit var sight: Sight
+    private lateinit var update: Update
     private var link: Link? = null
 
     /** The computer, when it answered last; null while it cannot be reached. */
@@ -71,6 +72,7 @@ class MainActivity : Activity() {
         places = Places(this)
         sight = Sight(this)
         library = Library(this, gallery, places, sight)
+        update = Update(this)
         setContentView(R.layout.main)
         // the table of places takes a few seconds to read on an old phone: it is read now, in the background
         thread(name = "places") { places.ready() }
@@ -211,6 +213,12 @@ class MainActivity : Activity() {
         link?.refresh()
     }
 
+    /** The user asked for the newer app on the phone's page: it comes from the computer as soon as it answers. */
+    fun updateWanted() {
+        say(if (reached != null) "Prendo dal computer l'app nuova…" else "Prendo l'app nuova appena raggiungo il computer.")
+        link?.refresh()
+    }
+
     /** Pictures were put in line for the computer on the phone's page: they go as soon as it answers. */
     fun offered(count: Int) {
         say(if (reached != null) "Mando $count foto al computer…" else "$count foto in fila per il computer: le mando appena lo raggiungo.")
@@ -224,7 +232,7 @@ class MainActivity : Activity() {
         page.settings.domStorageEnabled = true
         page.settings.allowFileAccess = false
         page.settings.allowContentAccess = false
-        val phone = Phone(this, library, places, gallery, memory, sight)
+        val phone = Phone(this, library, places, gallery, memory, sight, update)
         // the page calls the app through this, and only this page can: it is the app's own, and nothing else opens in here
         page.addJavascriptInterface(phone, "Regista")
         page.webViewClient = object : WebViewClient() {
@@ -296,6 +304,7 @@ class MainActivity : Activity() {
             shutOut = { runOnUiThread { forgotten("Il computer non riconosce più questo telefono. Collegalo di nuovo con un codice nuovo.") } },
             clear = ::clear,
             changed = { library.refresh() },
+            update = update,
         ).also { it.start() }
     }
 

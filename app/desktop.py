@@ -123,6 +123,20 @@ def _cores() -> int:
     return count
 
 
+# how often this PC's address in the home network is looked at again, in seconds: the router can change it at any time
+FOLLOW_EVERY = 30
+
+
+def follow(service, address: str, stop: threading.Event) -> None:
+    """Moves the door of the phones (main.py) with this PC's address in the home network, until `stop`.
+    No network for a while is not a new address: the door stays where it is until there is one."""
+    while not stop.wait(FOLLOW_EVERY):
+        now = home_address()
+        if now and not now.startswith("127.") and now != address:
+            service.move_phone_door(address, now)
+            address = now
+
+
 def home_address() -> str:
     """This PC's address in the network that leads out, the one a phone at home can reach; empty when there is none.
     Nothing is sent: a socket that is not really connected only asks the system which way it would go."""
@@ -192,6 +206,8 @@ def environment(home: Path, chosen: dict, photos: Path, addresses: list[str]) ->
         "PHOTOS_LABEL": str(photos),
         "PHOTOS_READ_ONLY": "1" if chosen["read_only"] else "0",
         "PHONE_MODELS": str(models),
+        # the phone app, which a phone takes from here when it is newer than its own
+        "PHONE_APP": str(HERE / "phone-app"),
         "PLACES_DIR": str(HERE / "data" / "geonames"),
         "PAGE_DIR": str(HERE / "web" / "dist"),
         "PHONE_OPEN": "1" if phone else "0",
@@ -288,6 +304,8 @@ def main(argv: list[str] | None = None) -> int:
         say(f"Regista non è partito. Quello che è successo è scritto in {home / 'regista.log'}.", problem=True)
         return 1
     print(f"Regista: {url} (pictures: {photos}; phones: {', '.join(addresses) or 'this PC only'}, port {chosen['phone_port']})", flush=True)
+    if addresses:
+        threading.Thread(target=follow, args=(service, addresses[0], threading.Event()), daemon=True).start()
 
     if options.no_window:
         running.join()

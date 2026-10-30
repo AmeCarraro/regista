@@ -36,6 +36,7 @@ export default function Telefono() {
   const [state, setState] = useState(() => app.state())
   const [sight, setSight] = useState(() => app.sight())
   const [copying, setCopying] = useState(() => app.autoCopy())
+  const [update, setUpdate] = useState(() => app.update())
   const [request, setRequest] = useState('')
   // the request the pictures on screen are the answer to
   const [asked, setAsked] = useState('')
@@ -63,6 +64,7 @@ export default function Telefono() {
       setState(app.state())
       setSight(app.sight())
       setCopying(app.autoCopy())
+      setUpdate(app.update())
     }, 2000)
     return () => clearInterval(timer)
   }, [app])
@@ -176,6 +178,30 @@ export default function Telefono() {
             </button>
           ))}
         </div>
+      )}
+
+      {!asked && update.newer && (
+        <section className="card">
+          <b>C'è una versione nuova dell'app</b>
+          {update.taking ? (
+            <p>
+              La prendo dal computer: {megabytes(update.got)} di {megabytes(update.size)} MB. Poi Android ti chiede se installarla.
+            </p>
+          ) : (
+            <>
+              <p>
+                Ce l'ha il tuo computer: la installo da qui, senza cavo. Android ti chiede di confermare; poi l'app si chiude, e la riapri. La prima
+                volta Android chiede anche il permesso di installare app da Regista: dallo, torna indietro e premi di nuovo «Aggiorna l'app».
+              </p>
+              <button type="button" className="go wide" onClick={() => {
+                app.takeUpdate()
+                setUpdate(app.update())
+              }}>
+                Aggiorna l'app
+              </button>
+            </>
+          )}
+        </section>
       )}
 
       {!asked && state.paired && (

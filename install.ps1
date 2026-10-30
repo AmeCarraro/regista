@@ -43,6 +43,8 @@ $here = $PSScriptRoot
 . (Join-Path $here 'tools\computer.ps1')
 
 function Say($text, $colour = 'Gray') { Write-Host $text -ForegroundColor $colour }
+# a question; where nobody can answer it (a window that cannot ask), the answer is the one of Invio
+function Ask($question) { try { Read-Host $question -ErrorAction Stop } catch { '' } }
 function Stop-Here($text) { Say "`n$text" 'Yellow'; exit 1 }
 function Confirm-Step($question) {
     if ($Yes) { return $true }
@@ -157,7 +159,7 @@ if (-not $Photos) {
     $usual = if ($before -and $before.photos) { $before.photos } else { [Environment]::GetFolderPath('MyPictures') }
     Say "`n3. Le foto" 'Cyan'
     Say "   Su quale cartella lavoro? Regista non cancella mai niente: quello che butta va in un suo cestino dentro la cartella, e solo dopo un tuo sì."
-    $typed = Read-Host "   Cartella delle foto (Invio per $usual)"
+    $typed = Ask "   Cartella delle foto (Invio per $usual)"
     $Photos = if ($typed) { $typed.Trim('"') } else { $usual }
 }
 if (-not (Test-Path $Photos -PathType Container)) { Stop-Here "La cartella $Photos non esiste." }
@@ -166,9 +168,12 @@ $Photos = (Resolve-Path $Photos).Path
 # ---- 4. from a phone too?
 
 if (-not $Phone) {
+    # an update keeps what was chosen the time before, unless the user says otherwise
+    $earlier = [bool]($before -and $before.phone)
     Say "`n4. Il telefono" 'Cyan'
     Say "   Userai Regista anche dal telefono? Allora il computer apre, solo sulla rete di casa, una porta cifrata che fa entrare solo un telefono che colleghi tu."
-    $Phone = if ((Read-Host '   Anche dal telefono? [s/N]') -match '^(s|si|sì|y|yes)$') { 'yes' } else { 'no' }
+    $typed = Ask $(if ($earlier) { '   Anche dal telefono? [S/n]' } else { '   Anche dal telefono? [s/N]' })
+    $Phone = if ($typed -match '^(s|si|sì|y|yes)$') { 'yes' } elseif ($typed -match '^(n|no)$') { 'no' } elseif ($earlier) { 'yes' } else { 'no' }
 }
 
 # ---- 5. the program in its folder, an icon to start it, and the first start
@@ -182,7 +187,7 @@ foreach ($second in 1..20) {
 }
 New-Item -ItemType Directory -Force $Into | Out-Null
 # its parts are put in again; what it knows stays: the index, settings.json, the models
-foreach ($part in 'python', 'app', 'web', 'data', 'tools') { Remove-Item -Recurse -Force (Join-Path $Into $part) -ErrorAction SilentlyContinue }
+foreach ($part in 'python', 'app', 'web', 'data', 'tools', 'phone-app') { Remove-Item -Recurse -Force (Join-Path $Into $part) -ErrorAction SilentlyContinue }
 robocopy $program $Into /E /NFL /NDL /NJH /NJS /NP | Out-Null
 if ($LASTEXITCODE -ge 8) { Stop-Here "Non sono riuscito a copiare il programma in $Into." }
 

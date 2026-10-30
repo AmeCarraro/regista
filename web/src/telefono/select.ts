@@ -13,10 +13,14 @@ export type Found = { pictures: Picture[]; words: string; sure: number }
 
 // how far from a city a picture can be and still be "of" that city, in kilometres: as on the computer
 const NEAR = 50
-// How close to a sentence a picture must be to be shown as sure, and as maybe. Measured on 200
-// pictures of ten kinds with twenty requests in Italian: above 0.26 nine in ten are right, above 0.24 two in three.
-export const SURE = 0.26
-export const MAYBE = 0.24
+// How close to a sentence a picture must be to be shown as sure, and as maybe. Measured with twenty
+// requests in Italian as the phone asks ("una foto di cane"), on the 200 sample pictures of ten kinds and
+// on a library of 3060 of them: from 0.30, 1361 of the 1363 shown were right, and for twenty things none of
+// them shows only 13 pictures came that close; from 0.26, four in five right on the samples, three in four
+// on the library; from 0.24, 57% and 41%. Sentences in Italian come closer than the English captions
+// of the computer (photos.py), so the phone needs more.
+export const SURE = 0.3
+export const MAYBE = 0.26
 
 // countries whose names are said with another word than "in": "negli Stati Uniti", "nel Regno Unito"
 const IN_COUNTRY: Record<string, string> = {
@@ -86,9 +90,12 @@ export function select(pictures: Picture[], understood: Understood, scores: Reco
   // "1 foto scattata", "2 foto scattate"
   const told = (number: number) => (spot ? ` scattat${number === 1 ? 'a' : 'e'} ${at(spot)}` : '') + (period ? ` ${inWords(period)}` : '')
   if (looking && scores) {
-    const scored = chosen.filter((picture) => (scores[picture.id] ?? 0) >= MAYBE).sort((one, other) => scores[other.id] - scores[one.id])
-    const sure = scored.filter((picture) => scores[picture.id] >= SURE).length
-    const maybe = scored.length - sure
+    const score = (picture: Picture) => scores[picture.id] ?? 0
+    // the sure ones first, then the maybes: each the newest first, as a gallery does
+    const sures = newestFirst(chosen.filter((picture) => score(picture) >= SURE))
+    const maybes = newestFirst(chosen.filter((picture) => score(picture) >= MAYBE && score(picture) < SURE))
+    const sure = sures.length
+    const maybe = maybes.length
     let words: string
     if (sure) {
       words = `Ho trovato ${count(sure)}${told(sure)}.`
@@ -101,7 +108,7 @@ export function select(pictures: Picture[], understood: Understood, scores: Reco
         ? `${among}${among ? 'non' : 'Non'} sono sicuro di averne trovate. ${nearest}`
         : `${among}${among ? 'non' : 'Non'} ho trovato niente del genere${among ? '' : ' tra le foto che ho guardato'}.`
     }
-    return { pictures: scored, words, sure }
+    return { pictures: [...sures, ...maybes], words, sure }
   }
   if (chosen.length === 0) return { pictures: [], words: `Non ho trovato foto${told(0)} tra le ${pictures.length} di questo telefono.`, sure: 0 }
   let words = `Ho trovato ${count(chosen.length)}${told(chosen.length)}.`

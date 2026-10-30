@@ -21,6 +21,9 @@ export type Sight = { ready: boolean; wanted: boolean; got: number; size: number
 /** Whether the new pictures go to the computer by themselves, and when they last did: `at` in milliseconds, 0 if never. */
 export type AutoCopy = { on: boolean; at: number; count: number }
 
+/** Whether the computer has a newer app for this phone, and while it is taken, how much of it has arrived (got of size bytes). */
+export type Update = { newer: boolean; taking: boolean; got: number; size: number }
+
 /** The computer's answer to a request typed here: its words, and the pictures of this phone, by the phone's own names. */
 export type Answer = { words: string; sure: string[]; maybe: string[]; model: string; seconds: number }
 
@@ -45,6 +48,9 @@ export type App = {
   autoCopy(): AutoCopy
   /** Starts or stops the copying of the new pictures by themselves: the ones added from now on. */
   setAutoCopy(on: boolean): void
+  update(): Update
+  /** Takes the newer app from the computer; then Android asks the user whether to install it. */
+  takeUpdate(): void
 }
 
 /** What the app offers the page: every answer is text, as JSON. */
@@ -63,6 +69,8 @@ type Native = {
   answer(token: string): string
   autoCopy(): string
   setAutoCopy(on: boolean): void
+  update(): string
+  takeUpdate(): void
 }
 
 declare global {
@@ -104,6 +112,8 @@ export function connect(): App {
     scores: (sentence) => parse<Record<string, number> | null>(native.scores(sentence)),
     autoCopy: () => parse<AutoCopy>(native.autoCopy()),
     setAutoCopy: (on) => native.setAutoCopy(on),
+    update: () => parse<Update>(native.update()),
+    takeUpdate: () => native.takeUpdate(),
     ask: (text) =>
       new Promise((resolve) => {
         asked += 1
@@ -155,6 +165,8 @@ function pretend(): App {
     setAutoCopy: (on) => {
       copying.on = on
     },
+    update: () => ({ newer: false, taking: false, got: 0, size: 0 }),
+    takeUpdate: () => {},
     thumb: (id) => {
       // a colour for each trip, a shade for each picture
       const number = Number(id)

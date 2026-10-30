@@ -39,6 +39,8 @@ class Link(
     private val clear: (transfer: String, pictures: List<Pair<String, Long>>, gone: List<String>) -> Unit,
     /** The gallery of this phone changed: pictures arrived from the computer. */
     private val changed: () -> Unit,
+    /** A newer app on the computer, for the app's own link: the copying by themselves leaves it alone. */
+    private val update: Update? = null,
 ) : Thread("link") {
     companion object {
         /** Only one round of work with the computer at a time: the app's own, or the copying by themselves. */
@@ -84,6 +86,7 @@ class Link(
                     // once at the start, when asked, and every ten minutes: pictures are taken all the time
                     if (again || System.currentTimeMillis() - told > 10 * 60_000) {
                         again = false
+                        update?.let { newer(reached, it) }
                         if (describe(reached)) {
                             told = System.currentTimeMillis()
                             borrow(reached)
@@ -92,6 +95,7 @@ class Link(
                     // once the computer knows the pictures, the ones the user chose on the phone can go
                     askToTake(reached)
                     if (memory.wantsSight && !sight.ready) takeSight(reached)
+                    update?.let { if (it.wanted) takeUpdate(reached, it) }
                     !send(reached)
                 } finally {
                     ROUNDS.unlock()
@@ -276,6 +280,35 @@ class Link(
             tell("Il modello è sul telefono: ora guardo le foto, una alla volta.")
             changed()
         }
+    }
+
+    /** The app the computer has for this phone's processor, the kind it runs best first: {"kind", "version", "size", "sha256"}, or null. */
+    private fun offered(computer: Computer): JSONObject? =
+        computer.ask("GET", "/phone/app?kinds=${Build.SUPPORTED_ABIS.joinToString(",")}").optJSONObject("app")
+
+    /** Asks the computer whether it has a newer app for this phone: the phone's page then offers it. */
+    private fun newer(computer: Computer, update: Update) {
+        update.newer = offered(computer)?.optLong("version")?.takeIf { it > update.version } ?: 0L
+    }
+
+    /** Takes from the computer the newer app it has for this phone, and hands it to Android, which asks the user. */
+    private fun takeUpdate(computer: Computer, update: Update) {
+        update.wanted = false
+        val app = offered(computer)
+        if (app == null || app.getLong("version") <= update.version) {
+            update.newer = 0
+            tell("Il computer non ha un'app più nuova di questa.")
+            return
+        }
+        tell("Prendo dal computer l'app nuova…")
+        update.got = 0
+        update.size = app.getLong("size")
+        val handed = try {
+            computer.fetch("/phone/app/${app.getString("kind")}") { stream, fingerprint -> update.install(stream, fingerprint) }
+        } finally {
+            update.size = 0
+        }
+        tell(if (handed) "Android ti chiede se installare l'app nuova: dopo, questa si chiude e la riapri." else "L'app nuova non è arrivata intera: riprova.")
     }
 
     /** Puts in line for the computer the pictures added to the gallery since the user asked for the new ones to go by themselves. */
