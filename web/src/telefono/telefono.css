@@ -391,6 +391,57 @@ body {
   background: var(--card-solid);
 }
 
+.widget-hint {
+  margin-top: 18px;
+}
+
+.widget-hint .link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--rose);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* ---- the pictures by kind: a row of choices under the examples ---- */
+.by-kind {
+  display: flex;
+  gap: 8px;
+  margin: 12px -16px 0;
+  padding: 0 16px 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.by-kind button {
+  flex: none;
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--raised);
+  color: var(--text);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.by-kind small {
+  margin-left: 4px;
+  color: var(--muted);
+}
+
+.by-kind button[aria-selected='true'] {
+  border-color: transparent;
+  background: var(--accent);
+  color: #fff;
+}
+
+.by-kind button[aria-selected='true'] small {
+  color: rgba(255, 255, 255, 0.8);
+}
+
 /* ---- music: the songs, and the player at the bottom ---- */
 .music {
   padding-bottom: 230px;

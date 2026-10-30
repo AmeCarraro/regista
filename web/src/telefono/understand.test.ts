@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest'
 import { iso } from './period.ts'
 import type { Day } from './period.ts'
-import { partly, select, sentence } from './select.ts'
+import { ofKind, partly, select, sentence } from './select.ts'
 import type { Picture } from './select.ts'
 import { understand } from './understand.ts'
 import type { Places } from './understand.ts'
@@ -155,6 +155,15 @@ test('what the computer has found so far is shown the newest first, while it goe
   expect(soFar.sure).toBe(3)
   expect(soFar.words).toBe('Finora ne ho trovate 3: continuo a guardare le altre.')
   expect(partly(pictures, ['2']).words).toBe('Finora ne ho trovata una: continuo a guardare le altre.')
+})
+
+test('the pictures of a kind are the sure ones first, then the others, each the newest first', () => {
+  const found = ofKind(pictures, { label: 'Città e monumenti', sure: ['3', '4'], maybe: ['1', '5', '99'] })
+
+  expect(found.pictures.map((picture) => picture.id)).toEqual(['4', '3', '5', '1'])
+  expect(found.sure).toBe(2)
+  expect(found.words).toBe('Città e monumenti: 4 foto. Prima quelle di cui sono sicuro, poi le altre.')
+  expect(ofKind(pictures, { label: 'Cibo', sure: [], maybe: [] }).words).toBe('Nessuna foto tra «Cibo».')
 })
 
 test('the model is given what the pictures should show, as a sentence it reads best', () => {

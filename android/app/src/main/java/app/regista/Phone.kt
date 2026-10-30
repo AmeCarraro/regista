@@ -1,6 +1,9 @@
 package app.regista
 
+import android.appwidget.AppWidgetManager
+import android.content.ComponentName
 import android.net.Uri
+import android.os.Build
 import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -27,7 +30,12 @@ class Phone(
     private val sight: Sight,
     private val update: Update,
     private val songs: Songs,
+    private val kinds: Kinds,
 ) {
+    /** The pictures of this phone by kind (Kinds.sorted); null until the computer said what the kinds are. */
+    @JavascriptInterface
+    fun kinds(): String = kinds.sorted()
+
     // what the computer said about requests typed here, until the page takes it
     private val heard = ConcurrentHashMap<String, ConcurrentLinkedQueue<JSONObject>>()
 
@@ -84,6 +92,22 @@ class Phone(
     /** Jumps to a point of the song playing, in milliseconds. */
     @JavascriptInterface
     fun seek(position: Double) = Player.ask(app, Player.SEEK) { putExtra("position", position.toLong()) }
+
+    /** The tab of the app that shows this page: "phone" or "music". */
+    @JavascriptInterface
+    fun tab(): String = app.tab
+
+    /** Whether Android can put the music widget on the home screen when asked: from Android 8, and if the home screen lets it. */
+    @JavascriptInterface
+    fun canPinWidget(): Boolean =
+        Build.VERSION.SDK_INT >= 26 && app.getSystemService(AppWidgetManager::class.java)?.isRequestPinAppWidgetSupported == true
+
+    /** Asks Android to put the music widget on the home screen: Android asks the user first. */
+    @JavascriptInterface
+    fun pinWidget() {
+        if (!canPinWidget()) return
+        app.runOnUiThread { app.getSystemService(AppWidgetManager::class.java)?.requestPinAppWidget(ComponentName(app, MusicWidget::class.java), null, null) }
+    }
 
     /** What plays now, and how far it is (Player.state). */
     @JavascriptInterface

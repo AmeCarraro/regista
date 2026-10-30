@@ -3,7 +3,7 @@ import * as icons from '../icons.tsx'
 import { connect } from './bridge.ts'
 import type { Answer, Heard, State } from './bridge.ts'
 import type { Day } from './period.ts'
-import { partly, select, sentence } from './select.ts'
+import { ofKind, partly, select, sentence } from './select.ts'
 import type { Found } from './select.ts'
 import { understand } from './understand.ts'
 
@@ -37,6 +37,9 @@ export default function Telefono() {
   const [sight, setSight] = useState(() => app.sight())
   const [copying, setCopying] = useState(() => app.autoCopy())
   const [update, setUpdate] = useState(() => app.update())
+  // the pictures by kind, and the kind shown in place of all of them; nothing is moved
+  const [kinds, setKinds] = useState(() => app.kinds())
+  const [kind, setKind] = useState<string | null>(null)
   const [request, setRequest] = useState('')
   // the request the pictures on screen are the answer to
   const [asked, setAsked] = useState('')
@@ -67,6 +70,8 @@ export default function Telefono() {
       setSight(app.sight())
       setCopying(app.autoCopy())
       setUpdate(app.update())
+      // worked out again by the app only when the pictures or the kinds changed: else the same object, and nothing to redraw
+      setKinds(app.kinds())
     }, 2000)
     return () => clearInterval(timer)
   }, [app])
@@ -79,7 +84,11 @@ export default function Telefono() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [understood, sight.ready, sight.seen, app],
   )
-  const mine = useMemo(() => select(pictures, understood, scores), [pictures, understood, scores])
+  const shownKind = !asked && kind ? kinds?.kinds.find((one) => one.kind === kind) : undefined
+  const mine = useMemo(
+    () => (shownKind ? ofKind(pictures, shownKind) : select(pictures, understood, scores)),
+    [pictures, understood, scores, shownKind],
+  )
   // the computer's answer when there is one for this request, or while it looks what it has found so far: it names the phone's own pictures
   const computer: Found | null = useMemo(() => {
     if (answered?.asked === asked) {
@@ -107,6 +116,7 @@ export default function Telefono() {
     setAnswered(null)
     setSoFar(null)
     setPhoneFirst(false)
+    setKind(null)
     latest.current = typed
     // the phone answers at once, by itself; the computer, when it answers, understands more and has the last word
     if (!typed || !state.reachable) {
@@ -128,6 +138,12 @@ export default function Telefono() {
       setSoFar(null)
       if (answer) setAnswered({ asked: typed, answer })
     })
+  }
+
+  /** The pictures of a kind in place of all of them, or all of them again with null. */
+  function chooseKind(chosen: string | null) {
+    ask('')
+    setKind(chosen)
   }
 
   function toggle(id: string) {
@@ -197,7 +213,25 @@ export default function Telefono() {
         </div>
       )}
 
-      {!asked && update.newer && (
+      {!asked && kinds && kinds.kinds.some((one) => one.sure.length + one.maybe.length > 0) && (
+        <div className="by-kind" role="tablist" aria-label="Le foto per tipo">
+          <button type="button" role="tab" aria-selected={kind === null} onClick={() => chooseKind(null)}>
+            Tutte
+          </button>
+          {kinds.kinds
+            .filter((one) => one.sure.length + one.maybe.length > 0)
+            .map((one) => (
+              <button type="button" role="tab" key={one.kind} aria-selected={kind === one.kind} onClick={() => chooseKind(one.kind)}>
+                {one.label} <small>{one.sure.length + one.maybe.length}</small>
+              </button>
+            ))}
+        </div>
+      )}
+      {!asked && kind && kinds && kinds.unsorted > 0 && (
+        <p className="fine">Altre {count(kinds.unsorted)} non sono ancora divise per tipo: lo faccio quando il telefono o il computer le hanno guardate.</p>
+      )}
+
+      {!asked && !kind && update.newer && (
         <section className="card">
           <b>C'è una versione nuova dell'app</b>
           {update.taking ? (
@@ -221,7 +255,7 @@ export default function Telefono() {
         </section>
       )}
 
-      {!asked && state.paired && (
+      {!asked && !kind && state.paired && (
         <section className="card">
           <b>Copia automatica sul computer</b>
           <p>

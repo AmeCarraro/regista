@@ -1,11 +1,13 @@
 """The pictures by kind: each in one kind, the sure ones first, screenshots by their name; nothing is moved."""
+import base64
+
 import numpy as np
 
 import main
 import orchestrator
 from kinds import KINDS, Kinds, in_words
 from photos import newest
-from test_door import client, home  # noqa: F401 - home is a fixture
+from test_door import a_phone, client, home, let_in  # noqa: F401 - home is a fixture
 from test_trips import ask
 
 NAMES = [kind for kind, _, _ in KINDS]
@@ -64,6 +66,18 @@ def test_the_page_shows_the_kinds_the_pictures_of_each_and_all_of_them(home):
     assert [photo["name"] for photo in shown["sure"] + shown["maybe"]] == ["rose.jpg"] and shown["place"] == "computer"
     assert [photo["name"] for photo in client.get("/api/kinds/tutte").json()["sure"]] == ["rose.jpg"]
     assert client.get("/api/kinds/nessuno").status_code == 404
+
+
+def test_a_phone_takes_the_numbers_of_the_kinds_to_sort_its_own_pictures(home):
+    phone, key, _ = let_in()
+    given = phone.get("/phone/kinds", headers=key).json()
+
+    assert [kind["label"] for kind in given["kinds"]] == [label for _, label, _ in KINDS] and given["margin"] == 0.01
+    # the same numbers the computer sorts with, row by row, as 32-bit numbers
+    said = main.photos.kinds.sentences()
+    assert np.allclose(np.frombuffer(base64.b64decode(given["kinds"][1]["vector"]), dtype="<f4"), said[1])
+    assert a_phone().get("/phone/kinds").status_code == 401
+    assert client.get("/phone/kinds").status_code == 404
 
 
 def test_a_request_to_sort_the_pictures_by_kind_is_answered_with_no_model(home, monkeypatch):

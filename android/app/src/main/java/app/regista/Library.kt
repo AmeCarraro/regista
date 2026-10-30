@@ -9,6 +9,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.FloatBuffer
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
@@ -125,6 +126,13 @@ class Library(context: Context, private val gallery: Gallery, private val places
         }
         counted()
         return kept
+    }
+
+    /** Each picture the phone has looked at, or whose numbers came from the computer: its number, its name, what it shows. */
+    fun looked(each: (Long, String, FloatBuffer) -> Unit) {
+        readableDatabase.rawQuery("SELECT id, name, vector FROM photo WHERE length(vector) = ${Sight.SIZE * 4}", null).use { rows ->
+            while (rows.moveToNext()) each(rows.getLong(0), rows.getString(1), ByteBuffer.wrap(rows.getBlob(2)).order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer())
+        }
     }
 
     /** How close every picture the phone has looked at is to what a sentence says: {"id": score}. */

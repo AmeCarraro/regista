@@ -54,6 +54,18 @@
             android:name=".Installed"
             android:exported="false" />
 
+        <!-- the music on the home screen (MusicWidget): only Android's widgets ask it to draw itself -->
+        <receiver
+            android:name=".MusicWidget"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/music_widget" />
+        </receiver>
+
         <!-- the music, which goes on with the screen off and the app closed (Player) -->
         <service
             android:name=".Player"

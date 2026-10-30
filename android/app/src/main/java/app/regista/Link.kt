@@ -41,6 +41,8 @@ class Link(
     private val changed: () -> Unit,
     /** A newer app on the computer, for the app's own link: the copying by themselves leaves it alone. */
     private val update: Update? = null,
+    /** What the kinds of pictures come to in numbers, for the app's own link too. */
+    private val kinds: Kinds? = null,
 ) : Thread("link") {
     companion object {
         /** Only one round of work with the computer at a time: the app's own, or the copying by themselves. */
@@ -91,6 +93,7 @@ class Link(
                             told = System.currentTimeMillis()
                             borrow(reached)
                         }
+                        kinds?.let { learnKinds(reached, it) }
                     }
                     // once the computer knows the pictures, the ones the user chose on the phone can go
                     askToTake(reached)
@@ -235,6 +238,16 @@ class Link(
      * Takes what the computer read in the pictures this phone has not looked at yet: it read their
      * small copies with the same model the phone has, and an old phone takes a second for each.
      */
+    /** Takes from the computer what each kind of picture comes to in numbers: then the phone sorts its pictures by kind by itself. */
+    private fun learnKinds(computer: Computer, kinds: Kinds) {
+        try {
+            kinds.keep(computer.ask("GET", "/phone/kinds"))
+        } catch (older: Refused) {
+            // a computer from before the kinds: the phone shows its pictures as they are
+            if (older.status != 404) throw older
+        }
+    }
+
     private fun borrow(computer: Computer) {
         var kept = 0
         for (batch in library.notLookedAt().chunked(500)) {

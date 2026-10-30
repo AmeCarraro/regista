@@ -33,11 +33,14 @@ export type Heard = { type: 'photo'; photo: string } | { type: 'looked'; looked:
 /** What the app hands over of the computer's answer, a few at a time: what it says on the way, and last the answer. */
 type Said = Heard | { type: 'answer'; answer: Answer | null }
 
-/** A song of this phone (its number in Android's list) or of the computer (its name there, and its file's); the phone knows how long its own are. */
-export type Song = { id: string; title: string; artist: string; album: string; duration?: number; folder?: string; name?: string; kind?: string }
+/** The pictures of this phone by kind, by their numbers, the sure ones apart; `unsorted` have no numbers yet. */
+export type Sorted = { kinds: { kind: string; label: string; sure: string[]; maybe: string[] }[]; unsorted: number }
 
-/** A song in the line to play, and where it is. */
-export type Queued = { where: 'phone' | 'computer'; id: string; title: string; artist: string }
+/** A song of this phone (its number in Android's list) or of the computer (its name there, and its file's); the phone knows how long its own are. */
+export type Song = { id: string; title: string; artist: string; album: string; duration?: number; folder?: string; name?: string; kind?: string; size?: number }
+
+/** A song in the line to play, and where it is; a song of the computer with its size, so that it plays while it arrives. */
+export type Queued = { where: 'phone' | 'computer'; id: string; title: string; artist: string; size?: number }
 
 /** What plays now: the song, where it is in its line, whether it plays or is being prepared, how far it is (milliseconds), and why not. */
 export type Playing = { song: Queued | null; index: number; count: number; playing: boolean; loading: boolean; position: number; duration: number; problem: string }
@@ -69,6 +72,14 @@ export type App = {
   update(): Update
   /** Takes the newer app from the computer; then Android asks the user whether to install it. */
   takeUpdate(): void
+  /** The tab of the app that shows the page: "phone" for the pictures, "music" for the songs. */
+  tab(): string
+  /** The pictures by kind; null until the computer said once what the kinds are. The same object while nothing changed. */
+  kinds(): Sorted | null
+  /** Whether Android can put the music widget on the home screen when asked (from Android 8). */
+  canPinWidget(): boolean
+  /** Asks Android to put the music widget on the home screen: Android asks the user first. */
+  pinWidget(): void
   /** The songs of this phone, and whether the app may see them. */
   songs(): { allowed: boolean; songs: Song[] }
   /** Asks Android to let the app see the songs. */
@@ -117,6 +128,10 @@ type Native = {
   copies(): string
   copyHere(id: string, name: string): void
   copyThere(id: string): void
+  tab(): string
+  kinds(): string
+  canPinWidget(): boolean
+  pinWidget(): void
 }
 
 declare global {
@@ -151,6 +166,9 @@ function open(): App {
   // in each name, as the app may still be telling the requests of a page shown before this one
   const page = Date.now().toString(36)
   let asked = 0
+  // the kinds as the app said them last: the same answer gives the same object, and the page has nothing to redraw
+  let said = ''
+  let sorted: Sorted | null = null
   window.registaAnswered = (token) => {
     for (const said of parse<Said[]>(native.answer(token))) {
       const asking = waiting.get(token)
@@ -190,6 +208,17 @@ function open(): App {
     copies: () => parse(native.copies()),
     copyHere: (id, name) => native.copyHere(id, name),
     copyThere: (id) => native.copyThere(id),
+    tab: () => native.tab(),
+    canPinWidget: () => native.canPinWidget(),
+    pinWidget: () => native.pinWidget(),
+    kinds: () => {
+      const now = native.kinds()
+      if (now !== said) {
+        said = now
+        sorted = parse<Sorted | null>(now)
+      }
+      return sorted
+    },
     ask: (text, heard) =>
       new Promise((resolve) => {
         asked += 1
@@ -225,6 +254,17 @@ const TRIPS = [
   { country: 'FR', start: '2026-06-10', at: [48.86, 2.34], hue: 220 },
   { country: 'IT', region: 'IT.07', start: '2026-07-14', at: [41.89, 12.49], hue: 130 },
 ]
+
+// the pretend phone's pictures by kind: a trip each, and the last ones of the second less sure
+const ids = (from: number, to: number) => Array.from({ length: to - from }, (_, at) => String(from + at))
+const KINDS: Sorted = {
+  kinds: [
+    { kind: 'citta', label: 'Città e monumenti', sure: ids(0, 12), maybe: [] },
+    { kind: 'natura', label: 'Paesaggi e natura', sure: ids(12, 18), maybe: ids(18, 24) },
+    { kind: 'persone', label: 'Persone', sure: ids(24, 36), maybe: [] },
+  ],
+  unsorted: 0,
+}
 
 // a few songs of the pretend phone
 const SONGS: Song[] = [
@@ -291,6 +331,10 @@ function pretend(): App {
     copies: () => ({}),
     copyHere: () => {},
     copyThere: () => {},
+    tab: () => (location.hash === '#musica' ? 'music' : 'phone'),
+    kinds: () => KINDS,
+    canPinWidget: () => true,
+    pinWidget: () => {},
     thumb: (id) => {
       // a colour for each trip, a shade for each picture
       const number = Number(id)

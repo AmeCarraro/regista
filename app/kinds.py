@@ -43,8 +43,8 @@ class Kinds:
         self._made: tuple | None = None
         self._lock = threading.Lock()
 
-    def _said(self) -> np.ndarray:
-        """One row of numbers for each kind: the mean of its sentences, "una foto di …"."""
+    def sentences(self) -> np.ndarray:
+        """One row of numbers for each kind: the mean of its sentences, "una foto di …". A phone sorts its own pictures with them."""
         if self._sentences is None:
             rows = []
             for _, _, things in KINDS:
@@ -64,7 +64,7 @@ class Kinds:
                 return self._made[1]
             sorted_out = {kind: {"label": label, "sure": [], "maybe": []} for kind, label, _ in [*KINDS, (*SCREENSHOTS, [])]}
             if photos and vectors.size:
-                scores = vectors @ self._said().T
+                scores = vectors @ self.sentences().T
                 order = np.argsort(-scores, axis=1)
                 for at, photo in enumerate(photos):
                     first, second = order[at, 0], order[at, 1]

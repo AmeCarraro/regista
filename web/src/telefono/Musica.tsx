@@ -54,7 +54,7 @@ export default function Musica({ visible }: { visible: boolean }) {
 
   function play(index: number) {
     app.play(
-      shown.map((song) => ({ where, id: song.id, title: song.title, artist: song.artist })),
+      shown.map((song) => ({ where, id: song.id, title: song.title, artist: song.artist, size: song.size })),
       index,
     )
     setPlaying(app.player())
@@ -160,6 +160,18 @@ export default function Musica({ visible }: { visible: boolean }) {
           )
         })}
       </ul>
+
+      {where === 'phone' && mine.allowed && (
+        <p className="fine widget-hint">
+          {app.canPinWidget() ? (
+            <button type="button" className="link" onClick={() => app.pinWidget()}>
+              Metti la musica nella schermata Home
+            </button>
+          ) : (
+            'Per avere la musica nella schermata Home: tieni premuto su uno spazio vuoto della schermata Home, scegli «Widget» e poi «Regista».'
+          )}
+        </p>
+      )}
 
       {now && (
         <footer className="player">

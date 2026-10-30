@@ -4,6 +4,7 @@ It has two doors. One is for this computer, and answers only here. The other is 
 phones the user has let in: encrypted, on a port of its own, and closed to everyone else.
 """
 import asyncio
+import base64
 import hashlib
 import json
 import logging
@@ -27,7 +28,9 @@ import orchestrator
 import selftest
 from actions import Actions, Refused, collection_name
 from embedder import ClipEmbedder
-from music import KINDS, Music
+from kinds import KINDS, MARGIN
+from music import KINDS as SONG_KINDS
+from music import Music
 from phone import Phones, on_phone
 from photos import BATCH, PhotoIndex, newest, photo_id
 from places import Places
@@ -991,7 +994,7 @@ async def song(identifier: str):
     path = await asyncio.to_thread(music.path, identifier)
     if path is None:
         raise HTTPException(status_code=404, detail="no such song")
-    return FileResponse(path, media_type=KINDS[path.suffix.lower()])
+    return FileResponse(path, media_type=SONG_KINDS[path.suffix.lower()])
 
 
 @app.get("/phone/music")
@@ -1007,7 +1010,19 @@ async def song_for_the_phone(identifier: str):
     if path is None:
         raise HTTPException(status_code=404, detail="no such song")
     fingerprint = await asyncio.to_thread(music.fingerprint, path)
-    return FileResponse(path, media_type=KINDS[path.suffix.lower()], headers={"X-Regista-Sha256": fingerprint})
+    return FileResponse(path, media_type=SONG_KINDS[path.suffix.lower()], headers={"X-Regista-Sha256": fingerprint})
+
+
+@app.get("/phone/kinds")
+async def kinds_for_the_phone():
+    """What each kind of picture comes to in numbers (kinds.py), for a phone to sort its own pictures by kind,
+    also away from home. They are the numbers of the same model the phone's pictures are read with."""
+    said = await asyncio.to_thread(photos.kinds.sentences)
+    return {
+        "model": photos.embedder.name,
+        "margin": MARGIN,
+        "kinds": [{"kind": kind, "label": label, "vector": base64.b64encode(row.astype("<f4").tobytes()).decode()} for (kind, label, _), row in zip(KINDS, said)],
+    }
 
 
 @app.put("/phone/music/received")

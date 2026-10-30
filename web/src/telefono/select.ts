@@ -61,6 +61,16 @@ function newestFirst(pictures: Picture[]): Picture[] {
   return [...pictures].sort((one, other) => other.day.localeCompare(one.day) || one.name.localeCompare(other.name))
 }
 
+/** The pictures of a kind: the sure ones first, then the others, each part the newest first. */
+export function ofKind(pictures: Picture[], kind: { label: string; sure: string[]; maybe: string[] }): Found {
+  const byId = new Map(pictures.map((picture) => [picture.id, picture]))
+  const sure = newestFirst(kind.sure.flatMap((id) => byId.get(id) ?? []))
+  const maybe = newestFirst(kind.maybe.flatMap((id) => byId.get(id) ?? []))
+  const all = sure.length + maybe.length
+  const words = all ? `${kind.label}: ${count(all)}.${sure.length && maybe.length ? ' Prima quelle di cui sono sicuro, poi le altre.' : ''}` : `Nessuna foto tra «${kind.label}».`
+  return { pictures: [...sure, ...maybe], words, sure: sure.length }
+}
+
 /** What the computer has found so far for a request, while it goes on looking: all sure, the newest first. */
 export function partly(pictures: Picture[], ids: string[]): Found {
   const found = new Set(ids)

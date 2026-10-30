@@ -48,6 +48,7 @@ class MainActivity : Activity() {
     private lateinit var sight: Sight
     private lateinit var update: Update
     private lateinit var songs: Songs
+    private lateinit var kinds: Kinds
     private var link: Link? = null
 
     /** The computer, when it answered last; null while it cannot be reached. */
@@ -75,6 +76,7 @@ class MainActivity : Activity() {
         library = Library(this, gallery, places, sight)
         update = Update(this)
         songs = Songs(this)
+        kinds = Kinds(this, library)
         setContentView(R.layout.main)
         // the table of places takes a few seconds to read on an old phone: it is read now, in the background
         thread(name = "places") { places.ready() }
@@ -88,7 +90,8 @@ class MainActivity : Activity() {
             if (memory.paired) unpair()
             true
         }
-        show(PHONE)
+        // the music widget opens the app on its tab
+        show(if (intent?.getStringExtra(TAB) == MUSIC) MUSIC else PHONE)
         say(if (memory.paired) "Cerco ${memory.computer.ifBlank { "il computer" }}…" else "Nessun computer collegato: puoi farlo dalla scheda «Computer».")
         // to see the pictures and where each was taken: Android asks the user once for both
         gallery.missing().takeIf { it.isNotEmpty() }?.let { requestPermissions(it, 1) }
@@ -101,6 +104,7 @@ class MainActivity : Activity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         intent.dataString?.let(::readInvite)?.let(::offer)
+        if (intent.getStringExtra(TAB) == MUSIC) show(MUSIC)
     }
 
     override fun onStart() {
@@ -125,7 +129,12 @@ class MainActivity : Activity() {
 
     // ---- the three tabs
 
+    /** The tab shown: the phone's page asks for it when it opens, as it may open after the tab was chosen. */
+    @Volatile var tab = PHONE
+        private set
+
     private fun show(tab: String) {
+        this.tab = tab
         val paired = memory.paired
         // the pictures and the music are two views of the phone's own page
         phonePage.visibility = if (tab == PHONE || tab == MUSIC) View.VISIBLE else View.GONE
@@ -242,7 +251,7 @@ class MainActivity : Activity() {
         page.settings.domStorageEnabled = true
         page.settings.allowFileAccess = false
         page.settings.allowContentAccess = false
-        val phone = Phone(this, library, places, gallery, memory, sight, update, songs)
+        val phone = Phone(this, library, places, gallery, memory, sight, update, songs, kinds)
         // the page calls the app through this, and only this page can: it is the app's own, and nothing else opens in here
         page.addJavascriptInterface(phone, "Regista")
         page.webViewClient = object : WebViewClient() {
@@ -315,6 +324,7 @@ class MainActivity : Activity() {
             clear = ::clear,
             changed = { library.refresh() },
             update = update,
+            kinds = kinds,
         ).also { it.start() }
     }
 
@@ -514,12 +524,15 @@ class MainActivity : Activity() {
         }
     }
 
-    private companion object {
+    // the tabs and the extra that names one are for the music widget too, which opens the app on its tab
+    companion object {
         const val PHONE = "phone"
         const val MUSIC = "music"
         const val COMPUTER = "computer"
         // the question about the songs, to tell its answer from the one about the pictures
         const val SONGS = 4
+        // the tab the app is opened on, when it is not the first one
+        const val TAB = "app.regista.TAB"
 
         /** The name of Android's question about the trash, to recognise its answer. */
         const val TRASH = 2

@@ -14,6 +14,7 @@ import android.graphics.drawable.Icon
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.media.MediaDataSource
 import android.media.MediaMetadata
 import android.media.MediaPlayer
 import android.media.session.MediaSession
@@ -28,19 +29,57 @@ import org.json.JSONException
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
+import java.io.RandomAccessFile
 import java.security.MessageDigest
 import kotlin.concurrent.thread
 
-/** A song in line to be played: on this phone (its number in Android's list) or on the computer (its name there). */
-class Song(val where: String, val id: String, val title: String, val artist: String) {
+/** A song in line to be played: on this phone (its number in Android's list) or on the computer (its name there, and its size). */
+class Song(val where: String, val id: String, val title: String, val artist: String, val size: Long = 0) {
     fun json(): JSONObject = JSONObject().put("where", where).put("id", id).put("title", title).put("artist", artist)
+}
+
+/**
+ * A song still arriving from the computer, played from what has arrived: Android waits where the rest
+ * is not there yet. An M4A whose words come at its end starts once it is whole, as Android reads the end first.
+ */
+private class Arriving(private val file: File, private val size: Long) : MediaDataSource() {
+    @Volatile var got = 0L
+    // null while it arrives; true once whole and checked, false when it broke off or is not what the computer sent
+    @Volatile var whole: Boolean? = null
+    @Volatile private var closed = false
+    private var reader: RandomAccessFile? = null
+
+    override fun getSize() = size
+
+    override fun readAt(position: Long, buffer: ByteArray, offset: Int, length: Int): Int {
+        if (position >= size) return -1
+        val wanted = minOf(size, position + length)
+        while (got < wanted && whole == null && !closed) Thread.sleep(40)
+        if (closed || whole == false) throw IOException("the song did not arrive whole")
+        val ready = (minOf(got, wanted) - position).toInt()
+        if (ready <= 0) return -1
+        synchronized(this) {
+            val open = reader ?: RandomAccessFile(file, "r").also { reader = it }
+            open.seek(position)
+            return open.read(buffer, offset, ready)
+        }
+    }
+
+    override fun close() {
+        closed = true
+        synchronized(this) {
+            reader?.close()
+            reader = null
+        }
+    }
 }
 
 /**
  * Plays a line of songs, one after the other, also with the screen off and the app closed: Android
  * keeps running a player that shows a notification, puts its controls on the lock screen and gives
- * it the buttons of headphones. A song of the computer is first taken from it, whole and checked,
- * into the app's own cache, and played from there; only the one playing is kept.
+ * it the buttons of headphones. A song of the computer is taken from it into the app's own cache and
+ * plays while it arrives; checked once whole, it stops if it is not what the computer sent. Only the
+ * one playing is kept.
  */
 class Player : Service() {
     private var player: MediaPlayer? = null
@@ -145,17 +184,25 @@ class Player : Service() {
         show(song)
         if (song.where != "computer") return prepare(mine) { setDataSource(this@Player, Songs.uri(song.id.toLong())) }
         val computer = computer ?: return failed(mine, "Questa canzone è sul computer, e il computer non risponde.")
+        val folder = File(cacheDir, "music").apply { mkdirs() }
+        // only the song playing is kept: the one before goes
+        folder.listFiles()?.forEach { it.delete() }
+        val file = File(folder, song.id.filter(Char::isLetterOrDigit))
+        val arriving = Arriving(file, song.size)
         thread(name = "song") {
-            val file = try {
-                take(computer, song)
+            val whole = try {
+                take(computer, song, file, arriving)
             } catch (unreachable: IOException) {
-                null
+                false
             }
+            arriving.whole = whole
             main.post {
-                if (file == null) failed(mine, "La canzone non è arrivata dal computer: riprova da casa, con Regista aperto.")
-                else prepare(mine) { setDataSource(file.path) }
+                if (!whole) failed(mine, "La canzone non è arrivata dal computer: riprova da casa, con Regista aperto.")
+                // a song whose size the computer did not say plays once it is whole
+                else if (song.size <= 0) prepare(mine) { setDataSource(file.path) }
             }
         }
+        if (song.size > 0) prepare(mine) { setDataSource(arriving) }
     }
 
     private fun prepare(mine: Int, source: MediaPlayer.() -> Unit) {
@@ -253,6 +300,7 @@ class Player : Service() {
         problem = ""
         stopForeground(STOP_FOREGROUND_REMOVE)
         foreground = false
+        MusicWidget.show(this)
         stopSelf()
     }
 
@@ -288,12 +336,9 @@ class Player : Service() {
         listening = false
     }
 
-    /** Takes a song of the computer into the app's cache, whole and checked; the one taken before is thrown away. */
-    private fun take(computer: Computer, song: Song): File? {
-        val folder = File(cacheDir, "music").apply { mkdirs() }
-        folder.listFiles()?.forEach { it.delete() }
-        val file = File(folder, song.id.filter(Char::isLetterOrDigit))
-        val arrived = computer.fetch("/phone/music/${song.id}") { stream, fingerprint ->
+    /** Takes a song of the computer into `file`, saying how much has arrived as it arrives; true when it is whole and checked. */
+    private fun take(computer: Computer, song: Song, file: File, arriving: Arriving): Boolean =
+        computer.fetch("/phone/music/${song.id}") { stream, fingerprint ->
             val digest = MessageDigest.getInstance("SHA-256")
             file.outputStream().use { out ->
                 val buffer = ByteArray(64 * 1024)
@@ -302,14 +347,11 @@ class Player : Service() {
                     if (read < 0) break
                     digest.update(buffer, 0, read)
                     out.write(buffer, 0, read)
+                    arriving.got += read
                 }
             }
             digest.digest().joinToString("") { "%02x".format(it) }.equals(fingerprint, ignoreCase = true)
         }
-        if (arrived) return file
-        file.delete()
-        return null
-    }
 
     /** What plays now, for the lock screen, the notification and the buttons of headphones. */
     private fun show(song: Song) {
@@ -334,6 +376,7 @@ class Player : Service() {
                 .setState(state, position, if (playing) 1f else 0f)
                 .build(),
         )
+        MusicWidget.show(this)
         val song = queue.getOrNull(index) ?: return
         val shown = notification(song)
         if (foreground) {
@@ -371,10 +414,8 @@ class Player : Service() {
             .build()
     }
 
-    private fun action(icon: Int, title: String, what: String): Notification.Action {
-        val pressed = PendingIntent.getService(this, what.hashCode(), Intent(this, Player::class.java).setAction(what), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        return Notification.Action.Builder(Icon.createWithResource(this, icon), title, pressed).build()
-    }
+    private fun action(icon: Int, title: String, what: String): Notification.Action =
+        Notification.Action.Builder(Icon.createWithResource(this, icon), title, pressed(this, what)).build()
 
     companion object {
         const val PLAY = "app.regista.music.PLAY"
@@ -421,11 +462,15 @@ class Player : Service() {
             context.startService(Intent(context, Player::class.java).setAction(action).apply(extras))
         }
 
+        /** The same, for a button outside the app: the notification's, or the widget's. */
+        fun pressed(context: Context, action: String): PendingIntent =
+            PendingIntent.getService(context, action.hashCode(), Intent(context, Player::class.java).setAction(action), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+
         private fun read(queue: String?): List<Song> = try {
             val list = JSONArray(queue ?: "[]")
             (0 until list.length()).map { at ->
                 val song = list.getJSONObject(at)
-                Song(song.optString("where"), song.getString("id"), song.optString("title"), song.optString("artist"))
+                Song(song.optString("where"), song.getString("id"), song.optString("title"), song.optString("artist"), song.optLong("size"))
             }
         } catch (garbled: JSONException) {
             emptyList()
