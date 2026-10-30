@@ -38,7 +38,7 @@ sys.path.insert(0, str(HERE / "app"))
 # started with pythonw.exe, as the icon does: no console, so what goes wrong is said in a small window
 WINDOWED = sys.stdout is None
 ICON = HERE / "tools" / "regista.ico"
-DEFAULTS = {"photos": "", "read_only": False, "phone": False, "port": 8090, "phone_port": 8443, "addresses": [], "models": ""}
+DEFAULTS = {"photos": "", "read_only": False, "phone": False, "port": 8090, "phone_port": 8443, "addresses": [], "models": "", "music": ""}
 # a program started from here opens no window of its own
 NO_WINDOW = 0x08000000
 OLLAMA = "http://127.0.0.1:11434"
@@ -196,6 +196,17 @@ def _quiet(home: Path) -> None:
     sys.stdout = sys.stderr = open(log, "a", encoding="utf-8", buffering=1)
 
 
+def music_folder() -> Path:
+    """Windows' own Music folder, also when it was moved (into OneDrive, or onto another disk)."""
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders") as key:
+            return Path(os.path.expandvars(winreg.QueryValueEx(key, "My Music")[0]))
+    except (ImportError, OSError):
+        return Path.home() / "Music"
+
+
 def environment(home: Path, chosen: dict, photos: Path, addresses: list[str]) -> dict:
     """What the service reads when it starts (main.py): the same names the container was given by compose.yaml."""
     phone = bool(chosen["phone"] and addresses)
@@ -205,6 +216,8 @@ def environment(home: Path, chosen: dict, photos: Path, addresses: list[str]) ->
         "PHOTOS_DIR": str(photos),
         "PHOTOS_LABEL": str(photos),
         "PHOTOS_READ_ONLY": "1" if chosen["read_only"] else "0",
+        # the songs: the folder chosen, or Windows' own
+        "MUSIC_DIR": chosen["music"] or str(music_folder()),
         "PHONE_MODELS": str(models),
         # the phone app, which a phone takes from here when it is newer than its own
         "PHONE_APP": str(HERE / "phone-app"),

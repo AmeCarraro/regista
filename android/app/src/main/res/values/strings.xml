@@ -9,5 +9,6 @@ Se la fotocamera non lo legge, copia il collegamento che trovi sotto il codice e
     <string name="pairing_go">Collega</string>
     <string name="pairing_promise">Questa app legge le tue foto e le mostra solo al computer che colleghi tu. Non cancella niente da sola: per togliere foto dal telefono ne fa prima una copia sul computer, e poi te lo chiede Android.</string>
     <string name="tab_phone">Telefono</string>
+    <string name="tab_music">Musica</string>
     <string name="tab_computer">Computer</string>
 </resources>

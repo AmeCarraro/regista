@@ -63,6 +63,17 @@
             android:textStyle="bold" />
 
         <TextView
+            android:id="@+id/tab_music"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:background="@drawable/tab"
+            android:gravity="center"
+            android:text="@string/tab_music"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+
+        <TextView
             android:id="@+id/tab_computer"
             android:layout_width="0dp"
             android:layout_height="match_parent"

@@ -304,3 +304,10 @@ export const readFolderAgain = () => fetch('/api/photos/read', { method: 'POST' 
 export const thumbOf = (id: string) => `/api/photos/${id}/thumb`
 
 export const fullOf = (id: string) => `/api/photos/${id}/full`
+
+/** A song of the music folder: what its file says of it, or its name and its folder when it says nothing. */
+export type Tune = { id: string; title: string; artist: string; album: string; folder: string; kind: string; size: number }
+
+export const fetchMusic = () => get<{ folder: string; songs: Tune[] }>('/api/music')
+
+export const songOf = (id: string) => `/api/music/${id}`

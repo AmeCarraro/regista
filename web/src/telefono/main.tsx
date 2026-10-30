@@ -5,10 +5,10 @@ import '@fontsource-variable/inter'
 import '@fontsource-variable/space-grotesk'
 import '../index.css'
 import './telefono.css'
-import Telefono from './Telefono.tsx'
+import Screens from './Screens.tsx'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <Telefono />
+    <Screens />
   </StrictMode>,
 )

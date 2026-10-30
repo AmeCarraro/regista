@@ -47,6 +47,7 @@ class MainActivity : Activity() {
     private lateinit var library: Library
     private lateinit var sight: Sight
     private lateinit var update: Update
+    private lateinit var songs: Songs
     private var link: Link? = null
 
     /** The computer, when it answered last; null while it cannot be reached. */
@@ -73,6 +74,7 @@ class MainActivity : Activity() {
         sight = Sight(this)
         library = Library(this, gallery, places, sight)
         update = Update(this)
+        songs = Songs(this)
         setContentView(R.layout.main)
         // the table of places takes a few seconds to read on an old phone: it is read now, in the background
         thread(name = "places") { places.ready() }
@@ -80,6 +82,7 @@ class MainActivity : Activity() {
         setUpComputer()
         setUpPairing()
         findViewById<TextView>(R.id.tab_phone).setOnClickListener { show(PHONE) }
+        findViewById<TextView>(R.id.tab_music).setOnClickListener { show(MUSIC) }
         findViewById<TextView>(R.id.tab_computer).setOnClickListener { openComputer() }
         findViewById<TextView>(R.id.status).setOnLongClickListener {
             if (memory.paired) unpair()
@@ -120,14 +123,16 @@ class MainActivity : Activity() {
         link?.refresh()
     }
 
-    // ---- the two tabs
+    // ---- the three tabs
 
     private fun show(tab: String) {
         val paired = memory.paired
-        phonePage.visibility = if (tab == PHONE) View.VISIBLE else View.GONE
+        // the pictures and the music are two views of the phone's own page
+        phonePage.visibility = if (tab == PHONE || tab == MUSIC) View.VISIBLE else View.GONE
+        if (tab != COMPUTER) phonePage.evaluateJavascript("window.registaView && window.registaView('$tab')", null)
         computerPage.visibility = if (tab == COMPUTER && paired) View.VISIBLE else View.GONE
         pairing.visibility = if (tab == COMPUTER && !paired) View.VISIBLE else View.GONE
-        for ((id, name) in listOf(R.id.tab_phone to PHONE, R.id.tab_computer to COMPUTER)) {
+        for ((id, name) in listOf(R.id.tab_phone to PHONE, R.id.tab_music to MUSIC, R.id.tab_computer to COMPUTER)) {
             val button = findViewById<TextView>(id)
             button.isSelected = name == tab
             button.setTextColor(getColor(if (name == tab) R.color.text else R.color.muted))
@@ -219,6 +224,11 @@ class MainActivity : Activity() {
         link?.refresh()
     }
 
+    /** The user wants to see the songs of this phone: Android asks once. */
+    fun askForSongs() {
+        if (!songs.allowed) requestPermissions(arrayOf(songs.permission), SONGS)
+    }
+
     /** Pictures were put in line for the computer on the phone's page: they go as soon as it answers. */
     fun offered(count: Int) {
         say(if (reached != null) "Mando $count foto al computer…" else "$count foto in fila per il computer: le mando appena lo raggiungo.")
@@ -232,7 +242,7 @@ class MainActivity : Activity() {
         page.settings.domStorageEnabled = true
         page.settings.allowFileAccess = false
         page.settings.allowContentAccess = false
-        val phone = Phone(this, library, places, gallery, memory, sight, update)
+        val phone = Phone(this, library, places, gallery, memory, sight, update, songs)
         // the page calls the app through this, and only this page can: it is the app's own, and nothing else opens in here
         page.addJavascriptInterface(phone, "Regista")
         page.webViewClient = object : WebViewClient() {
@@ -506,7 +516,10 @@ class MainActivity : Activity() {
 
     private companion object {
         const val PHONE = "phone"
+        const val MUSIC = "music"
         const val COMPUTER = "computer"
+        // the question about the songs, to tell its answer from the one about the pictures
+        const val SONGS = 4
 
         /** The name of Android's question about the trash, to recognise its answer. */
         const val TRASH = 2

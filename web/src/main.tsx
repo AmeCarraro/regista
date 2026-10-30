@@ -7,6 +7,7 @@ import '@fontsource-variable/space-grotesk'
 import './index.css'
 import './side.css'
 import './chat.css'
+import './music.css'
 import App from './App.tsx'
 
 createRoot(document.getElementById('root')!).render(

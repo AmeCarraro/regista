@@ -27,6 +27,7 @@ import orchestrator
 import selftest
 from actions import Actions, Refused, collection_name
 from embedder import ClipEmbedder
+from music import KINDS, Music
 from phone import Phones, on_phone
 from photos import BATCH, PhotoIndex, photo_id
 from places import Places
@@ -34,6 +35,8 @@ from places import Places
 logger = logging.getLogger("uvicorn.error")
 INDEX_DIR = os.getenv("INDEX_DIR", "index")
 PHOTOS_DIR = os.getenv("PHOTOS_DIR", "foto")
+# the songs, only listened to: nothing here changes them
+MUSIC_DIR = os.getenv("MUSIC_DIR", "musica")
 # the names this computer's door answers to
 HOSTS = os.getenv("ALLOWED_HOSTS", "127.0.0.1,localhost").split(",")
 # the door of the phones, inside the container and as it is seen from outside
@@ -82,6 +85,7 @@ phones = Phones(
     os.getenv("HOST_NAME", ""),
     places,
 )
+music = Music(MUSIC_DIR)
 
 # whether the folder is being read right now, and whether it changed meanwhile and must be read once more
 _reader = threading.Lock()
@@ -218,7 +222,7 @@ class Gate:
             await outer(message)
 
         # an original from a phone is counted by who writes it to disk, as it arrives
-        if not (scope["method"] == "PUT" and path.startswith("/phone/transfers/")):
+        if not (scope["method"] == "PUT" and path.startswith(("/phone/transfers/", "/phone/music/"))):
             most = PAIRING_BODY if path in PAIRING else BODY
             declared = headers.get(b"content-length", "")
             if declared.isdigit() and int(declared) > most:
@@ -939,6 +943,70 @@ def app_file_for_the_phone(kind: str):
         raise HTTPException(status_code=404, detail="no app for this phone")
     return FileResponse(found["path"], media_type="application/vnd.android.package-archive",
                         headers={"X-Regista-Sha256": _fingerprint(found["path"]), "Cache-Control": "no-store"})
+
+
+# ---- the music: listened to on this computer's page, and from a paired phone at home
+
+
+@app.get("/api/music")
+async def songs():
+    """The songs of the music folder and of the folders inside it, by title."""
+    return {"folder": str(music.folder), "songs": await asyncio.to_thread(music.songs)}
+
+
+@app.get("/api/music/{identifier}")
+async def song(identifier: str):
+    """A song as it is: the page asks for it a part at a time, and can jump within it."""
+    path = await asyncio.to_thread(music.path, identifier)
+    if path is None:
+        raise HTTPException(status_code=404, detail="no such song")
+    return FileResponse(path, media_type=KINDS[path.suffix.lower()])
+
+
+@app.get("/phone/music")
+async def songs_for_the_phone():
+    """The songs of this computer, for a phone at home: it plays them from here, without keeping them."""
+    return {"songs": await asyncio.to_thread(music.songs)}
+
+
+@app.get("/phone/music/{identifier}")
+async def song_for_the_phone(identifier: str):
+    """A song, with its fingerprint: the phone checks what arrives before playing it."""
+    path = await asyncio.to_thread(music.path, identifier)
+    if path is None:
+        raise HTTPException(status_code=404, detail="no such song")
+    fingerprint = await asyncio.to_thread(music.fingerprint, path)
+    return FileResponse(path, media_type=KINDS[path.suffix.lower()], headers={"X-Regista-Sha256": fingerprint})
+
+
+@app.put("/phone/music/received")
+async def song_from_the_phone(request: Request, name: str = Query(min_length=1, max_length=200)):
+    """A song a phone sends, with its fingerprint: kept only whole, in "Dal telefono" inside the music folder,
+    under a name that is free. Nothing there is written over."""
+    said = request.headers.get("x-regista-sha256", "").lower()
+    if not said:
+        raise HTTPException(status_code=400, detail="La canzone deve arrivare con la sua impronta.")
+    try:
+        partial = music.incoming(name)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Questa non è una canzone.")
+    size, seen = 0, hashlib.sha256()
+    try:
+        with partial.open("wb") as file:
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > LARGEST:
+                    raise HTTPException(status_code=413, detail="too large")
+                seen.update(chunk)
+                file.write(chunk)
+        if not size or said != seen.hexdigest():
+            raise HTTPException(status_code=400, detail="La canzone non è arrivata intera.")
+        kept = music.land(partial, name)
+    except BaseException:
+        # what stopped halfway is not a song
+        partial.unlink(missing_ok=True)
+        raise
+    return {"kept": kept}
 
 
 @app.post("/phone/offer")

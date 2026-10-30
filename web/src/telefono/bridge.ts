@@ -33,6 +33,15 @@ export type Heard = { type: 'photo'; photo: string } | { type: 'looked'; looked:
 /** What the app hands over of the computer's answer, a few at a time: what it says on the way, and last the answer. */
 type Said = Heard | { type: 'answer'; answer: Answer | null }
 
+/** A song of this phone (its number in Android's list) or of the computer (its name there, and its file's); the phone knows how long its own are. */
+export type Song = { id: string; title: string; artist: string; album: string; duration?: number; folder?: string; name?: string; kind?: string }
+
+/** A song in the line to play, and where it is. */
+export type Queued = { where: 'phone' | 'computer'; id: string; title: string; artist: string }
+
+/** What plays now: the song, where it is in its line, whether it plays or is being prepared, how far it is (milliseconds), and why not. */
+export type Playing = { song: Queued | null; index: number; count: number; playing: boolean; loading: boolean; position: number; duration: number; problem: string }
+
 export type App = {
   pictures(): Picture[]
   reading(): Reading
@@ -60,6 +69,24 @@ export type App = {
   update(): Update
   /** Takes the newer app from the computer; then Android asks the user whether to install it. */
   takeUpdate(): void
+  /** The songs of this phone, and whether the app may see them. */
+  songs(): { allowed: boolean; songs: Song[] }
+  /** Asks Android to let the app see the songs. */
+  allowSongs(): void
+  /** The songs of the computer while it answers; null until it listed them. */
+  computerSongs(): { reachable: boolean; songs: Song[] | null }
+  /** Plays a line of songs from the one at `index`: also with the screen off. */
+  play(queue: Queued[], index: number): void
+  control(what: 'pause' | 'resume' | 'next' | 'previous' | 'stop'): void
+  /** Jumps to a point of the song playing, in milliseconds. */
+  seek(position: number): void
+  player(): Playing
+  /** The songs being copied and how each copy ended, by "phone:<id>" or "computer:<id>". */
+  copies(): Record<string, 'copying' | 'done' | 'failed'>
+  /** Copies a song of the computer onto this phone, under its file name there. */
+  copyHere(id: string, name: string): void
+  /** Sends a song of this phone to the computer, which keeps it in "Dal telefono". */
+  copyThere(id: string): void
 }
 
 /** What the app offers the page: every answer is text, as JSON. */
@@ -80,6 +107,16 @@ type Native = {
   setAutoCopy(on: boolean): void
   update(): string
   takeUpdate(): void
+  songs(): string
+  allowSongs(): void
+  computerSongs(): string
+  play(queue: string, index: number): void
+  control(what: string): void
+  seek(position: number): void
+  player(): string
+  copies(): string
+  copyHere(id: string, name: string): void
+  copyThere(id: string): void
 }
 
 declare global {
@@ -87,6 +124,8 @@ declare global {
     Regista?: Native
     /** Called by the app when the computer said more about a request: what it said is taken with answer(token). */
     registaAnswered?: (token: string) => void
+    /** Called by the app when one of its tabs shows this page: "phone" for the pictures, "music" for the songs. */
+    registaView?: (tab: string) => void
   }
 }
 
@@ -95,7 +134,15 @@ const PATIENCE = 45_000
 
 type Waiting = { heard: (event: Heard) => void; done: (answer: Answer | null) => void }
 
+let connected: App | undefined
+
+/** The app around the page, one for all of it: the pictures and the music share it. */
 export function connect(): App {
+  connected ??= open()
+  return connected
+}
+
+function open(): App {
   const native = window.Regista
   if (!native) return pretend()
   const parse = <T>(text: string): T => JSON.parse(text) as T
@@ -133,6 +180,16 @@ export function connect(): App {
     setAutoCopy: (on) => native.setAutoCopy(on),
     update: () => parse<Update>(native.update()),
     takeUpdate: () => native.takeUpdate(),
+    songs: () => parse(native.songs()),
+    allowSongs: () => native.allowSongs(),
+    computerSongs: () => parse(native.computerSongs()),
+    play: (queue, index) => native.play(JSON.stringify(queue), index),
+    control: (what) => native.control(what),
+    seek: (position) => native.seek(position),
+    player: () => parse<Playing>(native.player()),
+    copies: () => parse(native.copies()),
+    copyHere: (id, name) => native.copyHere(id, name),
+    copyThere: (id) => native.copyThere(id),
     ask: (text, heard) =>
       new Promise((resolve) => {
         asked += 1
@@ -169,8 +226,19 @@ const TRIPS = [
   { country: 'IT', region: 'IT.07', start: '2026-07-14', at: [41.89, 12.49], hue: 130 },
 ]
 
+// a few songs of the pretend phone
+const SONGS: Song[] = [
+  { id: '1', title: 'Azzurro', artist: 'Paolo Conte', album: 'Azzurro', duration: 183_000 },
+  { id: '2', title: 'Nel blu dipinto di blu', artist: 'Domenico Modugno', album: '', duration: 214_000 },
+  { id: '3', title: 'Una canzone senza nome', artist: '', album: 'Varie', duration: 95_000 },
+]
+
 function pretend(): App {
   const copying = { on: false, at: Date.UTC(2026, 9, 17, 13, 42), count: 3 }
+  // what the pretend player plays: the time goes on by itself
+  let playing: Playing = { song: null, index: 0, count: 0, playing: false, loading: false, position: 0, duration: 0, problem: '' }
+  let line: Queued[] = []
+  let started = 0
   const pictures: Picture[] = TRIPS.flatMap((trip, number) =>
     Array.from({ length: 12 }, (_, index) => {
       const day = new Date(`${trip.start}T12:00:00Z`)
@@ -201,6 +269,28 @@ function pretend(): App {
     },
     update: () => ({ newer: false, taking: false, got: 0, size: 0 }),
     takeUpdate: () => {},
+    songs: () => ({ allowed: true, songs: SONGS }),
+    allowSongs: () => {},
+    computerSongs: () => ({ reachable: false, songs: null }),
+    play: (queue, index) => {
+      playing = { ...playing, song: queue[index] ?? null, index, count: queue.length, playing: true, position: 0, duration: 200_000 }
+      line = queue
+      started = Date.now()
+    },
+    control: (what) => {
+      const index = playing.index + (what === 'next' ? 1 : what === 'previous' ? -1 : 0)
+      if (what === 'stop') playing = { ...playing, song: null, playing: false }
+      else if (what === 'pause' || what === 'resume') playing = { ...playing, playing: what === 'resume' }
+      else if (line[index]) playing = { ...playing, song: line[index], index, position: 0 }
+      started = Date.now() - playing.position
+    },
+    seek: (position) => {
+      started = Date.now() - position
+    },
+    player: () => (playing.playing ? { ...playing, position: Math.min(Date.now() - started, playing.duration) } : playing),
+    copies: () => ({}),
+    copyHere: () => {},
+    copyThere: () => {},
     thumb: (id) => {
       // a colour for each trip, a shade for each picture
       const number = Number(id)

@@ -66,6 +66,9 @@ type Props = {
   onReadAgain: () => void
   theme: string
   onTheme: () => void
+  /** Whether the music is shown in place of the chat. */
+  listening: boolean
+  onListen: (listening: boolean) => void
 }
 
 function ModelRow({ model, director }: { model: ModelInfo; director: boolean }) {
@@ -97,7 +100,7 @@ function ModelRow({ model, director }: { model: ModelInfo; director: boolean }) 
 }
 
 /** The side panel: the computer, the models on it with what each is for, and the pictures. */
-export default function Side({ models, library, changes, phone, onPhoneChange, testing, onTest, onReadAgain, theme, onTheme }: Props) {
+export default function Side({ models, library, changes, phone, onPhoneChange, testing, onTest, onReadAgain, theme, onTheme, listening, onListen }: Props) {
   const machine = models?.hardware
   const director = models?.order.tools[0]
   const reading = library?.running
@@ -114,6 +117,15 @@ export default function Side({ models, library, changes, phone, onPhoneChange, t
           {theme === 'dark' ? <icons.Sun /> : <icons.Moon />}
         </button>
       </header>
+
+      <nav className="views" aria-label="Cosa mostrare">
+        <button type="button" aria-pressed={!listening} onClick={() => onListen(false)}>
+          <icons.Talk /> Chat
+        </button>
+        <button type="button" aria-pressed={listening} onClick={() => onListen(true)}>
+          <icons.Note /> Musica
+        </button>
+      </nav>
 
       <section className="panel">
         <h2>

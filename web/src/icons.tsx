@@ -1,5 +1,6 @@
 // The icons of the page, drawn here as SVG: no icon font and no download.
 // They take the color and the size of the text around them.
+import { useId } from 'react'
 import type { ReactNode, SVGProps } from 'react'
 
 type Props = SVGProps<SVGSVGElement>
@@ -25,16 +26,18 @@ function Icon({ children, ...props }: Props & { children: ReactNode }) {
 
 /** The mark of the app: a spark, the one who gives the cue. */
 export function Logo(props: Props) {
+  // a colour of its own for each mark: one shown inside a hidden part of the page would take the others' with it
+  const fill = `logo-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
   return (
     <svg viewBox="0 0 32 32" aria-hidden="true" {...props}>
       <defs>
-        <linearGradient id="logo-fill" x1="0" y1="0" x2="1" y2="1">
+        <linearGradient id={fill} x1="0" y1="0" x2="1" y2="1">
           <stop offset="0" stopColor="#ff8a5b" />
           <stop offset="0.55" stopColor="#e052a0" />
           <stop offset="1" stopColor="#7a5cff" />
         </linearGradient>
       </defs>
-      <rect x="2" y="2" width="28" height="28" rx="9" fill="url(#logo-fill)" />
+      <rect x="2" y="2" width="28" height="28" rx="9" fill={`url(#${fill})`} />
       <path d="M16 7.5l2.3 6.2 6.2 2.3-6.2 2.3L16 24.5l-2.3-6.2-6.2-2.3 6.2-2.3z" fill="#fff" />
     </svg>
   )
@@ -200,5 +203,39 @@ export const Dog = (props: Props) => (
 export const Church = (props: Props) => (
   <Icon {...props}>
     <path d="M12 2.5v4M10 4.5h4M8 21v-9l4-4 4 4v9M4 21v-6l4-2M20 21v-6l-4-2M3 21h18M12 21v-4" />
+  </Icon>
+)
+
+export const Note = (props: Props) => (
+  <Icon {...props}>
+    <path d="M9 18V5l11-2v13" />
+    <circle cx="6" cy="18" r="3" />
+    <circle cx="17" cy="16" r="3" />
+  </Icon>
+)
+
+export const Play = (props: Props) => (
+  <Icon {...props}>
+    <path d="M7 4.5v15l12-7.5z" fill="currentColor" />
+  </Icon>
+)
+
+export const Pause = (props: Props) => (
+  <Icon {...props}>
+    <path d="M8 5v14M16 5v14" strokeWidth={3} />
+  </Icon>
+)
+
+export const Next = (props: Props) => (
+  <Icon {...props}>
+    <path d="M5 5v14l10-7z" fill="currentColor" />
+    <path d="M19 5v14" />
+  </Icon>
+)
+
+export const Previous = (props: Props) => (
+  <Icon {...props}>
+    <path d="M19 5v14L9 12z" fill="currentColor" />
+    <path d="M5 5v14" />
   </Icon>
 )

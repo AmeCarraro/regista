@@ -1,5 +1,6 @@
 package app.regista
 
+import android.net.Uri
 import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -25,9 +26,108 @@ class Phone(
     private val memory: Memory,
     private val sight: Sight,
     private val update: Update,
+    private val songs: Songs,
 ) {
     // what the computer said about requests typed here, until the page takes it
     private val heard = ConcurrentHashMap<String, ConcurrentLinkedQueue<JSONObject>>()
+
+    // the songs of the computer as it listed them last, and when; null before it ever did
+    @Volatile private var computerSongs: JSONArray? = null
+    @Volatile private var listedAt = 0L
+    @Volatile private var listing = false
+
+    /** The songs of this phone, and whether the app may see them: {"allowed", "songs"}. */
+    @JavascriptInterface
+    fun songs(): String = JSONObject().put("allowed", songs.allowed).put("songs", songs.json()).toString()
+
+    /** The user wants the songs shown: Android asks once. */
+    @JavascriptInterface
+    fun allowSongs() = app.runOnUiThread { app.askForSongs() }
+
+    /** The songs of the computer, while it answers: {"reachable", "songs"}, asked of it again every half minute. */
+    @JavascriptInterface
+    fun computerSongs(): String {
+        val computer = app.reached
+        if (computer != null && !listing && System.currentTimeMillis() - listedAt > 30_000) {
+            listing = true
+            thread(name = "songs") {
+                try {
+                    computerSongs = computer.ask("GET", "/phone/music").optJSONArray("songs")
+                    listedAt = System.currentTimeMillis()
+                } catch (unreachable: IOException) {
+                } finally {
+                    listing = false
+                }
+            }
+        }
+        return JSONObject().put("reachable", computer != null).put("songs", computerSongs ?: JSONObject.NULL).toString()
+    }
+
+    /** Plays a line of songs, [{"where", "id", "title", "artist"}], from the one at `index`. */
+    @JavascriptInterface
+    fun play(queue: String, index: Int) {
+        Player.computer = app.reached ?: Player.computer
+        Player.ask(app, Player.PLAY) {
+            putExtra("queue", queue)
+            putExtra("index", index)
+        }
+    }
+
+    /** "pause", "resume", "next", "previous" or "stop". */
+    @JavascriptInterface
+    fun control(what: String) {
+        val action = mapOf("pause" to Player.PAUSE, "resume" to Player.RESUME, "next" to Player.NEXT, "previous" to Player.PREVIOUS, "stop" to Player.STOP)[what] ?: return
+        Player.computer = app.reached ?: Player.computer
+        Player.ask(app, action)
+    }
+
+    /** Jumps to a point of the song playing, in milliseconds. */
+    @JavascriptInterface
+    fun seek(position: Double) = Player.ask(app, Player.SEEK) { putExtra("position", position.toLong()) }
+
+    /** What plays now, and how far it is (Player.state). */
+    @JavascriptInterface
+    fun player(): String = Player.state().toString()
+
+    // the songs being copied, and how each copy ended, by "phone:<id>" or "computer:<id>": "copying", "done" or "failed"
+    private val copies = ConcurrentHashMap<String, String>()
+
+    @JavascriptInterface
+    fun copies(): String = JSONObject(copies.toMap()).toString()
+
+    /** Copies a song of the computer onto this phone, into Music/Regista: from then on it plays away from home too. */
+    @JavascriptInterface
+    fun copyHere(id: String, name: String) {
+        val computer = app.reached ?: return
+        val key = "computer:$id"
+        if (copies.put(key, "copying") == "copying") return
+        thread(name = "copy song") {
+            copies[key] = try {
+                if (computer.fetch("/phone/music/${Uri.encode(id)}") { stream, fingerprint -> songs.keep(name, stream, fingerprint) }) "done" else "failed"
+            } catch (unreachable: IOException) {
+                "failed"
+            }
+        }
+    }
+
+    /** Sends a song of this phone to the computer, into "Dal telefono" in its music folder. The phone keeps its own. */
+    @JavascriptInterface
+    fun copyThere(id: String) {
+        val computer = app.reached ?: return
+        val key = "phone:$id"
+        if (copies.put(key, "copying") == "copying") return
+        thread(name = "send song") {
+            copies[key] = try {
+                val song = songs.described(id.toLong()) ?: throw IOException("the song is gone")
+                computer.send("/phone/music/received?name=${Uri.encode(song.name)}", song.size, songs.open(id.toLong()), song.fingerprint)
+                "done"
+            } catch (unreachable: IOException) {
+                "failed"
+            } catch (wrong: NumberFormatException) {
+                "failed"
+            }
+        }
+    }
 
     @JavascriptInterface
     fun pictures(): String = library.json()
