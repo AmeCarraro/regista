@@ -13,6 +13,7 @@ import android.net.http.SslError
 import android.os.Build
 import android.os.Bundle
 import android.os.CancellationSignal
+import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.view.View
 import android.webkit.CookieManager
@@ -245,6 +246,29 @@ class MainActivity : Activity() {
     /** The user wants to see the songs of this phone: Android asks once. */
     fun askForSongs() {
         if (!songs.allowed) requestPermissions(arrayOf(songs.permission), SONGS)
+    }
+
+    /**
+     * The user wants songs that are elsewhere on the phone, as the ones received on WhatsApp: Android's
+     * own window lets them choose, opened where WhatsApp keeps them when it can. The app sees only
+     * the files chosen there.
+     */
+    fun addSongs() {
+        val choose = Intent(Intent.ACTION_OPEN_DOCUMENT)
+            .addCategory(Intent.CATEGORY_OPENABLE)
+            .setType("*/*")
+            .putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("audio/*", "application/ogg"))
+            .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+        if (Build.VERSION.SDK_INT >= 26) {
+            // since Android 11 WhatsApp keeps its files in Android/media; a folder that is not there is left for the usual one
+            val folder = if (Build.VERSION.SDK_INT >= 30) "Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Audio" else "WhatsApp/Media/WhatsApp Audio"
+            choose.putExtra(DocumentsContract.EXTRA_INITIAL_URI, DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:$folder"))
+        }
+        try {
+            startActivityForResult(choose, ADD_SONGS)
+        } catch (missing: ActivityNotFoundException) {
+            say("Questo telefono non ha la finestra per scegliere i file: metti le canzoni nella cartella Music.")
+        }
     }
 
     /** Pictures were put in line for the computer on the phone's page: they go as soon as it answers. */
@@ -505,6 +529,12 @@ class MainActivity : Activity() {
     /** The user answered Android's question. The computer is told which pictures left, or that none did. */
     override fun onActivityResult(request: Int, result: Int, data: Intent?) {
         super.onActivityResult(request, result, data)
+        if (request == ADD_SONGS) {
+            if (result != RESULT_OK || data == null) return
+            val chosen = data.clipData?.let { clip -> (0 until clip.itemCount).map { clip.getItemAt(it).uri } } ?: listOfNotNull(data.data)
+            songs.add(chosen)
+            return
+        }
         if (request == UNLOCK) {
             if (result == RESULT_OK) unlocked() else say(CLOSED)
             return
@@ -540,6 +570,8 @@ class MainActivity : Activity() {
         const val COMPUTER = "computer"
         // the question about the songs, to tell its answer from the one about the pictures
         const val SONGS = 4
+        // Android's window where the user chooses songs to add
+        const val ADD_SONGS = 5
         // the tab the app is opened on, when it is not the first one
         const val TAB = "app.regista.TAB"
 

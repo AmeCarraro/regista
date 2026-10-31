@@ -52,6 +52,14 @@ class Phone(
     @JavascriptInterface
     fun allowSongs() = app.runOnUiThread { app.askForSongs() }
 
+    /** Opens Android's window to choose songs elsewhere on the phone, WhatsApp's say: the chosen ones are copied into Music/Regista. */
+    @JavascriptInterface
+    fun addSongs() = app.runOnUiThread { app.addSongs() }
+
+    /** How the songs chosen last are being added (Songs.adding). */
+    @JavascriptInterface
+    fun added(): String = songs.adding()
+
     /** The songs of the computer, while it answers: {"reachable", "songs"}, asked of it again every half minute. */
     @JavascriptInterface
     fun computerSongs(): String {

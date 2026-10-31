@@ -104,6 +104,12 @@ export const Cross = (props: Props) => (
   </Icon>
 )
 
+export const Plus = (props: Props) => (
+  <Icon {...props}>
+    <path d="M12 5v14M5 12h14" />
+  </Icon>
+)
+
 export const Arrow = (props: Props) => (
   <Icon {...props}>
     <path d="M5 12h14M13 6l6 6-6 6" />

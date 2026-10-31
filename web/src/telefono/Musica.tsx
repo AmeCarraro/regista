@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { clock, matching } from '../clock.ts'
 import * as icons from '../icons.tsx'
+import { addedInWords } from './added.ts'
 import { connect } from './bridge.ts'
 import type { Playing, Song } from './bridge.ts'
 
 /**
  * The songs of this phone and, at home, of the computer: played by the app, also with the screen
  * off and the app closed, with the controls on the lock screen. No computer is needed for the phone's own.
+ * Songs elsewhere on the phone, as the ones received on WhatsApp, are added by copying them into its music.
  */
 export default function Musica({ visible }: { visible: boolean }) {
   const app = useMemo(() => connect(), [])
@@ -19,8 +21,11 @@ export default function Musica({ visible }: { visible: boolean }) {
   const [scrub, setScrub] = useState<number | null>(null)
   const [link, setLink] = useState(() => app.state())
   const [copies, setCopies] = useState(() => app.copies())
+  const [adding, setAdding] = useState(() => app.added())
   // how many songs of the computer have arrived here: at each new one the phone's list is read again
   const arrived = useRef(0)
+  // how the adding of songs went, as last told: at each change the phone's list is read again too
+  const told = useRef('')
 
   useEffect(() => {
     if (!visible) return
@@ -41,6 +46,14 @@ export default function Musica({ visible }: { visible: boolean }) {
         setTimeout(() => setMine(app.songs()), 3000)
       }
       setCopies(copied)
+      const now = app.added()
+      const said = JSON.stringify(now)
+      if (said !== told.current) {
+        told.current = said
+        setAdding(now)
+        setMine(app.songs())
+        setTimeout(() => setMine(app.songs()), 3000)
+      }
     }, 1000)
     return () => {
       clearTimeout(shownNow)
@@ -105,6 +118,16 @@ export default function Musica({ visible }: { visible: boolean }) {
         />
       </form>
 
+      {where === 'phone' && mine.allowed && (
+        <div className="adding">
+          <button type="button" className="add" disabled={adding.busy} onClick={() => app.addSongs()}>
+            <icons.Plus />
+            Aggiungi canzoni
+          </button>
+          <small>{addedInWords(adding)}</small>
+        </div>
+      )}
+
       {where === 'phone' && !mine.allowed && (
         <section className="card">
           <b>Le canzoni di questo telefono</b>
@@ -115,7 +138,7 @@ export default function Musica({ visible }: { visible: boolean }) {
         </section>
       )}
       {where === 'phone' && mine.allowed && mine.songs.length === 0 && (
-        <p className="fine">Su questo telefono non trovo canzoni. Mettile nella cartella Music, oppure, a casa, ascolta quelle del computer.</p>
+        <p className="fine">Su questo telefono non trovo canzoni. Aggiungile con il tasto qui sopra, anche quelle arrivate su WhatsApp, oppure, a casa, ascolta quelle del computer.</p>
       )}
       {where === 'computer' && !theirs.reachable && (
         <p className="fine">Il computer non risponde: le sue canzoni si ascoltano a casa, con Regista aperto sul computer.</p>

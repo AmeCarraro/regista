@@ -45,6 +45,9 @@ export type Queued = { where: 'phone' | 'computer'; id: string; title: string; a
 /** What plays now: the song, where it is in its line, whether it plays or is being prepared, how far it is (milliseconds), and why not. */
 export type Playing = { song: Queued | null; index: number; count: number; playing: boolean; loading: boolean; position: number; duration: number; problem: string }
 
+/** The songs chosen last elsewhere on the phone: how many, and how many were added, were there already, or could not be copied. */
+export type Adding = { busy: boolean; total: number; done: number; skipped: number; failed: number }
+
 export type App = {
   pictures(): Picture[]
   reading(): Reading
@@ -88,6 +91,10 @@ export type App = {
   songs(): { allowed: boolean; songs: Song[] }
   /** Asks Android to let the app see the songs. */
   allowSongs(): void
+  /** Opens Android's window to choose songs elsewhere on the phone (WhatsApp's too): the app copies them into Music/Regista. */
+  addSongs(): void
+  /** How the songs chosen last are being added. */
+  added(): Adding
   /** The songs of the computer while it answers; null until it listed them. */
   computerSongs(): { reachable: boolean; songs: Song[] | null }
   /** Plays a line of songs from the one at `index`: also with the screen off. */
@@ -124,6 +131,8 @@ type Native = {
   takeUpdate(): void
   songs(): string
   allowSongs(): void
+  addSongs(): void
+  added(): string
   computerSongs(): string
   play(queue: string, index: number): void
   control(what: string): void
@@ -206,6 +215,8 @@ function open(): App {
     takeUpdate: () => native.takeUpdate(),
     songs: () => parse(native.songs()),
     allowSongs: () => native.allowSongs(),
+    addSongs: () => native.addSongs(),
+    added: () => parse<Adding>(native.added()),
     computerSongs: () => parse(native.computerSongs()),
     play: (queue, index) => native.play(JSON.stringify(queue), index),
     control: (what) => native.control(what),
@@ -283,6 +294,8 @@ const SONGS: Song[] = [
 
 function pretend(): App {
   const copying = { on: false, at: Date.UTC(2026, 9, 17, 13, 42), count: 3 }
+  let songs = SONGS
+  let adding: Adding = { busy: false, total: 0, done: 0, skipped: 0, failed: 0 }
   // what the pretend player plays: the time goes on by itself
   let playing: Playing = { song: null, index: 0, count: 0, playing: false, loading: false, position: 0, duration: 0, problem: '' }
   let line: Queued[] = []
@@ -317,8 +330,17 @@ function pretend(): App {
     },
     update: () => ({ newer: false, taking: false, got: 0, size: 0 }),
     takeUpdate: () => {},
-    songs: () => ({ allowed: true, songs: SONGS }),
+    songs: () => ({ allowed: true, songs }),
     allowSongs: () => {},
+    // two songs chosen: one is copied, the other was there already
+    addSongs: () => {
+      adding = { busy: true, total: 2, done: 0, skipped: 0, failed: 0 }
+      setTimeout(() => {
+        adding = { busy: false, total: 2, done: 1, skipped: 1, failed: 0 }
+        songs = [...songs, { id: '4', title: 'Arrivata su WhatsApp', artist: '', album: '', duration: 160_000 }]
+      }, 1500)
+    },
+    added: () => adding,
     computerSongs: () => ({ reachable: false, songs: null }),
     play: (queue, index) => {
       playing = { ...playing, song: queue[index] ?? null, index, count: queue.length, playing: true, position: 0, duration: 200_000 }

@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.Environment
 import android.provider.BaseColumns
 import android.provider.MediaStore
+import android.provider.OpenableColumns
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -18,6 +19,7 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.security.MessageDigest
+import kotlin.concurrent.thread
 
 /**
  * The songs on this phone, as Android lists them: music only, not ringtones, alarms or voice notes.
@@ -75,17 +77,77 @@ class Songs(private val context: Context) {
     /** The bytes of a song of this phone. */
     fun open(id: Long): InputStream = context.contentResolver.openInputStream(uri(id)) ?: throw IOException("the song is gone")
 
+    /** The songs chosen last in Android's window: how many, and how many were added, were there already, or could not be copied. */
+    private data class Adding(val busy: Boolean = false, val total: Int = 0, val done: Int = 0, val skipped: Int = 0, val failed: Int = 0)
+
+    @Volatile private var adding = Adding()
+
+    /** How the songs chosen last are being added, for the page: {"busy", "total", "done", "skipped", "failed"}. */
+    fun adding(): String = adding.let {
+        JSONObject().put("busy", it.busy).put("total", it.total).put("done", it.done).put("skipped", it.skipped).put("failed", it.failed).toString()
+    }
+
     /**
-     * Keeps a song that arrives from the computer, in Music/Regista: a song of this phone from now
-     * on. Android keeps it hidden until all of it is there and it is what the computer said it is;
-     * if it is not, it is not kept. Says whether it was.
+     * Copies songs chosen in Android's window into Music/Regista, where they are songs of this phone
+     * like the others: the ones WhatsApp keeps, say, which Android does not count as music. A song
+     * already among them (the same name and size) is left, and the chosen files stay where they are.
      */
-    fun keep(name: String, source: InputStream, expected: String): Boolean {
-        val safe = name.replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), " ").trim().ifEmpty { "canzone.mp3" }
-        if (Build.VERSION.SDK_INT < 29) return keepBefore10(safe, source, expected)
+    fun add(chosen: List<Uri>) {
+        if (chosen.isEmpty() || adding.busy) return
+        adding = Adding(busy = true, total = chosen.size)
+        thread(name = "add songs") {
+            for (uri in chosen) {
+                val before = adding
+                adding = try {
+                    if (addOne(uri)) before.copy(done = before.done + 1) else before.copy(skipped = before.skipped + 1)
+                } catch (problem: IOException) {
+                    before.copy(failed = before.failed + 1)
+                } catch (refused: SecurityException) {
+                    before.copy(failed = before.failed + 1)
+                }
+            }
+            adding = adding.copy(busy = false)
+        }
+    }
+
+    /** Copies one song chosen in Android's window: true when it was copied, false when it was there already. */
+    private fun addOne(uri: Uri): Boolean {
+        val resolver = context.contentResolver
+        val (name, size) = resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { rows ->
+            if (rows.moveToFirst()) rows.getString(0).orEmpty() to (if (rows.isNull(1)) -1L else rows.getLong(1)) else null
+        } ?: throw IOException("the file is gone")
+        val safe = safeName(name)
+        if (have(safe, size)) return false
+        // the kind the file says it is, when it says an audio one: Android names the copy after it
+        val kind = resolver.getType(uri)?.takeIf { it.startsWith("audio/") }
+        val copied = resolver.openInputStream(uri)?.use { source -> keep(safe, source, null, kind) } ?: throw IOException("the file cannot be read")
+        if (!copied) throw IOException("not copied")
+        return true
+    }
+
+    /** Whether a song of this name and size is among the songs already. */
+    private fun have(name: String, size: Long): Boolean {
+        if (size < 0 || !allowed) return false
+        val asked = "${MediaStore.MediaColumns.DISPLAY_NAME} = ? AND ${MediaStore.MediaColumns.SIZE} = ? AND ${MediaStore.Audio.AudioColumns.IS_MUSIC} != 0"
+        return context.contentResolver.query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, arrayOf(BaseColumns._ID), asked, arrayOf(name, size.toString()), null)?.use { it.count > 0 } == true
+    }
+
+    // a name Android takes for a file: none of the signs a file name cannot have
+    private fun safeName(name: String) = name.replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), " ").trim().ifEmpty { "canzone.mp3" }
+
+    /**
+     * Keeps a song in Music/Regista: a song of this phone from now on. It comes from the computer,
+     * which says what it is (its SHA-256, `expected`), or from elsewhere on the phone (`expected` null).
+     * Android keeps it hidden until all of it is there and, from the computer, it is what the computer
+     * said it is; if it is not, it is not kept. Says whether it was.
+     */
+    fun keep(name: String, source: InputStream, expected: String?, kind: String? = null): Boolean {
+        val safe = safeName(name)
+        val type = kind ?: kindOf(safe)
+        if (Build.VERSION.SDK_INT < 29) return keepBefore10(safe, source, expected, type)
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, safe)
-            put(MediaStore.MediaColumns.MIME_TYPE, kindOf(safe))
+            put(MediaStore.MediaColumns.MIME_TYPE, type)
             put(MediaStore.MediaColumns.RELATIVE_PATH, "${Environment.DIRECTORY_MUSIC}/Regista")
             put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
@@ -93,7 +155,8 @@ class Songs(private val context: Context) {
         val made = resolver.insert(MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), values) ?: return false
         try {
             val out = resolver.openOutputStream(made) ?: throw IOException("no place to write")
-            if (!written(source, out).equals(expected, ignoreCase = true)) throw IOException("not what the computer sent")
+            val arrived = written(source, out)
+            if (expected != null && !arrived.equals(expected, ignoreCase = true)) throw IOException("not what the computer sent")
             resolver.update(made, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
             return true
         } catch (problem: IOException) {
@@ -105,7 +168,7 @@ class Songs(private val context: Context) {
 
     /** Before Android 10 a song is a file in the folder of music, which Android is then told to look at. */
     @Suppress("DEPRECATION")
-    private fun keepBefore10(name: String, source: InputStream, expected: String): Boolean {
+    private fun keepBefore10(name: String, source: InputStream, expected: String?, kind: String): Boolean {
         val directory = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "Regista")
         if (!directory.isDirectory && !directory.mkdirs()) return false
         // never over a song that is there: "Volare (2).mp3"
@@ -118,11 +181,11 @@ class Songs(private val context: Context) {
         } catch (problem: IOException) {
             null
         }
-        if (arrived == null || !arrived.equals(expected, ignoreCase = true) || !partial.renameTo(target)) {
+        if (arrived == null || (expected != null && !arrived.equals(expected, ignoreCase = true)) || !partial.renameTo(target)) {
             partial.delete()
             return false
         }
-        MediaScannerConnection.scanFile(context, arrayOf(target.path), arrayOf(kindOf(target.name)), null)
+        MediaScannerConnection.scanFile(context, arrayOf(target.path), arrayOf(kind), null)
         return true
     }
 
@@ -151,6 +214,7 @@ class Songs(private val context: Context) {
         "flac" -> "audio/flac"
         "ogg", "oga", "opus" -> "audio/ogg"
         "wav" -> "audio/x-wav"
+        "amr" -> "audio/amr"
         else -> "audio/mpeg"
     }
 
