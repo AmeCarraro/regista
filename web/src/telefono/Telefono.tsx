@@ -17,6 +17,25 @@ function today(): Day {
 }
 
 const count = (number: number) => (number === 1 ? '1 foto' : `${number} foto`)
+
+// what this phone's page remembers for itself: that the settings of a Xiaomi were done
+const XIAOMI_DONE = 'regista-xiaomi-done'
+
+function remembered(key: string): boolean {
+  try {
+    return localStorage.getItem(key) === '1'
+  } catch {
+    return false
+  }
+}
+
+function remember(key: string) {
+  try {
+    localStorage.setItem(key, '1')
+  } catch {
+    // with nothing kept, the card comes back next time: no harm
+  }
+}
 const megabytes = (bytes: number) => Math.round(bytes / 1_000_000)
 
 function linked(state: State): string {
@@ -40,6 +59,9 @@ export default function Telefono() {
   // the pictures by kind, and the kind shown in place of all of them; nothing is moved
   const [kinds, setKinds] = useState(() => app.kinds())
   const [kind, setKind] = useState<string | null>(null)
+  // a Xiaomi stops the apps that are closed: the copying by themselves needs two settings, said once until done
+  const xiaomi = useMemo(() => /xiaomi|redmi|poco/.test(app.maker()), [app])
+  const [xiaomiDone, setXiaomiDone] = useState(() => remembered(XIAOMI_DONE))
   const [request, setRequest] = useState('')
   // the request the pictures on screen are the answer to
   const [asked, setAsked] = useState('')
@@ -272,6 +294,29 @@ export default function Telefono() {
             }}
           >
             {copying.on ? 'Spegni' : 'Attiva'}
+          </button>
+        </section>
+      )}
+
+      {!asked && !kind && state.paired && copying.on && xiaomi && !xiaomiDone && (
+        <section className="card">
+          <b>Un'impostazione per i telefoni Xiaomi</b>
+          <p>
+            Xiaomi ferma le app chiuse. Perché le foto nuove vadano sul computer anche con l'app chiusa, nelle impostazioni di Regista metti
+            «Risparmio batteria» su «Nessuna restrizione» e accendi «Avvio automatico».
+          </p>
+          <button type="button" className="go wide" onClick={() => app.openSettings()}>
+            Apri le impostazioni di Regista
+          </button>
+          <button
+            type="button"
+            className="quiet"
+            onClick={() => {
+              remember(XIAOMI_DONE)
+              setXiaomiDone(true)
+            }}
+          >
+            Fatto
           </button>
         </section>
       )}

@@ -233,6 +233,15 @@ class MainActivity : Activity() {
         link?.refresh()
     }
 
+    /** This app's page in the phone's settings: the user changes there what the phone lets it do. */
+    fun openSettings() {
+        try {
+            startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null)))
+        } catch (missing: ActivityNotFoundException) {
+            say("Apri tu le impostazioni del telefono, alla voce delle app, e cerca Regista.")
+        }
+    }
+
     /** The user wants to see the songs of this phone: Android asks once. */
     fun askForSongs() {
         if (!songs.allowed) requestPermissions(arrayOf(songs.permission), SONGS)

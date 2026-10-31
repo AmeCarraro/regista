@@ -97,6 +97,14 @@ class Phone(
     @JavascriptInterface
     fun tab(): String = app.tab
 
+    /** Who made this phone, in small letters ("xiaomi"): some makers stop the apps that are closed, unless the user lets them be. */
+    @JavascriptInterface
+    fun maker(): String = Build.MANUFACTURER.lowercase()
+
+    /** Opens this app's page in the phone's settings, where the user allows the battery and the starting by itself. */
+    @JavascriptInterface
+    fun openSettings() = app.runOnUiThread { app.openSettings() }
+
     /** Whether Android can put the music widget on the home screen when asked: from Android 8, and if the home screen lets it. */
     @JavascriptInterface
     fun canPinWidget(): Boolean =

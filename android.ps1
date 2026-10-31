@@ -2,6 +2,7 @@
 # Usage: .\android.ps1 build       makes the app, one file per kind of phone, in android\app\build\outputs\apk\release:
 #                                  app-arm64-v8a-release.apk for almost every phone, app-armeabi-v7a-release.apk for old 32-bit ones
 #        .\android.ps1 phone       starts a pretend phone (an Android 15 emulator, no window) and waits until it is on
+#        .\android.ps1 phone 13    the same with Android 13, the Android of the phone the app is mostly used on
 #        .\android.ps1 install     puts the app on the pretend phone
 #        .\android.ps1 pictures D:\some\folder   copies the pictures of a folder into the pretend phone's gallery
 #        .\android.ps1 pair "regista://pair?..."   opens the app on the pretend phone with a pairing link
@@ -43,7 +44,8 @@ switch ($What) {
     }
     'phone' {
         docker rm -f regista-phone 2>$null | Out-Null
-        $start = 'python3 /work/tools/forward.py 8443 host.docker.internal 8443 & exec emulator -avd regista -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -no-metrics -memory 2048'
+        $avd = if ($More -and $More[0] -eq '13') { 'regista13' } else { 'regista' }
+        $start = "python3 /work/tools/forward.py 8443 host.docker.internal 8443 & exec emulator -avd $avd -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -no-metrics -memory 2048"
         docker run -d --name regista-phone --device /dev/kvm -v "${project}:/work" regista-android sh -c $start | Out-Null
         if ($LASTEXITCODE -ne 0) { Stop-Run 'starting the pretend phone' }
         foreach ($attempt in 1..90) {

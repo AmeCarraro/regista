@@ -76,6 +76,10 @@ export type App = {
   tab(): string
   /** The pictures by kind; null until the computer said once what the kinds are. The same object while nothing changed. */
   kinds(): Sorted | null
+  /** Who made the phone, in small letters: "xiaomi" for a Redmi too. */
+  maker(): string
+  /** Opens the app's page in the phone's settings. */
+  openSettings(): void
   /** Whether Android can put the music widget on the home screen when asked (from Android 8). */
   canPinWidget(): boolean
   /** Asks Android to put the music widget on the home screen: Android asks the user first. */
@@ -130,6 +134,8 @@ type Native = {
   copyThere(id: string): void
   tab(): string
   kinds(): string
+  maker(): string
+  openSettings(): void
   canPinWidget(): boolean
   pinWidget(): void
 }
@@ -209,6 +215,8 @@ function open(): App {
     copyHere: (id, name) => native.copyHere(id, name),
     copyThere: (id) => native.copyThere(id),
     tab: () => native.tab(),
+    maker: () => native.maker(),
+    openSettings: () => native.openSettings(),
     canPinWidget: () => native.canPinWidget(),
     pinWidget: () => native.pinWidget(),
     kinds: () => {
@@ -333,6 +341,8 @@ function pretend(): App {
     copyThere: () => {},
     tab: () => (location.hash === '#musica' ? 'music' : 'phone'),
     kinds: () => KINDS,
+    maker: () => 'xiaomi',
+    openSettings: () => {},
     canPinWidget: () => true,
     pinWidget: () => {},
     thumb: (id) => {

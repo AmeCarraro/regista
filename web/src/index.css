@@ -182,6 +182,13 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
+/* on a phone a long press on a button is a press, not the start of a selection of its words */
+button {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 .grad {
   background: linear-gradient(100deg, var(--coral), var(--rose), var(--violet), var(--coral));
   background-size: 300% 100%;
