@@ -15,6 +15,7 @@ from commands_data import examples
 
 INTENTS = ("search_photos", "add_tag", "remove_tag", "play_song", "clarify")
 LABELS = ("O", "tag", "title", "artist")
+EDITS = ("add_tag", "remove_tag")
 WORDS = re.compile(r"\w+|[^\w\s]")
 LIMIT = 64
 
@@ -132,23 +133,30 @@ def read_slots(model, scores, choices):
     return sequences
 
 
+def guarded_answer(text, words, intent, labels, confidence, edit_confidence):
+    if intent in EDITS and confidence < edit_confidence:
+        intent = "clarify"
+    return decode(text, words, intent, labels)
+
+
 @torch.inference_mode()
-def evaluate(model, data, rows, device):
+def evaluate(model, data, rows, device, edit_confidence=0):
     model.eval()
     intents, exact, wrong_edits, unexpected_actions = 0, 0, 0, 0
     per_intent = {intent: {"exact": 0, "total": 0} for intent in INTENTS}
     offset = 0
     for tokens, _, _ in DataLoader(data, batch_size=128):
         predicted, labels = model(tokens.to(device))
-        choices = predicted.argmax(1).tolist()
-        for choice, tags in zip(choices, read_slots(model, labels, choices)):
+        confidence, choice_ids = predicted.softmax(1).max(1)
+        choices = choice_ids.tolist()
+        for choice, tags, certainty in zip(choices, read_slots(model, labels, choices), confidence.tolist()):
             text, intent, spans = rows[offset]
             words = list(WORDS.finditer(text))
-            answer = decode(text, words, INTENTS[choice], tags)
+            answer = guarded_answer(text, words, INTENTS[choice], tags, certainty, edit_confidence)
             expected = {slot: text[start:end] for slot, start, end in spans}
             correct = answer == {"intent": intent, "slots": expected}
             exact += correct
-            wrong_edits += not correct and answer["intent"] in ("add_tag", "remove_tag")
+            wrong_edits += not correct and answer["intent"] in EDITS
             unexpected_actions += intent == "clarify" and answer["intent"] != "clarify"
             intents += INTENTS[choice] == intent
             per_intent[intent]["exact"] += correct
@@ -217,8 +225,10 @@ def ask(args):
         tokens, words = encode(text, vocabulary)
         if tokens:
             intent, slots = model(torch.tensor([tokens]))
-            choice = intent.argmax().item()
-            answer = decode(text, words, INTENTS[choice], read_slots(model, slots, [choice])[0])
+            confidence, choice_id = intent.softmax(1).max(1)
+            choice = choice_id.item()
+            answer = guarded_answer(text, words, INTENTS[choice], read_slots(model, slots, [choice])[0],
+                                    confidence.item(), args.edit_confidence)
         else:
             answer = {"intent": "clarify", "slots": {}}
         print(json.dumps({"text": text, **answer}, ensure_ascii=False))
@@ -245,9 +255,28 @@ def benchmark(args):
         if text.casefold() in training_texts:
             raise ValueError(f"Benchmark overlaps with training: {text!r}")
     model, vocabulary = load(args.out)
-    results = evaluate(model, dataset(rows, vocabulary), rows, "cpu")
+    results = evaluate(model, dataset(rows, vocabulary), rows, "cpu", args.edit_confidence)
+    results["edit_confidence"] = args.edit_confidence
     (args.out / f"{args.suite}-metrics.json").write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(results, indent=2))
+
+
+def calibrate(args):
+    torch.set_num_threads(2)
+    model, vocabulary = load(args.out)
+    rows = examples("validation")
+    data = dataset(rows, vocabulary)
+    trials = []
+    for threshold in (0, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.98):
+        result = evaluate(model, data, rows, "cpu", threshold)
+        edits = sum(result["by_intent"][intent]["exact"] for intent in EDITS)
+        trials.append({"threshold": threshold, "correct_edits": edits, **result})
+    # Keep at least 90% of the correct edit proposals on validation.
+    eligible = [trial for trial in trials if trial["correct_edits"] * 10 >= trials[0]["correct_edits"] * 9]
+    chosen = min(eligible, key=lambda trial: (trial["incorrect_tag_edits"], -trial["exact_command"], trial["threshold"]))
+    report = {"threshold": chosen["threshold"], "validation": trials}
+    (args.out / "edit-calibration.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps({"without_guard": trials[0], "chosen": chosen}, indent=2))
 
 
 if __name__ == "__main__":
@@ -265,7 +294,13 @@ if __name__ == "__main__":
     trying.add_argument("text", nargs="+")
     measuring = commands.add_parser("benchmark", help="Evaluate on independent handwritten requests")
     measuring.add_argument("--suite", choices=("manual", "fresh"), default="manual")
+    for command in (trying, measuring):
+        command.add_argument("--edit-confidence", type=float, default=0,
+                             help="Ask for clarification below this intent score on tag edits")
+    commands.add_parser("calibrate", help="Choose a tag edit threshold on synthetic validation only")
     args = parser.parse_args()
+    if not 0 <= getattr(args, "edit_confidence", 0) <= 1:
+        parser.error("--edit-confidence must be between 0 and 1")
     if args.command == "train":
         if args.epochs < 1:
             parser.error("--epochs must be positive")
@@ -274,5 +309,7 @@ if __name__ == "__main__":
         train(args)
     elif args.command == "ask":
         ask(args)
-    else:
+    elif args.command == "benchmark":
         benchmark(args)
+    else:
+        calibrate(args)

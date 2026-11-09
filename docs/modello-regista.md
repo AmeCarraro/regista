@@ -85,3 +85,14 @@ Stessi 8.154 esempi, seed 42 e 20 epoche sulla RTX 3050 Ti. La prova con confini
 .venv/Scripts/python.exe training/commands.py --out build/commands-boundaries train --boundaries
 .venv/Scripts/python.exe training/commands.py --out build/commands-boundaries benchmark --suite fresh
 ```
+
+### Quando chiedere un chiarimento prima di modificare i tag
+
+`calibrate` sceglie una soglia sul punteggio dell'azione usando solo la validazione sintetica. Cerca di ridurre le proposte di modifica errate mantenendo almeno il 90% di quelle corrette. `ask` e `benchmark` accettano `--edit-confidence` per provare la soglia. Il valore predefinito è zero.
+
+Per il checkpoint `commands-v2`, la soglia scelta è 0,8. Nella validazione le modifiche errate scendono da 59 a 48 e quelle corrette da 50 a 48. Nel nuovo test scritto a mano le modifiche errate scendono da 9 a 7, mentre i comandi completi scendono da 20 a 19 su 49. Le azioni proposte dove serviva un chiarimento restano quattro. Il punteggio aiuta a filtrare qualche errore, ma non basta per decidere se applicare una modifica.
+
+```powershell
+.venv/Scripts/python.exe training/commands.py --out build/commands-v2 calibrate
+.venv/Scripts/python.exe training/commands.py --out build/commands-v2 benchmark --suite fresh --edit-confidence 0.8
+```
