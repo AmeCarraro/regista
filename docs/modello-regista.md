@@ -37,3 +37,15 @@ Il modello usa un piccolo insieme di convoluzioni sul testo e due uscite, una pe
 | Dimensione del checkpoint | 185.743 byte | 208.079 byte |
 
 La nuova versione, con 49.017 parametri, riconosce «mostrami le foto dei cani» e risponde con una richiesta di chiarimento in tutte le 10 richieste incomplete, negate o fuori ambito del benchmark. Una correzione in fase di estrazione separa «Imagine» da «John Lennon» e porta i comandi musicali esatti da 4 a 5 su 10 nel benchmark scritto a mano. Le misure includono questa correzione, provata con lo stesso checkpoint. La qualità resta da migliorare prima di collegare il modello alle operazioni dell'app.
+
+### Quanto testo nascondere durante l'addestramento
+
+`train --slot-dropout` regola la probabilità di nascondere ciascuna parola di un tag, titolo o artista durante l'addestramento. Abbiamo confrontato tre valori a parità di dati, seed 42 e 20 epoche, scegliendo per ciascuna prova il checkpoint con più comandi esatti in validazione.
+
+| Probabilità | Validazione sintetica | Test sintetico | Test scritto a mano | Proposte di modifica tag errate nel test scritto a mano |
+| --- | ---: | ---: | ---: | ---: |
+| 0,35 | 152/294 | 187/383 | 26/48 | 7 |
+| 0,55 (predefinita) | 138/294 | 176/383 | 28/48 | 7 |
+| 0,80 | 153/294 | 179/383 | 25/48 | 9 |
+
+Per la demo teniamo il checkpoint con 0,55, che ha completato più richieste scritte a mano in questo confronto. Per riprodurre le alternative basta usare `--slot-dropout 0.35` o `--slot-dropout 0.8` e scegliere una cartella di output separata.

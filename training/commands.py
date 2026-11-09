@@ -137,7 +137,7 @@ def train(args):
         for tokens, intent, tags in batches:
             tokens, intent, tags = (value.to(args.device) for value in (tokens, intent, tags))
             # Replace some words with UNK so the model learns to extract names it has never seen.
-            probability = torch.where(tags.gt(0), 0.55, 0.08)
+            probability = torch.where(tags.gt(0), args.slot_dropout, 0.08)
             dropped = torch.rand(tokens.shape, device=args.device).lt(probability) & tokens.ne(0)
             choices, labels = model(tokens.masked_fill(dropped, 1))
             loss = F.cross_entropy(choices, intent) + F.cross_entropy(labels.transpose(1, 2), tags, weight=weights)
@@ -155,7 +155,8 @@ def train(args):
     checkpoint = args.out / "commands.pt"
     torch.save({"state": best, "vocabulary": vocabulary}, checkpoint)
     report = {"device": args.device, "hardware": hardware, "torch": str(torch.__version__),
-              "seed": args.seed, "epochs": args.epochs, "best_epoch": best_epoch, "training_examples": len(training),
+              "seed": args.seed, "epochs": args.epochs, "best_epoch": best_epoch,
+              "slot_dropout": args.slot_dropout, "training_examples": len(training),
               "parameters": sum(value.numel() for value in model.parameters()), "checkpoint_bytes": checkpoint.stat().st_size,
               "validation": evaluate(model, validation_data, validation, args.device),
               "test": evaluate(model, test_data, test, args.device)}
@@ -203,6 +204,8 @@ if __name__ == "__main__":
     training.add_argument("--device", choices=("cpu", "cuda"), default="cuda")
     training.add_argument("--epochs", type=int, default=20)
     training.add_argument("--seed", type=int, default=42)
+    training.add_argument("--slot-dropout", type=float, default=0.55,
+                          help="Probability of hiding a slot word during training")
     trying = commands.add_parser("ask")
     trying.add_argument("text", nargs="+")
     commands.add_parser("benchmark", help="Evaluate on independent handwritten requests")
@@ -210,6 +213,8 @@ if __name__ == "__main__":
     if args.command == "train":
         if args.epochs < 1:
             parser.error("--epochs must be positive")
+        if not 0 <= args.slot_dropout <= 1:
+            parser.error("--slot-dropout must be between 0 and 1")
         train(args)
     elif args.command == "ask":
         ask(args)
