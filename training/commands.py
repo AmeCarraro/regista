@@ -80,6 +80,11 @@ def decode(text, words, intent, labels):
             first, last = indexes[0], indexes[-1]
             if len(indexes) != last - first + 1:
                 return {"intent": "clarify", "slots": {}}
+            # In «riproduci X di Y», the model can include the separator in X.
+            if (name == "title" and first < last and last + 1 < len(words)
+                    and labels[last + 1] == LABELS.index("artist")
+                    and words[last].group().casefold() in {"di", "del", "della", "dei", "degli", "delle"}):
+                last -= 1
             slots[name] = text[words[first].start():words[last].end()]
     if allowed[0] not in slots:
         return {"intent": "clarify", "slots": {}}

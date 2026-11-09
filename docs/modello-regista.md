@@ -31,9 +31,9 @@ Il modello usa un piccolo insieme di convoluzioni sul testo e due uscite, una pe
 | Misura | Versione precedente | Nuova versione |
 | --- | ---: | ---: |
 | Esempi sintetici di addestramento | 3.547 | 6.725 |
-| Comandi esatti nel test sintetico | 191/383 | 173/383 |
-| Comandi esatti nel benchmark scritto a mano | 17/48 | 27/48 |
+| Comandi esatti nel test sintetico | 191/383 | 176/383 |
+| Comandi esatti nel benchmark scritto a mano | 17/48 | 28/48 |
 | Proposte di modifica tag errate nel benchmark scritto a mano | 12 | 7 |
 | Dimensione del checkpoint | 185.743 byte | 208.079 byte |
 
-La nuova versione, con 49.017 parametri, riconosce «mostrami le foto dei cani» e risponde con una richiesta di chiarimento in tutte le 10 richieste incomplete, negate o fuori ambito del benchmark. Fatica ancora con titoli musicali, per esempio include «di» nel titolo di «riproduci Imagine di John Lennon». La qualità resta da migliorare prima di collegare il modello alle operazioni dell'app.
+La nuova versione, con 49.017 parametri, riconosce «mostrami le foto dei cani» e risponde con una richiesta di chiarimento in tutte le 10 richieste incomplete, negate o fuori ambito del benchmark. Una correzione in fase di estrazione separa «Imagine» da «John Lennon» e porta i comandi musicali esatti da 4 a 5 su 10 nel benchmark scritto a mano. Le misure includono questa correzione, provata con lo stesso checkpoint. La qualità resta da migliorare prima di collegare il modello alle operazioni dell'app.
