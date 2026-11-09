@@ -11,6 +11,7 @@ from torch.nn import functional as F
 from torch.utils.data import DataLoader, TensorDataset
 
 from commands_data import examples
+from commands_references import examples as reference_examples
 
 
 INTENTS = ("search_photos", "add_tag", "remove_tag", "play_song", "clarify")
@@ -173,6 +174,8 @@ def train(args):
     torch.manual_seed(args.seed)
     torch.set_num_threads(2)
     training, validation, test = (examples(split) for split in ("train", "validation", "test"))
+    if args.references:
+        training.extend(reference_examples())
     vocabulary = {word: i + 2 for i, word in enumerate(sorted({
         token.group().casefold() for text, _, _ in training for token in WORDS.finditer(text)
     }))}
@@ -210,7 +213,8 @@ def train(args):
     torch.save({"state": best, "vocabulary": vocabulary, "boundaries": args.boundaries}, checkpoint)
     report = {"device": args.device, "hardware": hardware, "torch": str(torch.__version__),
               "seed": args.seed, "epochs": args.epochs, "best_epoch": best_epoch,
-              "slot_dropout": args.slot_dropout, "boundaries": args.boundaries, "training_examples": len(training),
+              "slot_dropout": args.slot_dropout, "boundaries": args.boundaries, "references": args.references,
+              "training_examples": len(training),
               "parameters": sum(value.numel() for value in model.parameters()), "checkpoint_bytes": checkpoint.stat().st_size,
               "validation": evaluate(model, validation_data, validation, args.device),
               "test": evaluate(model, test_data, test, args.device)}
@@ -250,7 +254,7 @@ def benchmark(args):
 
     torch.set_num_threads(2)
     rows = written_examples()
-    training_texts = {text.casefold() for text, _, _ in examples("train")}
+    training_texts = {text.casefold() for text, _, _ in examples("train") + reference_examples()}
     for text, _, _ in rows:
         if text.casefold() in training_texts:
             raise ValueError(f"Benchmark overlaps with training: {text!r}")
@@ -290,6 +294,7 @@ if __name__ == "__main__":
     training.add_argument("--slot-dropout", type=float, default=0.55,
                           help="Probability of hiding a slot word during training")
     training.add_argument("--boundaries", action="store_true", help="Predict start and end positions for each slot")
+    training.add_argument("--references", action="store_true", help="Add paraphrases for photo search and music")
     trying = commands.add_parser("ask")
     trying.add_argument("text", nargs="+")
     measuring = commands.add_parser("benchmark", help="Evaluate on independent handwritten requests")

@@ -96,3 +96,24 @@ Per il checkpoint `commands-v2`, la soglia scelta è 0,8. Nella validazione le m
 .venv/Scripts/python.exe training/commands.py --out build/commands-v2 calibrate
 .venv/Scripts/python.exe training/commands.py --out build/commands-v2 benchmark --suite fresh --edit-confidence 0.8
 ```
+
+### Più modi di chiedere foto e musica
+
+`train --references` aggiunge 768 frasi con verbi, riferimenti alla galleria, titoli e artisti diversi. Il confronto usa la stessa rete per parola, il seed 42 e 20 epoche sulla RTX 3050 Ti. Il checkpoint selezionato in validazione è quello dell'epoca 16.
+
+| Misura | Corpus da 8.154 esempi | Corpus con 768 frasi in più |
+| --- | ---: | ---: |
+| Comandi esatti nel test sintetico | 206/383 | 172/383 |
+| Comandi musicali esatti nel test sintetico | 18/60 | 28/60 |
+| Comandi esatti nel primo test scritto a mano | 25/48 | 29/48 |
+| Comandi esatti nel nuovo test scritto a mano | 19/49 | 20/49 |
+| Comandi musicali esatti nel nuovo test scritto a mano | 1/10 | 4/10 |
+| Modifiche tag errate nel nuovo test scritto a mano | 8 | 6 |
+| Dimensione del checkpoint | 227.919 byte | 256.655 byte |
+
+Il vantaggio sulla musica convive con un calo su ricerca e modifiche ai tag nel test sintetico. La variante resta opzionale.
+
+```powershell
+.venv/Scripts/python.exe training/commands.py --out build/commands-references train --references
+.venv/Scripts/python.exe training/commands.py --out build/commands-references benchmark --suite fresh
+```
