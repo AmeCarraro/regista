@@ -94,7 +94,7 @@ def decode(text, words, intent, labels):
 @torch.inference_mode()
 def evaluate(model, data, rows, device):
     model.eval()
-    intents, exact, wrong_edits = 0, 0, 0
+    intents, exact, wrong_edits, unexpected_actions = 0, 0, 0, 0
     per_intent = {intent: {"exact": 0, "total": 0} for intent in INTENTS}
     offset = 0
     for tokens, _, _ in DataLoader(data, batch_size=128):
@@ -107,12 +107,14 @@ def evaluate(model, data, rows, device):
             correct = answer == {"intent": intent, "slots": expected}
             exact += correct
             wrong_edits += not correct and answer["intent"] in ("add_tag", "remove_tag")
+            unexpected_actions += intent == "clarify" and answer["intent"] != "clarify"
             intents += INTENTS[choice] == intent
             per_intent[intent]["exact"] += correct
             per_intent[intent]["total"] += 1
             offset += 1
     return {"examples": offset, "intent_accuracy": intents / offset, "exact_command": exact / offset,
-            "incorrect_tag_edits": wrong_edits, "by_intent": per_intent}
+            "incorrect_tag_edits": wrong_edits, "unexpected_actions": unexpected_actions,
+            "by_intent": per_intent}
 
 
 def train(args):
@@ -186,13 +188,20 @@ def load(out):
 
 
 def benchmark(args):
-    from commands_manual import examples as manual_examples
+    if args.suite == "fresh":
+        from commands_fresh import examples as written_examples
+    else:
+        from commands_manual import examples as written_examples
 
     torch.set_num_threads(2)
+    rows = written_examples()
+    training_texts = {text.casefold() for text, _, _ in examples("train")}
+    for text, _, _ in rows:
+        if text.casefold() in training_texts:
+            raise ValueError(f"Benchmark overlaps with training: {text!r}")
     model, vocabulary = load(args.out)
-    rows = manual_examples()
     results = evaluate(model, dataset(rows, vocabulary), rows, "cpu")
-    (args.out / "manual-metrics.json").write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
+    (args.out / f"{args.suite}-metrics.json").write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(results, indent=2))
 
 
@@ -208,7 +217,8 @@ if __name__ == "__main__":
                           help="Probability of hiding a slot word during training")
     trying = commands.add_parser("ask")
     trying.add_argument("text", nargs="+")
-    commands.add_parser("benchmark", help="Evaluate on independent handwritten requests")
+    measuring = commands.add_parser("benchmark", help="Evaluate on independent handwritten requests")
+    measuring.add_argument("--suite", choices=("manual", "fresh"), default="manual")
     args = parser.parse_args()
     if args.command == "train":
         if args.epochs < 1:

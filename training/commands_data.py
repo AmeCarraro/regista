@@ -260,6 +260,94 @@ def _phrasing(rng, template, values):
     return _fill(template, values, prefix, suffix)
 
 
+# These compound names contain words that can also occur outside the tag.
+SPOKEN_TAGS = (
+    "Val d'Ossola", "Colli Euganei", "Foce del Po", "Valle dei Templi", "Città di Castello",
+    "Sant'Agata de' Goti", "Parco dell'Etna", "Collina di Superga", "Golfo dei Poeti",
+    "Lago di Carezza", "Côte d'Azur", "Día de Muertos", "Pomeriggio a Sestri",
+    "Cartoline per Giulia", "Da mettere nel fotolibro", "Foto da inviare a Sara", "Fine di agosto",
+    "Da non pubblicare", "Da togliere dall'album", "Cose da vedere", "Selezione per il sito",
+    "Primo giorno al nido", "Ritratto di famiglia", "Neve sulle Dolomiti", "Cani al parco",
+    "Libri di scuola", "Foto di ieri sera", "Natale dai vicini", "Compleanno di Nico",
+    "Tramonti e barche", "Paesaggi d'inverno", "Gita sulla neve", "Fuori porta 2024",
+)
+
+SPOKEN_TEMPLATES = {
+    "search_photos": (
+        "mi fai rivedere quelle di {tag}?", "mi trovi per caso le foto di {tag}?",
+        "senti ma le foto con scritto {tag} dove sono?", "fammi vedere un attimo quelle col tag {tag}",
+        "avevo segnato delle foto come {tag}, me le mostri?", 'apri quelle che ho chiamato "{tag}"',
+    ),
+    "add_tag": (
+        "ok, queste qui chiamale {tag}", "quelle che ho preso adesso le puoi segnare come {tag}?",
+        "allora, alle foto qui davanti metti {tag}", "il nome che voglio dare a queste è {tag}",
+        "a queste qui va aggiunto il tag {tag}", 'sulle foto scelte scrivi "{tag}" come etichetta',
+    ),
+    "remove_tag": (
+        "queste qui non chiamarle più {tag}", "via il tag {tag} da queste foto qui",
+        "allora, da quelle che ho preso cancella l'etichetta {tag}",
+        "mi levi dalle foto che vedi l'etichetta {tag}?", "su queste qui puoi togliere {tag}?",
+        'stacca da tutte quelle selezionate il tag "{tag}"',
+    ),
+    "play_song": (
+        "ecco mi fai partire {title} che è di {artist}?", "mi andrebbe {title} di {artist}",
+        "senti fammi sentire {title} nella versione di {artist}",
+        "di {artist} metti quella che si chiama {title}", "allora ascoltiamo {title}",
+        'suonami "{title}" di {artist}', "metti per favore {title} cantata da {artist}",
+    ),
+}
+
+# Each pair shares the same tag but only the affirmative version is actionable.
+TAG_CONTRASTS = (
+    ("add_tag", "mettere {tag} su queste foto", "metti {tag} su queste foto"),
+    ("add_tag", "aggiungere il tag {tag} a quelle selezionate", "aggiungi il tag {tag} a quelle selezionate"),
+    ("remove_tag", "levare {tag} da tutte le foto qui", "leva {tag} da tutte le foto qui"),
+    ("remove_tag", "rimuovere il tag {tag} dalle foto scelte", "rimuovi il tag {tag} dalle foto scelte"),
+)
+
+SPOKEN_INCOMPLETE = (
+    "metti sulle foto il tag che ti dicevo", "a quelle che ho scelto dai lo stesso nome",
+    "segna tutte queste come prima", "alle ultime, aggiungici l'etichetta", "levagli quella cosa lì",
+    "togli lo stesso tag dalle foto che vedi", "no, aspetta a cambiare il tag",
+    "lascia i tag come stanno", "fammi vedere quelle dell'altra volta", "apri le foto di quel posto",
+    "riproduci quella che abbiamo sentito ieri", "senti metti un pezzo di quel gruppo",
+    "non riprodurre la musica per adesso", "non fare partire {title} di {artist}",
+    "aspetta, non farmi sentire {title}", "aspetta, non cercare le foto di {tag}",
+    "aggiungi il tag {tag}, anzi no lascia stare", "leva {tag} da queste foto, no aspetta",
+    "vorrei rimuovere {tag}, ti dico dopo da quali foto", "dai il tag {tag} alle foto che ti dirò dopo",
+)
+
+
+def _spoken_examples(songs):
+    rng = Random(72)
+    tags = [{"tag": tag} for tag in SPOKEN_TAGS]
+    rows = []
+
+    def add(intent, template, values):
+        text, slots = _phrasing(rng, template, values)
+        rows.append((text, intent, [] if intent == "clarify" else slots))
+
+    for intent, templates in SPOKEN_TEMPLATES.items():
+        for template in templates:
+            for values in songs if intent == "play_song" else tags:
+                add(intent, template, values)
+    for intent, infinitive, imperative in TAG_CONTRASTS:
+        for values in tags:
+            add(intent, imperative, values)
+            add("clarify", "non " + infinitive, values)
+    for template in SPOKEN_INCOMPLETE:
+        if "{title}" in template:
+            values_to_use = songs
+        elif "{tag}" in template:
+            values_to_use = tags
+        else:
+            values_to_use = [{}] * 4
+        for values in values_to_use:
+            add("clarify", template, values)
+    rng.shuffle(rows)
+    return rows
+
+
 def examples(split: str) -> list[tuple[str, str, list[tuple[str, int, int]]]]:
     """Return deterministic examples with disjoint templates and slot values by split."""
     split = {"val": "validation", "dev": "validation"}.get(split, split)
@@ -295,4 +383,9 @@ def examples(split: str) -> list[tuple[str, str, list[tuple[str, int, int]]]]:
 
     rows = list(result.values())
     rng.shuffle(rows)
+    if split == "train":
+        for text, intent, slots in _spoken_examples(songs):
+            if text not in result:
+                rows.append((text, intent, slots))
+                result[text] = (text, intent, slots)
     return rows

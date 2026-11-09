@@ -19,9 +19,9 @@ Dalla cartella del repository, con Python 3.11 disponibile in `.venv`. Le librer
 ```powershell
 .venv/Scripts/python.exe -m pip install --target build/training-libs torch==2.9.1 --index-url https://download.pytorch.org/whl/cu128
 $env:PYTHONPATH = (Resolve-Path build/training-libs).Path
-.venv/Scripts/python.exe training/commands.py --out build/commands-v2 train
-.venv/Scripts/python.exe training/commands.py --out build/commands-v2 benchmark
-.venv/Scripts/python.exe training/commands.py --out build/commands-v2 ask 'mostrami le foto dei cani' 'metti Giappone su tutte queste foto'
+.venv/Scripts/python.exe training/commands.py --out build/commands-v3 train
+.venv/Scripts/python.exe training/commands.py --out build/commands-v3 benchmark --suite fresh
+.venv/Scripts/python.exe training/commands.py --out build/commands-v3 ask 'mostrami le foto dei cani' 'metti Giappone su tutte queste foto'
 ```
 
 Il modello usa un piccolo insieme di convoluzioni sul testo e due uscite, una per il comando e una per marcare i termini da estrarre. La cartella indicata da `--out` contiene il checkpoint e le metriche. Il punteggio esatto richiede che siano giusti sia il comando sia tutti i suoi argomenti. Il benchmark usa richieste scritte a mano tenute fuori dall'addestramento.
@@ -48,4 +48,19 @@ La nuova versione, con 49.017 parametri, riconosce «mostrami le foto dei cani»
 | 0,55 (predefinita) | 138/294 | 176/383 | 28/48 | 7 |
 | 0,80 | 153/294 | 179/383 | 25/48 | 9 |
 
-Per la demo teniamo il checkpoint con 0,55, che ha completato più richieste scritte a mano in questo confronto. Per riprodurre le alternative basta usare `--slot-dropout 0.35` o `--slot-dropout 0.8` e scegliere una cartella di output separata.
+Il checkpoint con 0,55 ha completato più richieste scritte a mano in questo confronto. Le alternative si riproducono dal commit `3ac11e2` usando `--slot-dropout 0.35` o `--slot-dropout 0.8` e cartelle di output separate.
+
+### Frasi colloquiali e richieste negate
+
+La terza prova aggiunge 1.429 esempi sintetici di addestramento con nomi composti, frasi colloquiali e richieste negate o incomplete. Conserva i 6.725 esempi precedenti e gli stessi gruppi di validazione e test sintetici. La rete ha la stessa struttura, con un vocabolario più ampio. Il checkpoint scelto in validazione è quello dell'epoca 12 su 20, con seed 42 e `--slot-dropout 0.55`.
+
+| Misura | Checkpoint precedente | Corpus ampliato |
+| --- | ---: | ---: |
+| Comandi esatti nel test sintetico | 176/383 | 206/383 |
+| Comandi esatti nel primo test scritto a mano | 28/48 | 25/48 |
+| Azioni riconosciute nel nuovo test scritto a mano | 36/49 | 41/49 |
+| Comandi esatti nel nuovo test scritto a mano | 20/49 | 19/49 |
+| Azioni proposte quando serviva un chiarimento nel nuovo test | 4 | 2 |
+| Dimensione del checkpoint | 208.079 byte | 227.919 byte |
+
+Il nuovo test usa 49 richieste scritte a mano, preparate separatamente e controllate per evitare duplicati con l'addestramento. Il corpus ampliato migliora il riconoscimento dell'azione, mentre l'estrazione degli argomenti resta fragile, soprattutto per la musica. Teniamo il checkpoint precedente come riferimento per la demo. La prossima prova dovrebbe misurare l'effetto di addestrare la rete a riconoscere l'inizio e la fine degli argomenti.
