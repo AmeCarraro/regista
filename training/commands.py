@@ -20,15 +20,21 @@ LIMIT = 64
 
 
 class Commands(nn.Module):
-    def __init__(self, vocabulary_size):
+    def __init__(self, vocabulary_size, boundaries=False):
         super().__init__()
+        self.boundaries = boundaries
         self.words = nn.Embedding(vocabulary_size, 48, padding_idx=0)
         self.context = nn.ModuleList(
             nn.Conv1d(48, 48, 3, padding=distance, dilation=distance)
             for distance in (1, 2, 4, 8)
         )
         self.intent = nn.Linear(48, len(INTENTS))
-        self.slots = nn.Linear(48, len(LABELS))
+        if boundaries:
+            # One start and one end for each slot, plus a score for an absent slot.
+            self.edges = nn.Linear(48, 2 * (len(LABELS) - 1))
+            self.absent = nn.Linear(48, 2 * (len(LABELS) - 1))
+        else:
+            self.slots = nn.Linear(48, len(LABELS))
 
     def forward(self, tokens):
         present = tokens.ne(0)
@@ -37,6 +43,10 @@ class Commands(nn.Module):
             hidden = (hidden + F.relu(layer(hidden))) * present.unsqueeze(1)
         hidden = hidden.transpose(1, 2)
         summary = hidden.masked_fill(~present.unsqueeze(-1), 0).amax(dim=1)
+        if self.boundaries:
+            edges = self.edges(hidden).masked_fill(~present.unsqueeze(-1), -1e4)
+            spans = torch.cat((edges, self.absent(summary).unsqueeze(1)), dim=1)
+            return self.intent(summary), spans
         return self.intent(summary), self.slots(hidden)
 
 
@@ -91,6 +101,37 @@ def decode(text, words, intent, labels):
     return {"intent": intent, "slots": slots}
 
 
+def edge_targets(tags):
+    positions = torch.arange(LIMIT, device=tags.device)
+    targets = []
+    for slot in range(1, len(LABELS)):
+        matches = tags.eq(slot)
+        start = torch.where(matches, positions, LIMIT).amin(dim=1)
+        end = torch.where(matches, positions, -1).amax(dim=1)
+        targets.extend((start, torch.where(end < 0, LIMIT, end)))
+    return torch.stack(targets, dim=1)
+
+
+def read_slots(model, scores, choices):
+    if not model.boundaries:
+        return scores.argmax(2).tolist()
+    sequences = []
+    for choice, edges in zip(choices, scores.argmax(1).tolist()):
+        tags = [0] * LIMIT
+        intent = INTENTS[choice]
+        relevant = {"play_song": (2, 3), "clarify": ()}.get(intent, (1,))
+        for slot in relevant:
+            start, end = edges[2 * (slot - 1):2 * slot]
+            if start == end == LIMIT:
+                continue
+            if not 0 <= start <= end < LIMIT or any(tags[start:end + 1]):
+                tags = [0] * LIMIT
+                break
+            tags[start:end + 1] = [slot] * (end - start + 1)
+        sequences.append(tags)
+    return sequences
+
+
 @torch.inference_mode()
 def evaluate(model, data, rows, device):
     model.eval()
@@ -99,7 +140,8 @@ def evaluate(model, data, rows, device):
     offset = 0
     for tokens, _, _ in DataLoader(data, batch_size=128):
         predicted, labels = model(tokens.to(device))
-        for choice, tags in zip(predicted.argmax(1).tolist(), labels.argmax(2).tolist()):
+        choices = predicted.argmax(1).tolist()
+        for choice, tags in zip(choices, read_slots(model, labels, choices)):
             text, intent, spans = rows[offset]
             words = list(WORDS.finditer(text))
             answer = decode(text, words, INTENTS[choice], tags)
@@ -128,7 +170,7 @@ def train(args):
     }))}
     batches = DataLoader(dataset(training, vocabulary), batch_size=64, shuffle=True)
     validation_data, test_data = (dataset(rows, vocabulary) for rows in (validation, test))
-    model = Commands(len(vocabulary) + 2).to(args.device)
+    model = Commands(len(vocabulary) + 2, args.boundaries).to(args.device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=0.002)
     best_score, best_epoch, best = -1, 0, None
     weights = torch.tensor([1.0, 2.0, 2.0, 2.0], device=args.device)
@@ -142,7 +184,9 @@ def train(args):
             probability = torch.where(tags.gt(0), args.slot_dropout, 0.08)
             dropped = torch.rand(tokens.shape, device=args.device).lt(probability) & tokens.ne(0)
             choices, labels = model(tokens.masked_fill(dropped, 1))
-            loss = F.cross_entropy(choices, intent) + F.cross_entropy(labels.transpose(1, 2), tags, weight=weights)
+            slot_loss = (F.cross_entropy(labels, edge_targets(tags)) if args.boundaries
+                         else F.cross_entropy(labels.transpose(1, 2), tags, weight=weights))
+            loss = F.cross_entropy(choices, intent) + slot_loss
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -155,10 +199,10 @@ def train(args):
     model.load_state_dict(best)
     args.out.mkdir(parents=True, exist_ok=True)
     checkpoint = args.out / "commands.pt"
-    torch.save({"state": best, "vocabulary": vocabulary}, checkpoint)
+    torch.save({"state": best, "vocabulary": vocabulary, "boundaries": args.boundaries}, checkpoint)
     report = {"device": args.device, "hardware": hardware, "torch": str(torch.__version__),
               "seed": args.seed, "epochs": args.epochs, "best_epoch": best_epoch,
-              "slot_dropout": args.slot_dropout, "training_examples": len(training),
+              "slot_dropout": args.slot_dropout, "boundaries": args.boundaries, "training_examples": len(training),
               "parameters": sum(value.numel() for value in model.parameters()), "checkpoint_bytes": checkpoint.stat().st_size,
               "validation": evaluate(model, validation_data, validation, args.device),
               "test": evaluate(model, test_data, test, args.device)}
@@ -173,7 +217,8 @@ def ask(args):
         tokens, words = encode(text, vocabulary)
         if tokens:
             intent, slots = model(torch.tensor([tokens]))
-            answer = decode(text, words, INTENTS[intent.argmax().item()], slots[0].argmax(1).tolist())
+            choice = intent.argmax().item()
+            answer = decode(text, words, INTENTS[choice], read_slots(model, slots, [choice])[0])
         else:
             answer = {"intent": "clarify", "slots": {}}
         print(json.dumps({"text": text, **answer}, ensure_ascii=False))
@@ -182,7 +227,7 @@ def ask(args):
 def load(out):
     saved = torch.load(out / "commands.pt", map_location="cpu", weights_only=True)
     vocabulary = saved["vocabulary"]
-    model = Commands(len(vocabulary) + 2).eval()
+    model = Commands(len(vocabulary) + 2, saved.get("boundaries", False)).eval()
     model.load_state_dict(saved["state"])
     return model, vocabulary
 
@@ -215,6 +260,7 @@ if __name__ == "__main__":
     training.add_argument("--seed", type=int, default=42)
     training.add_argument("--slot-dropout", type=float, default=0.55,
                           help="Probability of hiding a slot word during training")
+    training.add_argument("--boundaries", action="store_true", help="Predict start and end positions for each slot")
     trying = commands.add_parser("ask")
     trying.add_argument("text", nargs="+")
     measuring = commands.add_parser("benchmark", help="Evaluate on independent handwritten requests")

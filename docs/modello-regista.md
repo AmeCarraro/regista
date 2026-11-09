@@ -64,3 +64,24 @@ La terza prova aggiunge 1.429 esempi sintetici di addestramento con nomi compost
 | Dimensione del checkpoint | 208.079 byte | 227.919 byte |
 
 Il nuovo test usa 49 richieste scritte a mano, preparate separatamente e controllate per evitare duplicati con l'addestramento. Il corpus ampliato migliora il riconoscimento dell'azione, mentre l'estrazione degli argomenti resta fragile, soprattutto per la musica. Teniamo il checkpoint precedente come riferimento per la demo. La prossima prova dovrebbe misurare l'effetto di addestrare la rete a riconoscere l'inizio e la fine degli argomenti.
+
+### Inizio e fine degli argomenti
+
+`train --boundaries` addestra la rete a prevedere l'inizio e la fine di ciascun argomento e a riconoscere quando è assente. Il testo tra i due punti viene copiato dalla richiesta originale. Se i confini di un argomento sono incoerenti o due argomenti si sovrappongono, il modello chiede un chiarimento. I checkpoint precedenti continuano a usare l'estrazione per parola.
+
+| Misura | Estrazione per parola | Inizio e fine espliciti |
+| --- | ---: | ---: |
+| Comandi esatti in validazione | 160/294 | 187/294 |
+| Comandi esatti nel test sintetico | 206/383 | 219/383 |
+| Rimozioni di tag esatte nel test sintetico | 18/80 | 35/80 |
+| Comandi esatti nel primo test scritto a mano | 25/48 | 26/48 |
+| Comandi esatti nel nuovo test scritto a mano | 19/49 | 18/49 |
+| Azioni proposte quando serviva un chiarimento nel nuovo test | 2 | 4 |
+| Dimensione del checkpoint | 227.919 byte | 230.027 byte |
+
+Stessi 8.154 esempi, seed 42 e 20 epoche sulla RTX 3050 Ti. La prova con confini espliciti ha scelto il checkpoint dell'epoca 8 in validazione. Resta sperimentale perché sul nuovo test scritto a mano propone più azioni quando dovrebbe chiedere chiarimenti.
+
+```powershell
+.venv/Scripts/python.exe training/commands.py --out build/commands-boundaries train --boundaries
+.venv/Scripts/python.exe training/commands.py --out build/commands-boundaries benchmark --suite fresh
+```
