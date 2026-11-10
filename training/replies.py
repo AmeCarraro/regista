@@ -18,6 +18,14 @@ PAD, START, REPLY, END, UNKNOWN = range(5)
 MAX_REPLY = 140
 COUNT = "\ufff0"
 ACTIONS = ("search", "add_tag", "remove_tag", "music_ambiguity", "clarify")
+CUES = {
+    "search": re.compile(r"\bfoto\b", re.IGNORECASE),
+    "add_tag": re.compile(r"\b(?:aggiung|assegn|applic)\w*\b", re.IGNORECASE),
+    "remove_tag": re.compile(r"\b(?:togl|tolg|rimuov|elimin)\w*\b", re.IGNORECASE),
+    "music_ambiguity": re.compile(r"\b(?:bran\w*|canzon\w*|artista)\b", re.IGNORECASE),
+}
+FIELDS = {"tag": "tag", "photos": "foto", "title": "titolo", "artist": "artista", "date": "data",
+          "place": "luogo", "device": "dispositivo", "album": "album"}
 
 
 class Replies(nn.Module):
@@ -117,7 +125,7 @@ def generate(model, prompts, vocabulary, grounded=False):
 def evaluate(model, rows, vocabulary, grounded=False):
     prompts = list(dict.fromkeys(prompt for prompt, _ in rows))
     generated = generate(model, prompts, vocabulary, grounded)
-    counted = correct = finished = 0
+    counted = correct = finished = with_cue = 0
     by_kind = {}
     for prompt, (reply, ended) in zip(prompts, generated):
         kind, fact = prompt.split("|", 1)
@@ -129,8 +137,11 @@ def evaluate(model, rows, vocabulary, grounded=False):
             correct += exact
             counts["exact"] += exact
             counts["total"] += 1
+            with_cue += bool(exact and CUES[kind].search(reply) and reply.endswith("." if kind == "search" else "?"))
+        elif kind == "clarify" and fact in FIELDS:
+            with_cue += bool(ended and FIELDS[fact] in re.findall(r"\w+", reply.casefold()) and reply.endswith("?"))
     return {"prompts": len(prompts), "finished": finished, "counts_exact": correct,
-            "counts_total": counted, "by_kind": by_kind}
+            "counts_total": counted, "with_expected_cue": with_cue, "by_kind": by_kind}
 
 
 def train(args):
@@ -149,7 +160,7 @@ def train(args):
     validation_inputs, validation_targets, validation_actions = (
         value.to(args.device) for value in dataset(validation_rows, vocabulary)[:]
     )
-    best_loss, best_epoch, best = float("inf"), 0, None
+    best_score, best_epoch, best = (float("inf"), float("inf")), 0, None
     hardware = torch.cuda.get_device_name() if args.device == "cuda" else "CPU"
     print(f"Device: {hardware} | Train: {len(train_rows)}", flush=True)
     for epoch in range(1, args.epochs + 1):
@@ -164,10 +175,15 @@ def train(args):
         with torch.no_grad():
             scores, _ = model(validation_inputs, validation_actions)
             loss = F.cross_entropy(scores.transpose(1, 2), validation_targets).item()
-        if epoch == 1 or epoch % 5 == 0 or epoch == args.epochs:
+        scheduled = epoch == 1 or epoch % 5 == 0 or epoch == args.epochs
+        if scheduled:
             print(f"Epoch {epoch:02d} | validation loss: {loss:.3f}", flush=True)
-        if loss < best_loss:
-            best_loss, best_epoch = loss, epoch
+        if args.select_cue and not scheduled:
+            continue
+        cue = evaluate(model, validation, vocabulary, args.grounded)["with_expected_cue"] if args.select_cue else 0
+        score = (-cue, loss)
+        if score < best_score:
+            best_score, best_epoch = score, epoch
             best = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
 
     model.load_state_dict(best)
@@ -178,7 +194,7 @@ def train(args):
     report = {"device": hardware, "seed": args.seed, "epochs": args.epochs, "best_epoch": best_epoch,
               "training_examples": len(train_rows), "parameters": sum(value.numel() for value in model.parameters()),
               "checkpoint_bytes": checkpoint.stat().st_size, "grounded": args.grounded, "conditioned": args.conditioned,
-              "validation": evaluate(model, validation, vocabulary, args.grounded),
+              "select_cue": args.select_cue, "validation": evaluate(model, validation, vocabulary, args.grounded),
               "test": evaluate(model, test, vocabulary, args.grounded)}
     (args.out / "metrics.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report, indent=2))
@@ -190,7 +206,8 @@ def ask(args):
     vocabulary = checkpoint["vocabulary"]
     model = Replies(len(vocabulary) + UNKNOWN + 1, checkpoint.get("conditioned", False))
     model.load_state_dict(checkpoint["state"])
-    for prompt, (reply, ended) in zip(args.prompt, generate(model, args.prompt, vocabulary, checkpoint.get("grounded", False))):
+    answers = generate(model, args.prompt, vocabulary, checkpoint.get("grounded", False))
+    for prompt, (reply, ended) in zip(args.prompt, answers):
         print(json.dumps({"prompt": prompt, "reply": reply, "ended": ended}, ensure_ascii=False))
 
 
@@ -204,6 +221,7 @@ if __name__ == "__main__":
     training.add_argument("--seed", type=int, default=42)
     training.add_argument("--grounded", action="store_true", help="Insert verified counts into the generated text")
     training.add_argument("--conditioned", action="store_true", help="Give the model the selected action at each step")
+    training.add_argument("--select-cue", action="store_true", help="Select by validation facts and action cues before loss")
     trying = commands.add_parser("ask")
     trying.add_argument("prompt", nargs="+")
     args = parser.parse_args()

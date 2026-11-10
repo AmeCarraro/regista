@@ -212,6 +212,13 @@ Con `--grounded` la rete genera la frase con un segnaposto e il programma ci ins
 .venv/Scripts/python.exe training/replies.py --out build/replies-conditioned ask 'search|12' 'add_tag|18'
 ```
 
+`--select-cue` sceglie il checkpoint dalla validazione, contando le risposte che conservano il numero e contengono un indizio lessicale dell'azione. La prova sulla RTX ha selezionato l'epoca 60. Sul test i conteggi corretti sono passati da 42 a 45 su 45 e la risposta musicale «Ci sono 2 brani con questo titolo. Quale artista?» conserva il significato atteso. Il controllo è un indicatore, perché non misura la grammatica o il significato completo. Il modello confonde ancora i campi da chiarire e resta sperimentale.
+
+```powershell
+.venv/Scripts/python.exe training/replies.py --out build/replies-cue train --grounded --conditioned --select-cue --epochs 120
+.venv/Scripts/python.exe training/replies.py --out build/replies-cue ask 'music_ambiguity|2'
+```
+
 ### Primo addestramento della rete visiva
 
 `training/vision.py` addestra da pesi casuali una rete a convoluzioni da 168.770 parametri. Usa CIFAR-10, un riferimento con dieci categorie e immagini da 32 × 32 pixel. La prova locale sulla RTX 3050 Ti ha usato 45.000 immagini di addestramento, 5.000 di validazione e il test ufficiale da 10.000 immagini. Il checkpoint di 689.677 byte ha ottenuto **82,3%** di accuratezza sul test. Per «cane», precisione 72,0% e richiamo 75,1%. Per «gatto», precisione 69,6% e richiamo 65,6%. [CIFAR-10, Krizhevsky, Nair e Hinton](https://cave.cs.toronto.edu/kriz/cifar.html)
