@@ -181,3 +181,13 @@ $env:REGISTA_COMMAND_BUNDLE = (Resolve-Path build/onnx-v2).Path
 ```
 
 Su un emulatore Android 13 sono stati riconosciuti `cani`, `Imagine` con artista `John Lennon`, e il tag `Giappone`. L'ultimo comando è stato verificato in modalità aereo. La misura di RAM e latenza sul Redmi resta da fare.
+
+### Esportazione compatta
+
+`export_commands.py --compact` salva i pesi ONNX in FP16 e li converte in FP32 per il calcolo. I tre checkpoint hanno mantenuto tutti i comandi decodificati sulle stesse 481 richieste di verifica per checkpoint. Il modello `v2` è passato da 199.766 a 102.507 byte. Il comando per `Imagine` di `John Lennon` ha restituito titolo e artista corretti anche nell'APK compatto sull'emulatore Android 13 in modalità aereo.
+
+```powershell
+.venv/Scripts/python.exe training/export_commands.py build/commands-v2 --out build/onnx-v2-compact --compact
+$env:REGISTA_COMMAND_BUNDLE = (Resolve-Path build/onnx-v2-compact).Path
+.\android.ps1 build
+```

@@ -10,6 +10,7 @@ import numpy as np
 import onnx
 import onnxruntime as ort
 import torch
+from onnx import TensorProto, helper, numpy_helper
 
 from commands import INTENTS, LABELS, LIMIT, WORDS, decode, encode, examples, load, read_slots
 from commands_fresh import examples as fresh_examples
@@ -29,7 +30,23 @@ def answers(model, outputs, texts, encoded):
             for text, (_, words), choice, labels in zip(texts, encoded, choices, tags)]
 
 
-def verify(model, vocabulary, payload):
+def compact_weights(payload):
+    model = onnx.load_model_from_string(payload)
+    casts = []
+    for weight in model.graph.initializer:
+        if weight.data_type != TensorProto.FLOAT:
+            continue
+        name = weight.name
+        reduced = numpy_helper.to_array(weight).astype(np.float16)
+        weight.CopyFrom(numpy_helper.from_array(reduced, name + ".fp16"))
+        casts.append(helper.make_node("Cast", [weight.name], [name], to=TensorProto.FLOAT))
+    nodes = list(model.graph.node)
+    del model.graph.node[:]
+    model.graph.node.extend(casts + nodes)
+    return model.SerializeToString()
+
+
+def verify(model, vocabulary, payload, compact):
     onnx.checker.check_model(payload)
     options = ort.SessionOptions()
     options.intra_op_num_threads = 2
@@ -48,7 +65,7 @@ def verify(model, vocabulary, payload):
         actual = runtime.run(list(OUTPUTS), {INPUT: batch.numpy()})
         for left, right in zip(expected, actual):
             left = left.numpy()
-            np.testing.assert_allclose(right, left, atol=1e-4, rtol=1e-4)
+            np.testing.assert_allclose(right, left, atol=0.02 if compact else 1e-4, rtol=1e-4, equal_nan=False)
             maximum_error = max(maximum_error, float(np.max(np.abs(right - left))))
 
         inputs = texts[start:end], encoded[start:end]
@@ -60,7 +77,7 @@ def verify(model, vocabulary, payload):
 
 
 @torch.inference_mode()
-def export(checkpoint, out):
+def export(checkpoint, out, compact=False):
     torch.set_num_threads(2)
     model, vocabulary = load(checkpoint)
     sample, _ = encode("mostrami le foto dei cani", vocabulary)
@@ -71,12 +88,15 @@ def export(checkpoint, out):
         dynamic_axes={name: {0: "batch"} for name in (INPUT, *OUTPUTS)},
     )
     payload = model_file.getvalue()
-    parity = verify(model, vocabulary, payload)
+    if compact:
+        payload = compact_weights(payload)
+    parity = verify(model, vocabulary, payload, compact)
 
     metadata = {
         "format_version": 1,
         "opset": OPSET,
         "model_sha256": sha256(payload).hexdigest(),
+        "weights_type": "float16" if compact else "float32",
         "input": {"name": INPUT, "type": "int64", "length": LIMIT},
         "outputs": OUTPUTS,
         "tokenizer": {"pattern": WORDS.pattern, "normalization": "casefold", "padding_id": 0, "unknown_id": 1,
@@ -96,5 +116,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("checkpoint", type=Path, help="Directory containing commands.pt")
     parser.add_argument("--out", type=Path, required=True, help="Directory for commands.onnx and commands.json")
+    parser.add_argument("--compact", action="store_true", help="Store weights in float16 and run in float32")
     args = parser.parse_args()
-    export(args.checkpoint, args.out)
+    export(args.checkpoint, args.out, args.compact)
