@@ -248,6 +248,12 @@ Questa misura riguarda una classe per immagine nel benchmark. Per i tag automati
 .venv/Scripts/python.exe training/export_vision.py
 ```
 
+`--compact` conserva i pesi in FP16 e li riconverte in FP32 durante il calcolo. Nel confronto su CPU Windows il file è sceso da 677.200 a 341.204 byte e tutte le 10.000 etichette del test ufficiale sono rimaste identiche alla versione ONNX completa. Entrambe hanno classificato correttamente 8.231 immagini. L'esportatore ricontrolla 128 esempi prima di scrivere il pacchetto.
+
+```powershell
+.venv/Scripts/python.exe training/export_vision.py --compact --out build/vision-onnx-compact
+```
+
 `training/vision_suggestions.py` misura l'effetto di trattenere le etichette meno convincenti. Con obiettivo 90% in validazione ha scelto la soglia 0,60. Sul test ufficiale ha suggerito un'etichetta per 8.193 foto su 10.000, con 7.344 corrette, pari all'89,6% delle proposte. Senza soglia la precisione era 82,3% sullo stesso test. La soglia resta una misura sul benchmark, da verificare su foto di galleria e soggetti fuori dalle dieci classi.
 
 ```powershell

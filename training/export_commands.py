@@ -10,7 +10,7 @@ import numpy as np
 import onnx
 import onnxruntime as ort
 import torch
-from onnx import TensorProto, helper, numpy_helper
+from onnx_weights import compact_weights
 
 from commands import INTENTS, LABELS, LIMIT, WORDS, decode, encode, examples, load, read_slots
 from commands_fresh import examples as fresh_examples
@@ -28,22 +28,6 @@ def answers(model, outputs, texts, encoded):
     tags = read_slots(model.boundaries, slots, choices)
     return [decode(text, words, INTENTS[choice], labels)
             for text, (_, words), choice, labels in zip(texts, encoded, choices, tags)]
-
-
-def compact_weights(payload):
-    model = onnx.load_model_from_string(payload)
-    casts = []
-    for weight in model.graph.initializer:
-        if weight.data_type != TensorProto.FLOAT:
-            continue
-        name = weight.name
-        reduced = numpy_helper.to_array(weight).astype(np.float16)
-        weight.CopyFrom(numpy_helper.from_array(reduced, name + ".fp16"))
-        casts.append(helper.make_node("Cast", [weight.name], [name], to=TensorProto.FLOAT))
-    nodes = list(model.graph.node)
-    del model.graph.node[:]
-    model.graph.node.extend(casts + nodes)
-    return model.SerializeToString()
 
 
 def verify(model, vocabulary, payload, compact):

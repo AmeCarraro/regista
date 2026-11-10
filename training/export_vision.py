@@ -11,6 +11,7 @@ import onnxruntime as ort
 import torch
 from torch import nn
 
+from onnx_weights import compact_weights
 from vision import CLASSES, PhotoTagger, normalize, read_cifar, unpack
 
 
@@ -29,7 +30,7 @@ class ImageInput(nn.Module):
         return self.tagger(normalize(pixels))
 
 
-def verify(tagger, payload, archive):
+def verify(tagger, payload, archive, compact):
     onnx.checker.check_model(payload)
     options = ort.SessionOptions()
     options.intra_op_num_threads = 2
@@ -43,7 +44,7 @@ def verify(tagger, payload, archive):
     for batch in (images[:1], images[1:]):
         expected = tagger(normalize(batch))
         actual = torch.from_numpy(runtime.run([OUTPUT], {INPUT: batch.numpy()})[0])
-        torch.testing.assert_close(actual, expected, atol=1e-4, rtol=1e-4)
+        torch.testing.assert_close(actual, expected, atol=0.02 if compact else 1e-4, rtol=1e-4)
         if not torch.equal(actual.argmax(1), expected.argmax(1)):
             raise ValueError("ONNX and PyTorch assigned different image tags")
         maximum_error = max(maximum_error, float((actual - expected).abs().max()))
@@ -51,7 +52,7 @@ def verify(tagger, payload, archive):
 
 
 @torch.inference_mode()
-def export(checkpoint, archive, out):
+def export(checkpoint, archive, out, compact=False):
     torch.set_num_threads(2)
     saved = torch.load(checkpoint, map_location="cpu", weights_only=True)
     if tuple(saved["classes"]) != CLASSES:
@@ -66,12 +67,15 @@ def export(checkpoint, archive, out):
         dynamic_axes={INPUT: {0: "batch"}, OUTPUT: {0: "batch"}},
     )
     payload = buffer.getvalue()
-    parity = verify(tagger, payload, archive)
+    if compact:
+        payload = compact_weights(payload)
+    parity = verify(tagger, payload, archive, compact)
 
     metadata = {
         "format_version": 1,
         "opset": OPSET,
         "model_sha256": sha256(payload).hexdigest(),
+        "weights_type": "float16" if compact else "float32",
         "input": {"name": INPUT, "type": "uint8", "shape": ["batch", 3, 32, 32],
                   "layout": "NCHW", "color_order": "RGB", "value_range": [0, 255],
                   "normalization_in_model": "float32(pixels) / 127.5 - 1"},
@@ -90,5 +94,6 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint", type=Path, default=Path("build/vision/photo-tagger.pt"))
     parser.add_argument("--archive", type=Path, default=Path("build/vision-data/cifar-10-binary.tar.gz"))
     parser.add_argument("--out", type=Path, default=Path("build/vision-onnx"))
+    parser.add_argument("--compact", action="store_true", help="Store weights in float16 and run in float32")
     args = parser.parse_args()
-    export(args.checkpoint, args.archive, args.out)
+    export(args.checkpoint, args.archive, args.out, args.compact)
