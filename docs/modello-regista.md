@@ -182,6 +182,8 @@ $env:REGISTA_COMMAND_BUNDLE = (Resolve-Path build/onnx-v2).Path
 
 Su un emulatore Android 13 sono stati riconosciuti `cani`, `Imagine` con artista `John Lennon`, e il tag `Giappone`. L'ultimo comando è stato verificato in modalità aereo. La misura di RAM e latenza sul Redmi resta da fare.
 
+Una seconda compilazione con `REGISTA_COMMAND_BUNDLE` assente ha prodotto un APK standard senza `assets/commands/`. Le due varianti si compilano dagli stessi sorgenti.
+
 Il microfono dell'anteprima compare da Android 12 se è disponibile il riconoscitore vocale locale. Da Android 13 viene verificato anche che l'italiano sia installato. Il pulsante chiede il permesso di Android al primo uso e inserisce la trascrizione nel campo modificabile. Un secondo tocco interpreta il testo. L'emulatore Android 13 non offre un servizio vocale locale e ha mantenuto disponibile la tastiera. La trascrizione effettiva resta da verificare sul Redmi. [Riferimento Android](https://developer.android.com/reference/android/speech/SpeechRecognizer)
 
 ### Tag manuali nel pannello Android
@@ -255,5 +257,5 @@ Questa misura riguarda una classe per immagine nel benchmark. Per i tag automati
 `training/suggest_tags.py` permette di provare il pacchetto ONNX su singole immagini, in locale e in sola lettura. Corregge l'orientamento EXIF, ritaglia al centro e adatta l'immagine all'ingresso da 32 × 32 pixel. In una prova su tre immagini del benchmark ha proposto `cat`, `dog` e `ship`, lasciando senza proposta un'immagine bianca. Questa verifica dimostra il collegamento dal file immagine all'etichetta. La soglia resta da valutare su foto reali fuori dal benchmark.
 
 ```powershell
-.venv/Scripts/python.exe training/suggest_tags.py --bundle build/vision-onnx <foto.png>
+.venv/Scripts/python.exe training/suggest_tags.py --bundle build/vision-onnx '.\foto-di-prova.png'
 ```
