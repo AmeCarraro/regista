@@ -117,3 +117,13 @@ Il vantaggio sulla musica convive con un calo su ricerca e modifiche ai tag nel 
 .venv/Scripts/python.exe training/commands.py --out build/commands-references train --references
 .venv/Scripts/python.exe training/commands.py --out build/commands-references benchmark --suite fresh
 ```
+
+### Catalogo dei tag manuali
+
+`app/tags.py` salva più tag per foto in SQLite. Aggiunte e rimozioni su una selezione avvengono in un'unica transazione. Il catalogo mantiene la grafia del tag e cerca anche con variazioni di maiuscole o di rappresentazione Unicode. Restituisce gli identificativi effettivamente cambiati, così l'app potrà registrare e annullare solo quelle modifiche.
+
+Il catalogo è verificato in isolamento, prima del collegamento alla galleria. L'integrazione dovrà usare un'identità che sopravvive allo spostamento di una foto: l'indice attuale ricava il suo identificativo dal percorso relativo.
+
+### Esito della prova sulle parole sconosciute
+
+Un addestramento da 20 epoche sulla RTX 3050 Ti ha distinto parole sconosciute brevi, medie, lunghe e numeriche. Rispetto a `commands-v3`, il nuovo test scritto a mano è rimasto a 19/49 comandi esatti, con proposte di modifica tag errate salite da 8 a 10. Sul test sintetico i comandi esatti sono scesi da 206 a 165 su 383. Abbiamo mantenuto la rappresentazione precedente.
