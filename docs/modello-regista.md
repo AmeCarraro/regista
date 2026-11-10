@@ -204,6 +204,12 @@ $env:REGISTA_COMMAND_BUNDLE = (Resolve-Path build/onnx-v2-compact).Path
 .\android.ps1 build
 ```
 
+`training/benchmark_onnx.py` confronta il pacchetto completo e quello compatto con lo stesso interprete dell'app. Su questo PC hanno restituito lo stesso comando per tutte le 480 richieste. Con il modello già caricato, la mediana è stata circa 0,10 ms per entrambi e il 95º percentile tra 0,12 e 0,14 ms. Il pacchetto compatto con metadati occupa 112.410 byte contro 209.668. I tempi di caricamento dipendono anche dall'ordine delle prove e dall'avvio di ONNX Runtime. Questi tempi sono su Windows, senza microfono né UI.
+
+```powershell
+.venv/Scripts/python.exe training/benchmark_onnx.py build/onnx-v2 build/onnx-v2-compact
+```
+
 ### Primo modello generativo di risposte
 
 `training/replies.py` addestra da pesi casuali una rete ricorrente che genera italiano carattere per carattere a partire da fatti strutturati. È un esperimento separato dal modello che interpreta i comandi. Il primo checkpoint ha generato conteggi corretti in 0/45 casi con numeri tenuti fuori dall'addestramento per quella specifica azione.
