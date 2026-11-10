@@ -251,3 +251,9 @@ Questa misura riguarda una classe per immagine nel benchmark. Per i tag automati
 ```powershell
 .venv/Scripts/python.exe training/vision_suggestions.py
 ```
+
+`training/suggest_tags.py` permette di provare il pacchetto ONNX su singole immagini, in locale e in sola lettura. Corregge l'orientamento EXIF, ritaglia al centro e adatta l'immagine all'ingresso da 32 × 32 pixel. In una prova su tre immagini del benchmark ha proposto `cat`, `dog` e `ship`, lasciando senza proposta un'immagine bianca. Questa verifica dimostra il collegamento dal file immagine all'etichetta. La soglia resta da valutare su foto reali fuori dal benchmark.
+
+```powershell
+.venv/Scripts/python.exe training/suggest_tags.py --bundle build/vision-onnx <foto.png>
+```
