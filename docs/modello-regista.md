@@ -180,18 +180,6 @@ $env:REGISTA_COMMAND_BUNDLE = (Resolve-Path build/onnx-v2).Path
 .\android.ps1 build
 ```
 
-### Primo modello generativo di risposte
-
-`training/replies.py` addestra da pesi casuali una rete ricorrente che genera italiano carattere per carattere a partire da fatti strutturati. È un esperimento separato dal modello che interpreta i comandi. Il primo checkpoint ha generato conteggi corretti in 0/45 casi con numeri tenuti fuori dall'addestramento per quella specifica azione.
-
-Con `--grounded` la rete genera la frase con un segnaposto e il programma ci inserisce il numero fornito dall'app. Se il segnaposto manca, appare più volte o la rete genera altre cifre, la risposta viene scartata. `--conditioned` passa l'azione alla rete a ogni carattere. La prova sulla RTX 3050 Ti usa 54 formulazioni distinte dopo aver rimosso i numeri. Il checkpoint scelto alla 36ª epoca pesa 109.197 byte e preserva 42/45 conteggi nel test, scartando i tre casi musicali. Alcune frasi restano sgrammaticate, quindi il prototipo resta fuori dall'app.
-
-```powershell
-.venv/Scripts/python.exe training/replies.py train
-.venv/Scripts/python.exe training/replies.py --out build/replies-conditioned train --grounded --conditioned --epochs 200
-.venv/Scripts/python.exe training/replies.py --out build/replies-conditioned ask 'search|12' 'add_tag|18'
-```
-
 Su un emulatore Android 13 sono stati riconosciuti `cani`, `Imagine` con artista `John Lennon`, e il tag `Giappone`. L'ultimo comando è stato verificato in modalità aereo. La misura di RAM e latenza sul Redmi resta da fare.
 
 Il microfono dell'anteprima compare da Android 12 se è disponibile il riconoscitore vocale locale. Da Android 13 viene verificato anche che l'italiano sia installato. Il pulsante chiede il permesso di Android al primo uso e inserisce la trascrizione nel campo modificabile. Un secondo tocco interpreta il testo. L'emulatore Android 13 non offre un servizio vocale locale e ha mantenuto disponibile la tastiera. La trascrizione effettiva resta da verificare sul Redmi. [Riferimento Android](https://developer.android.com/reference/android/speech/SpeechRecognizer)
@@ -204,4 +192,27 @@ Il microfono dell'anteprima compare da Android 12 se è disponibile il riconosci
 .venv/Scripts/python.exe training/export_commands.py build/commands-v2 --out build/onnx-v2-compact --compact
 $env:REGISTA_COMMAND_BUNDLE = (Resolve-Path build/onnx-v2-compact).Path
 .\android.ps1 build
+```
+
+### Primo modello generativo di risposte
+
+`training/replies.py` addestra da pesi casuali una rete ricorrente che genera italiano carattere per carattere a partire da fatti strutturati. È un esperimento separato dal modello che interpreta i comandi. Il primo checkpoint ha generato conteggi corretti in 0/45 casi con numeri tenuti fuori dall'addestramento per quella specifica azione.
+
+Con `--grounded` la rete genera la frase con un segnaposto e il programma ci inserisce il numero fornito dall'app. Se il segnaposto manca, appare più volte o la rete genera altre cifre, la risposta viene scartata. `--conditioned` passa l'azione alla rete a ogni carattere. La prova sulla RTX 3050 Ti usa 54 formulazioni distinte dopo aver rimosso i numeri. Il checkpoint scelto alla 36ª epoca pesa 109.197 byte e preserva 42/45 conteggi nel test, scartando i tre casi musicali. Alcune frasi restano sgrammaticate, quindi il prototipo resta fuori dall'app.
+
+```powershell
+.venv/Scripts/python.exe training/replies.py train
+.venv/Scripts/python.exe training/replies.py --out build/replies-conditioned train --grounded --conditioned --epochs 200
+.venv/Scripts/python.exe training/replies.py --out build/replies-conditioned ask 'search|12' 'add_tag|18'
+```
+
+### Primo addestramento della rete visiva
+
+`training/vision.py` addestra da pesi casuali una rete a convoluzioni da 168.770 parametri. Usa CIFAR-10, un riferimento con dieci categorie e immagini da 32 × 32 pixel. La prova locale sulla RTX 3050 Ti ha usato 45.000 immagini di addestramento, 5.000 di validazione e il test ufficiale da 10.000 immagini. Il checkpoint di 689.677 byte ha ottenuto **82,3%** di accuratezza sul test. Per «cane», precisione 72,0% e richiamo 75,1%. Per «gatto», precisione 69,6% e richiamo 65,6%. [CIFAR-10, Krizhevsky, Nair e Hinton](https://cave.cs.toronto.edu/kriz/cifar.html)
+
+Questa misura riguarda una classe per immagine nel benchmark. Per i tag automatici di Regista servono prove con foto di galleria, più soggetti nella stessa foto e un modo di scartare le categorie sconosciute. L'archivio e il checkpoint restano locali.
+
+```powershell
+# Salva la versione binaria di CIFAR-10 in build/vision-data/cifar-10-binary.tar.gz.
+.venv/Scripts/python.exe training/vision.py
 ```
