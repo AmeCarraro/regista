@@ -127,3 +127,13 @@ Il catalogo è verificato in isolamento, prima del collegamento alla galleria. L
 ### Esito della prova sulle parole sconosciute
 
 Un addestramento da 20 epoche sulla RTX 3050 Ti ha distinto parole sconosciute brevi, medie, lunghe e numeriche. Rispetto a `commands-v3`, il nuovo test scritto a mano è rimasto a 19/49 comandi esatti, con proposte di modifica tag errate salite da 8 a 10. Sul test sintetico i comandi esatti sono scesi da 206 a 165 su 383. Abbiamo mantenuto la rappresentazione precedente.
+
+### Esportazione per l'app
+
+`export_commands.py` genera `commands.onnx` e `commands.json`, che contiene il vocabolario, il formato degli ingressi e delle uscite e l'hash del modello. L'esportazione verifica i punteggi e confronta i comandi decodificati da PyTorch e ONNX Runtime prima di scrivere i file. Su CPU Windows i tre checkpoint `commands-v2`, `commands-references` e `commands-boundaries` hanno prodotto gli stessi comandi su 481 ingressi ciascuno. I file ONNX occupano rispettivamente 199.766, 243.926 e 220.069 byte. Peso e tempi effettivi su Android sono ancora da misurare.
+
+```powershell
+.venv/Scripts/python.exe -m pip install --target build/training-libs onnx==1.19.1 ml-dtypes==0.5.4
+$env:PYTHONPATH = (Resolve-Path build/training-libs).Path
+.venv/Scripts/python.exe training/export_commands.py build/commands-v2 --out build/onnx-v2
+```
