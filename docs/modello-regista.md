@@ -170,3 +170,14 @@ $env:INDEX_DIR = Join-Path (Resolve-Path build).Path 'demo-web-index'
 ```
 
 Apri `http://127.0.0.1:8097/`, seleziona due voci e prova «metti Giappone su tutte queste foto». Dopo la conferma, «fammi vedere le foto di Giappone» mostra le due voci. In questa configurazione il servizio non avvia l'indicizzazione delle foto.
+
+### Anteprima offline su Android
+
+Imposta `REGISTA_COMMAND_BUNDLE` prima di compilare l'APK per includere `commands.onnx` e `commands.json` nella versione sperimentale. La scheda «Telefono» mostra «Prova comandi offline». Il modello gira nel processo Android e mostra l'azione e i nomi estratti. L'anteprima è di sola lettura e accetta testo scritto.
+
+```powershell
+$env:REGISTA_COMMAND_BUNDLE = (Resolve-Path build/onnx-v2).Path
+.\android.ps1 build
+```
+
+Su un emulatore Android 13 sono stati riconosciuti `cani`, `Imagine` con artista `John Lennon`, e il tag `Giappone`. L'ultimo comando è stato verificato in modalità aereo. La misura di RAM e latenza sul Redmi resta da fare.

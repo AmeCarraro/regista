@@ -25,6 +25,7 @@ android/.tools/
 # copied in by android.ps1 at every build: the phone's screen, built from web/, and the table of places
 android/app/src/main/assets/telefono/
 android/app/src/main/assets/places/
+android/app/src/main/assets/commands/
 android/local.properties
 
 # the models the phone app runs by itself: downloaded once from Hugging Face, too large for the repository

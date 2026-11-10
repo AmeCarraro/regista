@@ -36,6 +36,26 @@ switch ($What) {
         New-Item -ItemType Directory -Force (Join-Path $assets 'places') | Out-Null
         Copy-Item -Recurse (Join-Path $PSScriptRoot 'web\dist-telefono') $screen
         Copy-Item (Join-Path $PSScriptRoot 'data\geonames\cities15000.zip') (Join-Path $assets 'places\cities15000.zip')
+        $preview = Join-Path $assets 'commands'
+        $commandFiles = 'commands.onnx', 'commands.json'
+        if ($env:REGISTA_COMMAND_BUNDLE) {
+            $bundle = $env:REGISTA_COMMAND_BUNDLE
+            foreach ($name in $commandFiles) {
+                if (-not (Test-Path -LiteralPath (Join-Path $bundle $name) -PathType Leaf)) {
+                    Stop-Run "missing $name in the command model bundle"
+                }
+            }
+            New-Item -ItemType Directory -Force $preview | Out-Null
+            foreach ($name in $commandFiles) {
+                Copy-Item -LiteralPath (Join-Path $bundle $name) -Destination (Join-Path $preview $name) -Force
+            }
+        } else {
+            # Remove only generated preview files, so the next ordinary APK leaves out the experiment.
+            foreach ($name in $commandFiles) {
+                $generated = Join-Path $preview $name
+                if (Test-Path -LiteralPath $generated -PathType Leaf) { Remove-Item -LiteralPath $generated }
+            }
+        }
         # the key is made once and kept out of the repository: with a new key at each build a phone would refuse the update
         $script = 'mkdir -p .keys && { [ -f .keys/regista.keystore ] || keytool -genkeypair -keystore .keys/regista.keystore -storepass regista -keypass regista -alias regista -keyalg RSA -keysize 2048 -validity 10000 -dname CN=Regista; } && gradle --no-daemon -q assembleRelease'
         docker run --rm -v "${project}:/work" -v regista-gradle:/root/.gradle regista-android sh -c $script

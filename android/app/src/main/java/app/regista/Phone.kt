@@ -31,10 +31,17 @@ class Phone(
     private val update: Update,
     private val songs: Songs,
     private val kinds: Kinds,
+    private val commands: CommandPreview,
 ) {
     /** The pictures of this phone by kind (Kinds.sorted); null until the computer said what the kinds are. */
     @JavascriptInterface
     fun kinds(): String = kinds.sorted()
+
+    @JavascriptInterface
+    fun commandPreviewAvailable(): Boolean = commands.available
+
+    @JavascriptInterface
+    fun previewCommand(text: String): String = commands.preview(text)
 
     // what the computer said about requests typed here, until the page takes it
     private val heard = ConcurrentHashMap<String, ConcurrentLinkedQueue<JSONObject>>()

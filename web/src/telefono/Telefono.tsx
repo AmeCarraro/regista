@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import * as icons from '../icons.tsx'
+import CommandPreview from './CommandPreview.tsx'
 import { connect } from './bridge.ts'
 import type { Answer, Heard, State } from './bridge.ts'
 import type { Day } from './period.ts'
@@ -234,6 +235,8 @@ export default function Telefono() {
           ))}
         </div>
       )}
+
+      <CommandPreview />
 
       {!asked && kinds && kinds.kinds.some((one) => one.sure.length + one.maybe.length > 0) && (
         <div className="by-kind" role="tablist" aria-label="Le foto per tipo">

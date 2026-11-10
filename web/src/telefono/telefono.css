@@ -267,6 +267,19 @@ body {
   cursor: pointer;
 }
 
+.command-preview summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.command-preview .ask {
+  margin: 10px 0;
+}
+
+.command-preview .ask .go {
+  padding: 0;
+}
+
 /* where the pictures the phone is less sure of begin: a line across the grid */
 .grid .divider {
   grid-column: 1 / -1;

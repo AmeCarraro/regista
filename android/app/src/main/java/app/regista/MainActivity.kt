@@ -50,6 +50,7 @@ class MainActivity : Activity() {
     private lateinit var update: Update
     private lateinit var songs: Songs
     private lateinit var kinds: Kinds
+    private lateinit var commands: CommandPreview
     private var link: Link? = null
 
     /** The computer, when it answered last; null while it cannot be reached. */
@@ -78,6 +79,7 @@ class MainActivity : Activity() {
         update = Update(this)
         songs = Songs(this)
         kinds = Kinds(this, library)
+        commands = CommandPreview(assets)
         setContentView(R.layout.main)
         // the table of places takes a few seconds to read on an old phone: it is read now, in the background
         thread(name = "places") { places.ready() }
@@ -120,6 +122,11 @@ class MainActivity : Activity() {
         link?.close()
         link = null
         reached = null
+    }
+
+    override fun onDestroy() {
+        commands.close()
+        super.onDestroy()
     }
 
     override fun onRequestPermissionsResult(request: Int, permissions: Array<String>, results: IntArray) {
@@ -284,7 +291,7 @@ class MainActivity : Activity() {
         page.settings.domStorageEnabled = true
         page.settings.allowFileAccess = false
         page.settings.allowContentAccess = false
-        val phone = Phone(this, library, places, gallery, memory, sight, update, songs, kinds)
+        val phone = Phone(this, library, places, gallery, memory, sight, update, songs, kinds, commands)
         // the page calls the app through this, and only this page can: it is the app's own, and nothing else opens in here
         page.addJavascriptInterface(phone, "Regista")
         page.webViewClient = object : WebViewClient() {

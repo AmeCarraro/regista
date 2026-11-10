@@ -48,6 +48,11 @@ export type Playing = { song: Queued | null; index: number; count: number; playi
 /** The songs chosen last elsewhere on the phone: how many, and how many were added, were there already, or could not be copied. */
 export type Adding = { busy: boolean; total: number; done: number; skipped: number; failed: number }
 
+/** An interpretation from the bundled command model. */
+export type CommandPreview =
+  | { intent: 'search_photos' | 'add_tag' | 'remove_tag' | 'play_song' | 'clarify'; slots: { tag?: string; title?: string; artist?: string } }
+  | { error: string }
+
 export type App = {
   pictures(): Picture[]
   reading(): Reading
@@ -147,6 +152,8 @@ type Native = {
   openSettings(): void
   canPinWidget(): boolean
   pinWidget(): void
+  commandPreviewAvailable?(): boolean
+  previewCommand?(text: string): string
 }
 
 declare global {
@@ -157,6 +164,21 @@ declare global {
     /** Called by the app when one of its tabs shows this page: "phone" for the pictures, "music" for the songs. */
     registaView?: (tab: string) => void
   }
+}
+
+export function commandPreviewAvailable(): boolean {
+  const native = window.Regista
+  return !!(native?.previewCommand && native.commandPreviewAvailable?.())
+}
+
+export function previewCommand(text: string): CommandPreview {
+  try {
+    const result = window.Regista?.previewCommand?.(text)
+    if (result) return JSON.parse(result) as CommandPreview
+  } catch {
+    // If the preview failed, the rest of the phone screen still works.
+  }
+  return { error: 'La prova dei comandi non è disponibile.' }
 }
 
 // how long the computer is waited for when it says nothing: its model may have to be loaded first
