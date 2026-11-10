@@ -180,6 +180,18 @@ $env:REGISTA_COMMAND_BUNDLE = (Resolve-Path build/onnx-v2).Path
 .\android.ps1 build
 ```
 
+### Primo modello generativo di risposte
+
+`training/replies.py` addestra da pesi casuali una rete ricorrente che genera italiano carattere per carattere a partire da fatti strutturati. È un esperimento separato dal modello che interpreta i comandi. Il primo checkpoint ha generato conteggi corretti in 0/45 casi con numeri tenuti fuori dall'addestramento per quella specifica azione.
+
+Con `--grounded` la rete genera la frase con un segnaposto e il programma ci inserisce il numero fornito dall'app. Se il segnaposto manca, appare più volte o la rete genera altre cifre, la risposta viene scartata. `--conditioned` passa l'azione alla rete a ogni carattere. La prova sulla RTX 3050 Ti usa 54 formulazioni distinte dopo aver rimosso i numeri. Il checkpoint scelto alla 36ª epoca pesa 109.197 byte e preserva 42/45 conteggi nel test, scartando i tre casi musicali. Alcune frasi restano sgrammaticate, quindi il prototipo resta fuori dall'app.
+
+```powershell
+.venv/Scripts/python.exe training/replies.py train
+.venv/Scripts/python.exe training/replies.py --out build/replies-conditioned train --grounded --conditioned --epochs 200
+.venv/Scripts/python.exe training/replies.py --out build/replies-conditioned ask 'search|12' 'add_tag|18'
+```
+
 Su un emulatore Android 13 sono stati riconosciuti `cani`, `Imagine` con artista `John Lennon`, e il tag `Giappone`. L'ultimo comando è stato verificato in modalità aereo. La misura di RAM e latenza sul Redmi resta da fare.
 
 ### Esportazione compatta
