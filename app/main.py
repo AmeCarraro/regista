@@ -27,6 +27,7 @@ import llm
 import orchestrator
 import selftest
 from actions import Actions, Refused, collection_name
+from command_demo import demo_routes
 from embedder import ClipEmbedder
 from kinds import KINDS, MARGIN
 from music import KINDS as SONG_KINDS
@@ -187,6 +188,7 @@ async def lifespan(app: FastAPI):
 
 # no page that lists what the service can do: nobody needs it, and it would load its parts from elsewhere
 app = FastAPI(title="regista", docs_url=None, openapi_url=None, redoc_url=None, lifespan=lifespan)
+app.include_router(demo_routes(os.getenv("REGISTA_COMMAND_BUNDLE"), Path(INDEX_DIR) / "demo-tags.sqlite"))
 
 
 # the only ways in for a phone with no key yet: asking to come in, and asking whether the yes came

@@ -66,12 +66,13 @@ type Props = {
   onReadAgain: () => void
   theme: string
   onTheme: () => void
-  /** What is shown beside the panel: the chat, the pictures by kind, or the music. */
+  demoAvailable: boolean
+  /** What is shown beside the panel. */
   view: View
   onView: (view: View) => void
 }
 
-export type View = 'chat' | 'photos' | 'music'
+export type View = 'chat' | 'photos' | 'music' | 'demo'
 
 function ModelRow({ model, director }: { model: ModelInfo; director: boolean }) {
   const place = placement(model)
@@ -102,7 +103,7 @@ function ModelRow({ model, director }: { model: ModelInfo; director: boolean }) 
 }
 
 /** The side panel: the computer, the models on it with what each is for, and the pictures. */
-export default function Side({ models, library, changes, phone, onPhoneChange, testing, onTest, onReadAgain, theme, onTheme, view, onView }: Props) {
+export default function Side({ models, library, changes, phone, onPhoneChange, testing, onTest, onReadAgain, theme, onTheme, demoAvailable, view, onView }: Props) {
   const machine = models?.hardware
   const director = models?.order.tools[0]
   const reading = library?.running
@@ -131,6 +132,11 @@ export default function Side({ models, library, changes, phone, onPhoneChange, t
           <icons.Note /> Musica
         </button>
       </nav>
+      {demoAvailable && (
+        <button type="button" className="quiet-button demo-nav" aria-pressed={view === 'demo'} onClick={() => onView('demo')}>
+          <icons.Bolt /> Prova comandi
+        </button>
+      )}
 
       <section className="panel">
         <h2>

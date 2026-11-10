@@ -319,3 +319,14 @@ export type Tune = { id: string; title: string; artist: string; album: string; f
 export const fetchMusic = () => get<{ folder: string; songs: Tune[] }>('/api/music')
 
 export const songOf = (id: string) => `/api/music/${id}`
+
+export type DemoPhoto = { id: string; name: string; tags: string[] }
+export type DemoProposal = { action: 'add_tag' | 'remove_tag'; tag: string; ids: string[] }
+
+export const fetchCommandDemo = () => get<{ available: boolean; photos: DemoPhoto[] }>('/api/command-demo')
+
+export const interpretDemo = (text: string, selection: string[]) =>
+  post<{ message: string; found: string[] | null; proposal: DemoProposal | null }>('/api/command-demo/interpret', { text, selection })
+
+export const applyDemoTags = (proposal: DemoProposal) =>
+  post<{ changed: number; photos: DemoPhoto[] }>('/api/command-demo/tags', proposal)

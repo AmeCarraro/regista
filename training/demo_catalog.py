@@ -6,10 +6,8 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
 from command_model import CommandModel
+from command_demo import GALLERY
 from tags import Tags
-
-
-GALLERY = {"1": "Passeggiata.jpg", "2": "Stazione.jpg", "3": "Mercato.jpg"}
 
 
 def main():

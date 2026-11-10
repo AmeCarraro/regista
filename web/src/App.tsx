@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { carryOut, chatStream, fetchChanges, fetchLibrary, fetchModels, fetchPhone, fetchTransfer, makeAlbums, readFolderAgain, takeBack, testModels } from './api.ts'
-import type { Changes, Library, Models, Outcome, PhoneState } from './api.ts'
+import { carryOut, chatStream, fetchChanges, fetchCommandDemo, fetchLibrary, fetchModels, fetchPhone, fetchTransfer, makeAlbums, readFolderAgain, takeBack, testModels } from './api.ts'
+import type { Changes, DemoPhoto, Library, Models, Outcome, PhoneState } from './api.ts'
 import { apply, lapse, missing, newReply, selection, settle, tail, toMessages, waiting, yesOrNo } from './chat.ts'
 import type { Proposed, Reply, Turn } from './chat.ts'
 import Composer from './Composer.tsx'
+import CommandDemo from './CommandDemo.tsx'
 import * as icons from './icons.tsx'
 import Kinds from './Kinds.tsx'
 import Music from './Music.tsx'
@@ -33,6 +34,7 @@ export default function App() {
   const [library, setLibrary] = useState<Library | null>(null)
   const [changes, setChanges] = useState<Changes | null>(null)
   const [phone, setPhone] = useState<PhoneState | null>(null)
+  const [demo, setDemo] = useState<DemoPhoto[] | null>(null)
   // the pictures that went to the trash since they were shown in this conversation
   const [gone, setGone] = useState<ReadonlyMap<string, Gone>>(new Map())
   const [testing, setTesting] = useState<{ model: string; done: number; of: number } | null>(null)
@@ -63,8 +65,24 @@ export default function App() {
     loadChanges()
   }, [])
 
-  // Which phones are connected is shown, and decided, only at the computer: inside a phone's app the page does not ask.
   const atComputer = library?.door === 'computer'
+  useEffect(() => {
+    if (!atComputer) return
+    let active = true
+    fetchCommandDemo().then(
+      (response) => {
+        if (active) setDemo(response.available ? response.photos : null)
+      },
+      () => {
+        if (active) setDemo(null)
+      },
+    )
+    return () => {
+      active = false
+    }
+  }, [atComputer])
+
+  // Which phones are connected is shown, and decided, only at the computer: inside a phone's app the page does not ask.
   useEffect(() => {
     if (!atComputer) return
     loadPhone()
@@ -315,6 +333,7 @@ export default function App() {
 
   // changes whenever the library does: a small copy that could not be loaded is then asked for again
   const shelf = useMemo(() => ({ gone, epoch: `${library?.indexed ?? 0}:${library?.running ? 1 : 0}` }), [gone, library?.indexed, library?.running])
+  const shownView = view === 'demo' && demo === null ? 'chat' : view
 
   return (
     <div className="app">
@@ -336,7 +355,8 @@ export default function App() {
           onReadAgain={readAgain}
           theme={theme}
           onTheme={toggleTheme}
-          view={view}
+          demoAvailable={atComputer && demo !== null}
+          view={shownView}
           onView={(chosen) => {
             setView(chosen)
             setPanel(false)
@@ -345,7 +365,7 @@ export default function App() {
       </aside>
       {panel && <button type="button" className="scrim" aria-label="Chiudi il pannello" onClick={() => setPanel(false)} />}
 
-      <main className={view === 'chat' ? 'chat' : 'chat away'}>
+      <main className={shownView === 'chat' ? 'chat' : 'chat away'}>
         <header className="top">
           <button type="button" className="round ghost small" aria-label="Apri il pannello" onClick={() => setPanel(true)}>
             <icons.Menu />
@@ -360,9 +380,10 @@ export default function App() {
           <div ref={end} />
         </div>
         <Shelf value={shelf}>
-          <Kinds visible={view === 'photos'} />
+          <Kinds visible={shownView === 'photos'} />
         </Shelf>
-        <Music visible={view === 'music'} />
+        <Music visible={shownView === 'music'} />
+        {demo !== null && <CommandDemo initialPhotos={demo} visible={shownView === 'demo'} />}
         <Composer
           models={models}
           model={model}

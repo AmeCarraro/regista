@@ -157,3 +157,16 @@ Il seed 29 passa da 20 a 24 comandi esatti su 49 nel nuovo test scritto a mano e
 .venv/Scripts/python.exe training/commands.py --out build/commands-seed-29 train --references --seed 29
 .venv/Scripts/python.exe training/commands.py --out build/commands-seed-29 benchmark --suite fresh
 ```
+
+### Prova comandi nella pagina di Regista
+
+Con il frontend compilato e un pacchetto ONNX disponibile, questa modalità mostra «Prova comandi» nel menu del PC. La demo lavora su nomi di foto fittizie e scrive i tag in `demo-tags.sqlite` nella cartella d'indice scelta. La richiesta produce solo un'anteprima. Il catalogo cambia dopo il clic su «Conferma».
+
+```powershell
+$env:REGISTA_COMMAND_BUNDLE = (Resolve-Path build/onnx-v2).Path
+$env:PAGE_DIR = (Resolve-Path web/dist).Path
+$env:INDEX_DIR = Join-Path (Resolve-Path build).Path 'demo-web-index'
+.venv/Scripts/python.exe -m uvicorn main:app --app-dir app --host 127.0.0.1 --port 8097 --lifespan off
+```
+
+Apri `http://127.0.0.1:8097/`, seleziona due voci e prova «metti Giappone su tutte queste foto». Dopo la conferma, «fammi vedere le foto di Giappone» mostra le due voci. In questa configurazione il servizio non avvia l'indicizzazione delle foto.

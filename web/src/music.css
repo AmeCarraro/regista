@@ -30,6 +30,25 @@
   color: #fff;
 }
 
+.demo-nav[aria-pressed='true'] {
+  border-color: var(--rose);
+}
+
+.demo-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.demo-form .folder-name {
+  flex: 1 1 240px;
+}
+
+.demo-photo {
+  height: 100%;
+  overflow-wrap: anywhere;
+}
+
 .chat.away > .thread,
 .chat.away > .composer {
   display: none;
