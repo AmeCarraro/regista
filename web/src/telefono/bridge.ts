@@ -58,6 +58,9 @@ export type CommandSpeech =
   | { status: 'result'; text: string }
   | { status: 'error'; error: string }
 
+export type CommandTagEdit = 'add_tag' | 'remove_tag'
+export type CommandTagSearch = { ids: string[] } | { error: string }
+
 export type App = {
   pictures(): Picture[]
   reading(): Reading
@@ -163,6 +166,8 @@ type Native = {
   listenCommand?(): void
   cancelCommandSpeech?(): void
   commandSpeech?(): string
+  applyCommandTags?(action: CommandTagEdit, tag: string, idsJson: string): string
+  findCommandTagged?(tag: string): string
 }
 
 declare global {
@@ -212,7 +217,32 @@ export function commandSpeech(): CommandSpeech {
   } catch {
     // Keep the text field available if the native bridge fails.
   }
-  return { status: 'error', error: 'La trascrizione non è disponibile.' }
+  return { status: 'error', error: 'La trascrizione non è disponibile. Puoi scrivere il comando.' }
+}
+
+export function commandTagsAvailable(): boolean {
+  const native = window.Regista
+  return !!(native?.applyCommandTags && native.findCommandTagged)
+}
+
+export function applyCommandTags(action: CommandTagEdit, tag: string, ids: string[]): { changed: number } | { error: string } {
+  try {
+    const result = window.Regista?.applyCommandTags?.(action, tag, JSON.stringify(ids))
+    if (result) return JSON.parse(result)
+  } catch {
+    // A catalog error is shown inside the preview, without affecting the gallery.
+  }
+  return { error: 'Non riesco ad aggiornare i tag.' }
+}
+
+export function findCommandTagged(tag: string): CommandTagSearch {
+  try {
+    const result = window.Regista?.findCommandTagged?.(tag)
+    if (result) return JSON.parse(result) as CommandTagSearch
+  } catch {
+    // The local gallery can still be used without tags.
+  }
+  return { error: 'Non riesco a cercare il tag.' }
 }
 
 // how long the computer is waited for when it says nothing: its model may have to be loaded first

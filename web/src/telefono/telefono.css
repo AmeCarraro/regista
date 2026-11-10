@@ -284,6 +284,36 @@ body {
   padding: 0;
 }
 
+.command-tags {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.tag-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tag-photo {
+  overflow-wrap: anywhere;
+  font-size: 0.82rem;
+}
+
+.tag-photo label {
+  cursor: pointer;
+}
+
+.tag-photo .tile {
+  object-fit: cover;
+  cursor: inherit;
+}
+
+.tag-photo-names {
+  overflow-wrap: anywhere;
+}
+
 /* where the pictures the phone is less sure of begin: a line across the grid */
 .grid .divider {
   grid-column: 1 / -1;

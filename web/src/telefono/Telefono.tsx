@@ -236,7 +236,7 @@ export default function Telefono() {
         </div>
       )}
 
-      <CommandPreview />
+      <CommandPreview pictures={pictures} thumb={app.thumb} />
 
       {!asked && kinds && kinds.kinds.some((one) => one.sure.length + one.maybe.length > 0) && (
         <div className="by-kind" role="tablist" aria-label="Le foto per tipo">

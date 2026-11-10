@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import * as icons from '../icons.tsx'
-import { cancelCommandSpeech, commandPreviewAvailable, commandSpeech, commandSpeechAvailable, listenCommand, previewCommand } from './bridge.ts'
+import { cancelCommandSpeech, commandPreviewAvailable, commandSpeech, commandSpeechAvailable, commandTagsAvailable, findCommandTagged, listenCommand, previewCommand } from './bridge.ts'
 import type { CommandPreview as Preview, CommandSpeech } from './bridge.ts'
+import CommandTags from './CommandTags.tsx'
+import type { TagCommand } from './CommandTags.tsx'
+import type { Picture } from './select.ts'
 
 const ACTIONS = {
   search_photos: 'Ricerca di foto per tag',
@@ -13,10 +16,11 @@ const ACTIONS = {
 
 const MAX_LENGTH = 500
 
-export default function CommandPreview() {
+export default function CommandPreview({ pictures, thumb }: { pictures: Picture[]; thumb: (id: string) => string }) {
   const [available] = useState(commandPreviewAvailable)
+  const [canTag] = useState(commandTagsAvailable)
   const [text, setText] = useState('')
-  const [result, setResult] = useState<Preview | null>(null)
+  const [result, setResult] = useState<{ preview: Preview; tags: TagCommand | null; attempt: number } | null>(null)
   const [canListen, setCanListen] = useState(commandSpeechAvailable)
   const [speech, setSpeech] = useState<CommandSpeech>({ status: 'idle' })
   const hearing = useRef(false)
@@ -32,7 +36,7 @@ export default function CommandPreview() {
       if (next.status === 'result') {
         const words = next.text.trim()
         if (!words || words.length > MAX_LENGTH) {
-          setSpeech({ status: 'error', error: 'Riprova con un comando più breve.' })
+          setSpeech({ status: 'error', error: 'Riprova con un comando più breve o scrivilo.' })
           return
         }
         setText(words)
@@ -66,10 +70,29 @@ export default function CommandPreview() {
     listenCommand()
   }
 
+  function interpret(request: string) {
+    const preview = previewCommand(request)
+    let tags: TagCommand | null = null
+    if (canTag && !('error' in preview) && preview.slots.tag) {
+      if (preview.intent === 'search_photos') {
+        tags = { search: findCommandTagged(preview.slots.tag) }
+      } else if (preview.intent === 'add_tag' || preview.intent === 'remove_tag') {
+        tags = { action: preview.intent, tag: preview.slots.tag }
+      }
+    }
+    setResult((before) => ({ preview, tags, attempt: (before?.attempt ?? 0) + 1 }))
+  }
+
   if (!available) return null
+  const preview = result?.preview
 
   return (
-    <details className="card command-preview" onToggle={(event) => { if (!event.currentTarget.open) stopListening() }}>
+    <details className="card command-preview" onToggle={(event) => {
+      if (!event.currentTarget.open) {
+        stopListening()
+        setResult(null)
+      }
+    }}>
       <summary>Prova comandi offline</summary>
       <p>{canListen ? 'Scrivi o detta' : 'Scrivi'} una richiesta per vedere l’azione e i nomi che riconosce il modello sul telefono.</p>
       {(canListen || listening) && (
@@ -83,7 +106,7 @@ export default function CommandPreview() {
           event.preventDefault()
           const request = text.trim()
           if (!request || listening) return
-          setResult(previewCommand(request))
+          interpret(request)
           if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
         }}
       >
@@ -108,18 +131,19 @@ export default function CommandPreview() {
       <div role="status">
         {listening && <p>In ascolto…</p>}
         {speech.status === 'result' && <p>Trascrizione pronta. Puoi correggerla prima di provare il comando.</p>}
-        {speech.status === 'error' && <p>{speech.error} Puoi scrivere il comando.</p>}
-        {result && ('error' in result ? (
-          <p>{result.error}</p>
+        {speech.status === 'error' && <p>{speech.error}</p>}
+        {preview && ('error' in preview ? (
+          <p>{preview.error}</p>
         ) : (
           <>
-            <p><strong>{ACTIONS[result.intent]}</strong></p>
-            {result.slots.tag && <p>Tag «{result.slots.tag}»</p>}
-            {result.slots.title && <p>Brano «{result.slots.title}»</p>}
-            {result.slots.artist && <p>Artista «{result.slots.artist}»</p>}
+            <p><strong>{ACTIONS[preview.intent]}</strong></p>
+            {preview.slots.tag && <p>Tag «{preview.slots.tag}»</p>}
+            {preview.slots.title && <p>Brano «{preview.slots.title}»</p>}
+            {preview.slots.artist && <p>Artista «{preview.slots.artist}»</p>}
           </>
         ))}
       </div>
+      {result?.tags && <CommandTags key={result.attempt} command={result.tags} pictures={pictures} thumb={thumb} />}
     </details>
   )
 }

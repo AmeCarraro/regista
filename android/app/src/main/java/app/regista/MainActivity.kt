@@ -53,6 +53,7 @@ class MainActivity : Activity() {
     private lateinit var kinds: Kinds
     private lateinit var commands: CommandPreview
     private lateinit var speech: CommandSpeech
+    private lateinit var tags: ManualTags
     private var link: Link? = null
 
     /** The computer, when it answered last; null while it cannot be reached. */
@@ -82,6 +83,7 @@ class MainActivity : Activity() {
         songs = Songs(this)
         kinds = Kinds(this, library)
         commands = CommandPreview(assets)
+        tags = ManualTags(this, gallery)
         speech = CommandSpeech(this) {
             phonePage.evaluateJavascript("window.registaCommandSpeech && window.registaCommandSpeech()", null)
         }
@@ -133,6 +135,7 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         commands.close()
+        tags.close()
         super.onDestroy()
     }
 
@@ -303,7 +306,7 @@ class MainActivity : Activity() {
         page.settings.domStorageEnabled = true
         page.settings.allowFileAccess = false
         page.settings.allowContentAccess = false
-        val phone = Phone(this, library, places, gallery, memory, sight, update, songs, kinds, commands, speech)
+        val phone = Phone(this, library, places, gallery, memory, sight, update, songs, kinds, commands, speech, tags)
         // the page calls the app through this, and only this page can: it is the app's own, and nothing else opens in here
         page.addJavascriptInterface(phone, "Regista")
         page.webViewClient = object : WebViewClient() {

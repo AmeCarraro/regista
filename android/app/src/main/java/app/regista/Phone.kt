@@ -33,6 +33,7 @@ class Phone(
     private val kinds: Kinds,
     private val commands: CommandPreview,
     private val speech: CommandSpeech,
+    private val tags: ManualTags,
 ) {
     /** The pictures of this phone by kind (Kinds.sorted); null until the computer said what the kinds are. */
     @JavascriptInterface
@@ -55,6 +56,18 @@ class Phone(
 
     @JavascriptInterface
     fun commandSpeech(): String = speech.json()
+
+    @JavascriptInterface
+    fun applyCommandTags(action: String, tag: String, idsJson: String): String = commandTags { apply(action, tag, idsJson) }
+
+    @JavascriptInterface
+    fun findCommandTagged(tag: String): String = commandTags { find(tag) }
+
+    private fun commandTags(operation: ManualTags.() -> String): String = if (commands.available) {
+        tags.operation()
+    } else {
+        JSONObject().put("error", "La prova comandi non è disponibile in questa versione.").toString()
+    }
 
     // what the computer said about requests typed here, until the page takes it
     private val heard = ConcurrentHashMap<String, ConcurrentLinkedQueue<JSONObject>>()

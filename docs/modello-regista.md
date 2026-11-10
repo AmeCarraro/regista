@@ -184,6 +184,12 @@ Su un emulatore Android 13 sono stati riconosciuti `cani`, `Imagine` con artista
 
 Il microfono dell'anteprima compare da Android 12 se è disponibile il riconoscitore vocale locale. Da Android 13 viene verificato anche che l'italiano sia installato. Il pulsante chiede il permesso di Android al primo uso e inserisce la trascrizione nel campo modificabile. Un secondo tocco interpreta il testo. L'emulatore Android 13 non offre un servizio vocale locale e ha mantenuto disponibile la tastiera. La trascrizione effettiva resta da verificare sul Redmi. [Riferimento Android](https://developer.android.com/reference/android/speech/SpeechRecognizer)
 
+### Tag manuali nel pannello Android
+
+«Prova comandi offline» può aggiungere e togliere tag manuali alle foto che il telefono rende accessibili a Regista. Dopo l'interpretazione si scelgono fino a 120 foto. Il riepilogo mostra il tag e i nomi da confermare. Il telefono salva l'intera modifica in un'unica transazione nel database dell'app. Le immagini e i loro dati EXIF restano intatti.
+
+Nell'emulatore Android 13 in modalità aereo, il comando «metti Giappone su tutte queste foto» ha associato il tag solo alle due immagini fittizie scelte. Dopo aver riavviato Regista, «fammi vedere le foto di GIAPPONE» ha ritrovato entrambe. La ricerca usa la grafia normalizzata e verifica che l'identità della foto sia ancora quella salvata. I tag restano sul dispositivo. Un cambio dell'identità MediaStore o dell'impronta basata su dimensione e data di modifica richiede una nuova associazione.
+
 ### Esportazione compatta
 
 `export_commands.py --compact` salva i pesi ONNX in FP16 e li converte in FP32 per il calcolo. I tre checkpoint hanno mantenuto tutti i comandi decodificati sulle stesse 481 richieste di verifica per checkpoint. Il modello `v2` è passato da 199.766 a 102.507 byte. Il comando per `Imagine` di `John Lennon` ha restituito titolo e artista corretti anche nell'APK compatto sull'emulatore Android 13 in modalità aereo.

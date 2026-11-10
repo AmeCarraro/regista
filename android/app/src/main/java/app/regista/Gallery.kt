@@ -73,7 +73,7 @@ class Gallery(private val context: Context) {
                 found += Photo(
                     id = rows.getLong(0),
                     name = rows.getString(1) ?: "foto.jpg",
-                    stamp = "$modified-${rows.getLong(4)}",
+                    stamp = stamp(modified, rows.getLong(4)),
                     // the day as this phone's clock and calendar say it, like "2024-08-15": the computer could not know where the phone was
                     day = SimpleDateFormat("yyyy-MM-dd", Locale.ROOT).format(Date(taken)),
                 )
@@ -81,6 +81,42 @@ class Gallery(private val context: Context) {
         }
         return found
     }
+
+    /** Identities of selected photos currently visible to this app, without scanning the gallery. */
+    fun identities(ids: Collection<Long>): Map<Long, String> {
+        if (!allowed) throw SecurityException()
+        if (ids.isEmpty()) return emptyMap()
+        val versions = storeVersions()
+        val columns = mutableListOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.DATE_MODIFIED, MediaStore.Images.Media.SIZE)
+        if (Build.VERSION.SDK_INT >= 29) columns += MediaStore.MediaColumns.VOLUME_NAME
+        if (Build.VERSION.SDK_INT >= 30) columns += MediaStore.MediaColumns.GENERATION_ADDED
+        val found = HashMap<Long, String>()
+        for (batch in ids.chunked(500)) {
+            val among = "${MediaStore.Images.Media._ID} IN (${batch.joinToString(",") { "?" }})"
+            val arguments = batch.map { it.toString() }.toTypedArray()
+            val rows = context.contentResolver.query(pictures, columns.toTypedArray(), among, arguments, null)
+                ?: throw IOException("the gallery could not be read")
+            rows.use {
+                while (rows.moveToNext()) {
+                    val volume = if (Build.VERSION.SDK_INT >= 29) rows.getString(3).orEmpty() else ""
+                    val version = versions[volume] ?: continue
+                    val generation = if (Build.VERSION.SDK_INT >= 30) rows.getLong(4) else 0L
+                    found[rows.getLong(0)] = "$volume:$version:${stamp(rows.getLong(1), rows.getLong(2))}:$generation"
+                }
+            }
+        }
+        if (!allowed) throw SecurityException()
+        if (versions != storeVersions()) throw IOException("the gallery changed during the lookup")
+        return found
+    }
+
+    private fun storeVersions() = if (Build.VERSION.SDK_INT >= 29) {
+        MediaStore.getExternalVolumeNames(context).associateWith { MediaStore.getVersion(context, it) }
+    } else {
+        mapOf("" to MediaStore.getVersion(context))
+    }
+
+    private fun stamp(modified: Long, size: Long) = "$modified-$size"
 
     private fun address(id: Long): Uri = ContentUris.withAppendedId(pictures, id)
 
