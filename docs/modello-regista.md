@@ -190,6 +190,10 @@ Il microfono dell'anteprima compare da Android 12 se è disponibile il riconosci
 
 Nell'emulatore Android 13 in modalità aereo, il comando «metti Giappone su tutte queste foto» ha associato il tag solo alle due immagini fittizie scelte. Dopo aver riavviato Regista, «fammi vedere le foto di GIAPPONE» ha ritrovato entrambe. La ricerca usa la grafia normalizzata e verifica che l'identità della foto sia ancora quella salvata. I tag restano sul dispositivo. Un cambio dell'identità MediaStore o dell'impronta basata su dimensione e data di modifica richiede una nuova associazione.
 
+### Comandi musicali su Android
+
+L'anteprima cerca il titolo completo e, se il modello l'ha estratto, l'artista completo nella musica del telefono. Mostra le corrispondenze, comprese eventuali versioni omonime, e usa il lettore di Regista dopo il tocco sul brano. Se l'artista richiesto manca, l'app lascia vuoto il risultato. Nell'emulatore Android 13 in modalità aereo, «riproduci Imagine» ha trovato un WAV sintetico con quel titolo e la sessione multimediale Android ha confermato la riproduzione dopo il tocco.
+
 ### Esportazione compatta
 
 `export_commands.py --compact` salva i pesi ONNX in FP16 e li converte in FP32 per il calcolo. I tre checkpoint hanno mantenuto tutti i comandi decodificati sulle stesse 481 richieste di verifica per checkpoint. Il modello `v2` è passato da 199.766 a 102.507 byte. Il comando per `Imagine` di `John Lennon` ha restituito titolo e artista corretti anche nell'APK compatto sull'emulatore Android 13 in modalità aereo.

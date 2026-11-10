@@ -284,7 +284,8 @@ body {
   padding: 0;
 }
 
-.command-tags {
+.command-tags,
+.command-music {
   display: grid;
   gap: 10px;
   margin-top: 10px;

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import * as icons from '../icons.tsx'
 import { cancelCommandSpeech, commandPreviewAvailable, commandSpeech, commandSpeechAvailable, commandTagsAvailable, findCommandTagged, listenCommand, previewCommand } from './bridge.ts'
 import type { CommandPreview as Preview, CommandSpeech } from './bridge.ts'
+import CommandMusic from './CommandMusic.tsx'
 import CommandTags from './CommandTags.tsx'
 import type { TagCommand } from './CommandTags.tsx'
 import type { Picture } from './select.ts'
@@ -144,6 +145,9 @@ export default function CommandPreview({ pictures, thumb }: { pictures: Picture[
         ))}
       </div>
       {result?.tags && <CommandTags key={result.attempt} command={result.tags} pictures={pictures} thumb={thumb} />}
+      {preview && !('error' in preview) && preview.intent === 'play_song' && preview.slots.title && (
+        <CommandMusic key={result?.attempt} title={preview.slots.title} artist={preview.slots.artist} />
+      )}
     </details>
   )
 }
