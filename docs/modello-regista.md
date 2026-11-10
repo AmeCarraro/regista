@@ -235,3 +235,9 @@ Questa misura riguarda una classe per immagine nel benchmark. Per i tag automati
 ```powershell
 .venv/Scripts/python.exe training/export_vision.py
 ```
+
+`training/vision_suggestions.py` misura l'effetto di trattenere le etichette meno convincenti. Con obiettivo 90% in validazione ha scelto la soglia 0,60. Sul test ufficiale ha suggerito un'etichetta per 8.193 foto su 10.000, con 7.344 corrette, pari all'89,6% delle proposte. Senza soglia la precisione era 82,3% sullo stesso test. La soglia resta una misura sul benchmark, da verificare su foto di galleria e soggetti fuori dalle dieci classi.
+
+```powershell
+.venv/Scripts/python.exe training/vision_suggestions.py
+```
