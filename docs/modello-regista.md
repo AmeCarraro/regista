@@ -146,3 +146,14 @@ $env:PYTHONPATH = (Resolve-Path build/training-libs).Path
 .venv/Scripts/python.exe training/demo_catalog.py build/onnx-v2 'metti Giappone su tutte queste foto' --select 1 2
 .venv/Scripts/python.exe training/demo_catalog.py build/onnx-v2 'fammi vedere le foto di Giappone'
 ```
+
+### Quanto conta l'inizializzazione
+
+Con il corpus da 8.922 esempi e la stessa rete, abbiamo ripetuto 20 epoche sulla RTX 3050 Ti con i seed 7, 17 e 29. I comandi esatti in validazione sono stati rispettivamente 173, 175 e 185 su 294, contro 165 con il seed 42. La selezione si è basata sulla validazione.
+
+Il seed 29 passa da 20 a 24 comandi esatti su 49 nel nuovo test scritto a mano e da 4 a 7 rimozioni corrette su 9. Nel primo test scritto a mano scende da 29 a 22 su 48. Nel nuovo test propone quattro azioni quando serviva un chiarimento, contro due con il seed 42. Questa variabilità è un motivo per confrontare più addestramenti prima di promuovere un checkpoint.
+
+```powershell
+.venv/Scripts/python.exe training/commands.py --out build/commands-seed-29 train --references --seed 29
+.venv/Scripts/python.exe training/commands.py --out build/commands-seed-29 benchmark --suite fresh
+```
