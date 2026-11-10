@@ -137,3 +137,12 @@ Un addestramento da 20 epoche sulla RTX 3050 Ti ha distinto parole sconosciute b
 $env:PYTHONPATH = (Resolve-Path build/training-libs).Path
 .venv/Scripts/python.exe training/export_commands.py build/commands-v2 --out build/onnx-v2
 ```
+
+### Demo del comando e del catalogo
+
+`app/command_model.py` esegue il modello esportato con ONNX Runtime. Addestramento, esportazione e demo condividono il tokenizer e l'estrazione degli argomenti. La demo da terminale lavora su tre foto fittizie e usa un catalogo separato. Mostra le foto selezionate e il tag prima di chiedere conferma. In prova, rifiutare ha lasciato il catalogo vuoto. Confermare ha associato `Giappone` a due foto, che il comando di ricerca ha poi ritrovato.
+
+```powershell
+.venv/Scripts/python.exe training/demo_catalog.py build/onnx-v2 'metti Giappone su tutte queste foto' --select 1 2
+.venv/Scripts/python.exe training/demo_catalog.py build/onnx-v2 'fammi vedere le foto di Giappone'
+```

@@ -24,7 +24,7 @@ OPSET = 17
 def answers(model, outputs, texts, encoded):
     intents, slots = outputs
     choices = intents.argmax(1).tolist()
-    tags = read_slots(model, slots, choices)
+    tags = read_slots(model.boundaries, slots, choices)
     return [decode(text, words, INTENTS[choice], labels)
             for text, (_, words), choice, labels in zip(texts, encoded, choices, tags)]
 
