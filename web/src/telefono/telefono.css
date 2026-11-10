@@ -276,6 +276,10 @@ body {
   margin: 10px 0;
 }
 
+.command-preview > .quiet {
+  margin-top: 10px;
+}
+
 .command-preview .ask .go {
   padding: 0;
 }

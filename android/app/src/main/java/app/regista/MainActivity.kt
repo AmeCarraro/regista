@@ -5,6 +5,7 @@ import android.app.AlertDialog
 import android.app.KeyguardManager
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.hardware.biometrics.BiometricManager
 import android.hardware.biometrics.BiometricPrompt
 import android.net.Uri
@@ -51,6 +52,7 @@ class MainActivity : Activity() {
     private lateinit var songs: Songs
     private lateinit var kinds: Kinds
     private lateinit var commands: CommandPreview
+    private lateinit var speech: CommandSpeech
     private var link: Link? = null
 
     /** The computer, when it answered last; null while it cannot be reached. */
@@ -80,6 +82,9 @@ class MainActivity : Activity() {
         songs = Songs(this)
         kinds = Kinds(this, library)
         commands = CommandPreview(assets)
+        speech = CommandSpeech(this) {
+            phonePage.evaluateJavascript("window.registaCommandSpeech && window.registaCommandSpeech()", null)
+        }
         setContentView(R.layout.main)
         // the table of places takes a few seconds to read on an old phone: it is read now, in the background
         thread(name = "places") { places.ready() }
@@ -114,11 +119,13 @@ class MainActivity : Activity() {
         super.onStart()
         library.refresh()
         connect()
+        if (commands.available) speech.onStart()
     }
 
     /** The phone works for the computer only while the app is in front. */
     override fun onStop() {
         super.onStop()
+        speech.onStop()
         link?.close()
         link = null
         reached = null
@@ -131,6 +138,10 @@ class MainActivity : Activity() {
 
     override fun onRequestPermissionsResult(request: Int, permissions: Array<String>, results: IntArray) {
         super.onRequestPermissionsResult(request, permissions, results)
+        if (request == CommandSpeech.PERMISSION) {
+            speech.permissionResult(results.firstOrNull() == PackageManager.PERMISSION_GRANTED)
+            return
+        }
         library.refresh()
         link?.refresh()
     }
@@ -143,6 +154,7 @@ class MainActivity : Activity() {
 
     private fun show(tab: String) {
         this.tab = tab
+        if (tab != PHONE) speech.cancel()
         val paired = memory.paired
         // the pictures and the music are two views of the phone's own page
         phonePage.visibility = if (tab == PHONE || tab == MUSIC) View.VISIBLE else View.GONE
@@ -291,7 +303,7 @@ class MainActivity : Activity() {
         page.settings.domStorageEnabled = true
         page.settings.allowFileAccess = false
         page.settings.allowContentAccess = false
-        val phone = Phone(this, library, places, gallery, memory, sight, update, songs, kinds, commands)
+        val phone = Phone(this, library, places, gallery, memory, sight, update, songs, kinds, commands, speech)
         // the page calls the app through this, and only this page can: it is the app's own, and nothing else opens in here
         page.addJavascriptInterface(phone, "Regista")
         page.webViewClient = object : WebViewClient() {

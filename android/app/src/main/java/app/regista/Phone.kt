@@ -32,6 +32,7 @@ class Phone(
     private val songs: Songs,
     private val kinds: Kinds,
     private val commands: CommandPreview,
+    private val speech: CommandSpeech,
 ) {
     /** The pictures of this phone by kind (Kinds.sorted); null until the computer said what the kinds are. */
     @JavascriptInterface
@@ -42,6 +43,18 @@ class Phone(
 
     @JavascriptInterface
     fun previewCommand(text: String): String = commands.preview(text)
+
+    @JavascriptInterface
+    fun commandSpeechAvailable(): Boolean = speech.available
+
+    @JavascriptInterface
+    fun listenCommand() = app.runOnUiThread { if (app.tab == MainActivity.PHONE) speech.listen() }
+
+    @JavascriptInterface
+    fun cancelCommandSpeech() = app.runOnUiThread { speech.cancel() }
+
+    @JavascriptInterface
+    fun commandSpeech(): String = speech.json()
 
     // what the computer said about requests typed here, until the page takes it
     private val heard = ConcurrentHashMap<String, ConcurrentLinkedQueue<JSONObject>>()

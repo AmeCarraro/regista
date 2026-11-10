@@ -53,6 +53,11 @@ export type CommandPreview =
   | { intent: 'search_photos' | 'add_tag' | 'remove_tag' | 'play_song' | 'clarify'; slots: { tag?: string; title?: string; artist?: string } }
   | { error: string }
 
+export type CommandSpeech =
+  | { status: 'idle' | 'listening' }
+  | { status: 'result'; text: string }
+  | { status: 'error'; error: string }
+
 export type App = {
   pictures(): Picture[]
   reading(): Reading
@@ -154,6 +159,10 @@ type Native = {
   pinWidget(): void
   commandPreviewAvailable?(): boolean
   previewCommand?(text: string): string
+  commandSpeechAvailable?(): boolean
+  listenCommand?(): void
+  cancelCommandSpeech?(): void
+  commandSpeech?(): string
 }
 
 declare global {
@@ -163,6 +172,8 @@ declare global {
     registaAnswered?: (token: string) => void
     /** Called by the app when one of its tabs shows this page: "phone" for the pictures, "music" for the songs. */
     registaView?: (tab: string) => void
+    /** Called when the phone has news about the command microphone. */
+    registaCommandSpeech?: () => void
   }
 }
 
@@ -179,6 +190,29 @@ export function previewCommand(text: string): CommandPreview {
     // If the preview failed, the rest of the phone screen still works.
   }
   return { error: 'La prova dei comandi non è disponibile.' }
+}
+
+export function commandSpeechAvailable(): boolean {
+  const native = window.Regista
+  return !!(native?.listenCommand && native.cancelCommandSpeech && native.commandSpeech && native.commandSpeechAvailable?.())
+}
+
+export function listenCommand(): void {
+  window.Regista?.listenCommand?.()
+}
+
+export function cancelCommandSpeech(): void {
+  window.Regista?.cancelCommandSpeech?.()
+}
+
+export function commandSpeech(): CommandSpeech {
+  try {
+    const result = window.Regista?.commandSpeech?.()
+    if (result) return JSON.parse(result) as CommandSpeech
+  } catch {
+    // Keep the text field available if the native bridge fails.
+  }
+  return { status: 'error', error: 'La trascrizione non è disponibile.' }
 }
 
 // how long the computer is waited for when it says nothing: its model may have to be loaded first

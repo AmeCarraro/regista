@@ -194,6 +194,8 @@ Con `--grounded` la rete genera la frase con un segnaposto e il programma ci ins
 
 Su un emulatore Android 13 sono stati riconosciuti `cani`, `Imagine` con artista `John Lennon`, e il tag `Giappone`. L'ultimo comando è stato verificato in modalità aereo. La misura di RAM e latenza sul Redmi resta da fare.
 
+Il microfono dell'anteprima compare da Android 12 se è disponibile il riconoscitore vocale locale. Da Android 13 viene verificato anche che l'italiano sia installato. Il pulsante chiede il permesso di Android al primo uso e inserisce la trascrizione nel campo modificabile. Un secondo tocco interpreta il testo. L'emulatore Android 13 non offre un servizio vocale locale e ha mantenuto disponibile la tastiera. La trascrizione effettiva resta da verificare sul Redmi. [Riferimento Android](https://developer.android.com/reference/android/speech/SpeechRecognizer)
+
 ### Esportazione compatta
 
 `export_commands.py --compact` salva i pesi ONNX in FP16 e li converte in FP32 per il calcolo. I tre checkpoint hanno mantenuto tutti i comandi decodificati sulle stesse 481 richieste di verifica per checkpoint. Il modello `v2` è passato da 199.766 a 102.507 byte. Il comando per `Imagine` di `John Lennon` ha restituito titolo e artista corretti anche nell'APK compatto sull'emulatore Android 13 in modalità aereo.
