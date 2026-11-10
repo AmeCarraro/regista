@@ -216,3 +216,9 @@ Questa misura riguarda una classe per immagine nel benchmark. Per i tag automati
 # Salva la versione binaria di CIFAR-10 in build/vision-data/cifar-10-binary.tar.gz.
 .venv/Scripts/python.exe training/vision.py
 ```
+
+`training/export_vision.py` produce un ONNX da 677.200 byte e un file con le dieci etichette, la forma dell'ingresso RGB e l'hash del modello. L'esportazione ha restituito le stesse etichette del checkpoint PyTorch su 128 immagini del test ufficiale in ONNX Runtime su CPU Windows. La rete visiva non è ancora usata per suggerire tag nell'app.
+
+```powershell
+.venv/Scripts/python.exe training/export_vision.py
+```
