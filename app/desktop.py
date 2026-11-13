@@ -38,7 +38,7 @@ sys.path.insert(0, str(HERE / "app"))
 # started with pythonw.exe, as the icon does: no console, so what goes wrong is said in a small window
 WINDOWED = sys.stdout is None
 ICON = HERE / "tools" / "regista.ico"
-DEFAULTS = {"photos": "", "read_only": False, "phone": False, "port": 8090, "phone_port": 8443, "addresses": [], "models": "", "music": ""}
+DEFAULTS = {"photos": "", "read_only": False, "phone": False, "port": 8090, "phone_port": 8443, "addresses": [], "models": "", "music": "", "qwen_model": "qwen3-vl:2b-instruct", "photo_catalog": True}
 # a program started from here opens no window of its own
 NO_WINDOW = 0x08000000
 OLLAMA = "http://127.0.0.1:11434"
@@ -213,6 +213,8 @@ def environment(home: Path, chosen: dict, photos: Path, addresses: list[str]) ->
     models = Path(chosen["models"]) if chosen["models"] else HERE / "models" / "phone"
     return {
         "INDEX_DIR": str(home / "index"),
+        "REGISTA_QWEN_MODEL": chosen["qwen_model"],
+        "REGISTA_PHOTO_CATALOG": "1" if chosen["photo_catalog"] else "0",
         "PHOTOS_DIR": str(photos),
         "PHOTOS_LABEL": str(photos),
         "PHOTOS_READ_ONLY": "1" if chosen["read_only"] else "0",

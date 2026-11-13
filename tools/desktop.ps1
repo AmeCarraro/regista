@@ -2,7 +2,7 @@
 # libraries of requirements-desktop.txt, the app, the page and the table of places, laid out as this repository.
 # Its icon starts python\pythonw.exe app\desktop.py. No .exe is made here: Windows' Smart App Control, on in a new
 # Windows 11, blocks a program nobody signed, and Python's own programs are signed by those who make it.
-# The models are not in it: install.ps1 downloads them into its models\phone.
+# Qwen stays in Ollama; no photo models are distributed to the phone.
 # Usage: .\tools\desktop.ps1           with the Python of .venv, made the first time from requirements-desktop.txt
 #        .\tools\desktop.ps1 -Python C:\Python311\python.exe    makes .venv with that Python, if there is none yet
 param([string]$Python = 'py')

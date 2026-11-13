@@ -37,6 +37,8 @@ export type Suggested = {
 }
 
 export type Models = {
+  catalog_enabled?: boolean
+  configured_model?: string
   // unproven_gb: the memory of a card that is there, but that no model was seen running on yet
   hardware: { gpu: string; gpu_gb: number; ram_gb: number; cores: number; unproven_gb: number }
   models: ModelInfo[]
@@ -182,6 +184,7 @@ export type TestEvent =
   | { type: 'error'; message: string }
 
 export type Library = {
+  catalog_enabled?: boolean
   running: boolean
   done: number
   total: number

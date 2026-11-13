@@ -27,7 +27,6 @@ import llm
 import orchestrator
 import selftest
 from actions import Actions, Refused, collection_name
-from command_demo import demo_routes
 from embedder import ClipEmbedder
 from kinds import KINDS, MARGIN
 from music import KINDS as SONG_KINDS
@@ -91,6 +90,18 @@ phones = Phones(
 )
 music = Music(MUSIC_DIR)
 
+CATALOG_ENABLED = os.getenv("REGISTA_PHOTO_CATALOG", "1") != "0"
+photo_catalog = index_jobs = None
+if CATALOG_ENABLED:
+    from photo_catalog import PhotoCatalog
+    from photo_annotator import PhotoAnnotator
+    from index_jobs import IndexJobs
+    from catalog_library import CatalogLibrary
+    photo_catalog = PhotoCatalog(Path(INDEX_DIR) / "catalog.sqlite", places)
+    index_jobs = IndexJobs(photo_catalog, PhotoAnnotator())
+    photos = CatalogLibrary(photo_catalog, PHOTOS_DIR, INDEX_DIR, photos.embedder, places)
+
+
 # whether the folder is being read right now, and whether it changed meanwhile and must be read once more
 _reader = threading.Lock()
 _reading = _again = False
@@ -127,7 +138,8 @@ def _read() -> None:
         raise
     # the model is in memory after reading new pictures, but not when there were none:
     # load it now, so that the first search does not have to wait for it
-    photos.embedder.text("a photo")
+    if not CATALOG_ENABLED:
+        photos.embedder.text("a photo")
 
 
 # the doors of the phones that are open, by the address each one listens on
@@ -164,7 +176,11 @@ async def ready_the_director() -> None:
     try:
         models = await llm.installed()
         tests = selftest.load(INDEX_DIR)
-        director, _ = catalog.director_and_eyes(models, catalog.hardware(models, tests), tests)
+        if CATALOG_ENABLED:
+            from photo_annotator import MODEL
+            director = MODEL if any(model["name"] == MODEL for model in models) else None
+        else:
+            director, _ = catalog.director_and_eyes(models, catalog.hardware(models, tests), tests)
         if director:
             share = await llm.ready(director, tests.get(director, {}).get("gpu_share"))
             logger.info("%s is in memory, %s of it in video memory", director, share)
@@ -181,14 +197,27 @@ async def lifespan(app: FastAPI):
     except Exception:
         # without it the app still does everything else: the page says that no phone can connect
         logger.exception("the door of the phones did not open")
-    readying = asyncio.create_task(ready_the_director())
+    # The catalog does not load or run a model until an explicit interactive/start request.
+    readying = asyncio.create_task(ready_the_director()) if not CATALOG_ENABLED else None
     yield
-    readying.cancel()
+    if readying:
+        readying.cancel()
+    if index_jobs:
+        await index_jobs.close()
 
 
 # no page that lists what the service can do: nobody needs it, and it would load its parts from elsewhere
 app = FastAPI(title="regista", docs_url=None, openapi_url=None, redoc_url=None, lifespan=lifespan)
-app.include_router(demo_routes(os.getenv("REGISTA_COMMAND_BUNDLE"), Path(INDEX_DIR) / "demo-tags.sqlite"))
+if CATALOG_ENABLED:
+    from catalog_routes import routes as catalog_routes
+    app.include_router(catalog_routes(photo_catalog, index_jobs, Path(os.getenv("REGISTA_IMPORT_DIR", str(Path(PHOTOS_DIR) / "Importate dal telefono"))).resolve(),
+                                     read_only=not actions.writable(), phones=phones))
+    from image_questions import image_routes
+    app.include_router(image_routes(photo_catalog, index_jobs, Path(os.getenv("REGISTA_IMPORT_DIR", str(Path(PHOTOS_DIR) / "Importate dal telefono"))).resolve(),
+                                    read_only=not actions.writable()))
+else:
+    from command_demo import demo_routes
+    app.include_router(demo_routes(os.getenv("REGISTA_COMMAND_BUNDLE"), Path(INDEX_DIR) / "demo-tags.sqlite"))
 
 
 # the only ways in for a phone with no key yet: asking to come in, and asking whether the yes came
@@ -227,7 +256,7 @@ class Gate:
             await outer(message)
 
         # an original from a phone is counted by who writes it to disk, as it arrives
-        if not (scope["method"] == "PUT" and path.startswith(("/phone/transfers/", "/phone/music/"))):
+        if not (scope["method"] == "PUT" and path.startswith(("/phone/transfers/", "/phone/music/", "/phone/catalog/import"))):
             most = PAIRING_BODY if path in PAIRING else BODY
             declared = headers.get(b"content-length", "")
             if declared.isdigit() and int(declared) > most:
@@ -432,14 +461,28 @@ async def models():
         installed = await llm.installed()
     except Exception as exc:
         # Ollama is not running, or not reachable from here: the page says so instead of breaking
-        return {**catalog.describe([], catalog.hardware(), {}), "problem": f"{type(exc).__name__}: {exc}"}
+        result = {**catalog.describe([], catalog.hardware(), {}), "problem": f"{type(exc).__name__}: {exc}"}
+        if CATALOG_ENABLED:
+            from photo_annotator import MODEL
+            result.update(catalog_enabled=True, configured_model=MODEL, suggested=None)
+        return result
     tests = selftest.load(INDEX_DIR)
-    return catalog.describe(installed, catalog.hardware(installed, tests), tests)
+    described = catalog.describe(installed, catalog.hardware(installed, tests), tests)
+    if CATALOG_ENABLED:
+        from photo_annotator import MODEL
+        exact = next((model for model in installed if model["name"] == MODEL), None)
+        described.update(order={job: [MODEL] if exact else [] for job in ("tools", "chat", "vision")}, suggested=None,
+                         configured_model=MODEL, catalog_enabled=True)
+        if not exact:
+            described["problem"] = f"Modello configurato non installato: {MODEL}"
+    return described
 
 
 @app.post("/api/models/test")
 async def test_models():
     """Tries the models on this computer, as a stream of progress. It takes about a minute per model."""
+    if CATALOG_ENABLED:
+        raise HTTPException(409, "Il benchmark multi-modello è ritirato. Usa il collaudo del catalogo Qwen.")
     return stream(selftest.run(INDEX_DIR))
 
 
@@ -453,7 +496,11 @@ async def chat(body: ChatRequest):
         installed = await llm.installed()
         history = [message.model_dump() for message in body.messages]
         tests = selftest.load(INDEX_DIR)
-        reply = orchestrator.reply(history, body.model, installed, catalog.hardware(installed, tests), tests, photos, actions, body.selection, phones, places)
+        if CATALOG_ENABLED:
+            from catalog_assistant import reply as catalog_reply
+            reply = catalog_reply(history, installed, photos, actions, body.selection, phones)
+        else:
+            reply = orchestrator.reply(history, body.model, installed, catalog.hardware(installed, tests), tests, photos, actions, body.selection, phones, places)
         async for event in reply:
             yield event
 
@@ -469,7 +516,8 @@ def photo_library(request: Request):
         # the page asks again soon only while it is running
         "running": photos.state["running"] or _reading,
         "indexed": len(photos.photos),
-        "folder": os.getenv("PHOTOS_LABEL", ""),
+        "catalog_enabled": CATALOG_ENABLED,
+        "folder": "Catalogo PC" if CATALOG_ENABLED and getattr(request.state, "device", None) else os.getenv("PHOTOS_LABEL", ""),
         # which door the page came through: inside a phone's app it does not show what is only the computer's business
         "door": "phone" if getattr(request.state, "device", None) else "computer",
     }
@@ -773,23 +821,30 @@ def pair_wait(body: Ticket):
 def hello(request: Request):
     """Tells a phone that its key is good, and how many of its pictures this computer knows."""
     device = request.state.device
-    return {"computer": phones.computer, "photos": sum(1 for photo in phones.photos if photo["device"] == device)}
+    result = {"computer": phones.computer, "photos": sum(1 for photo in phones.photos if photo["device"] == device)}
+    return {**result, "protocol": 2, "catalog": True} if CATALOG_ENABLED else result
 
 
 @app.post("/phone/library")
 def library(body: Listing, request: Request):
+    if CATALOG_ENABLED:
+        raise HTTPException(426, "Aggiorna Regista sul telefono: ora si usa il catalogo del PC.")
     """A phone says which pictures it has; the answer is the ones this computer needs a small copy of."""
     return {"wanted": phones.wanted(request.state.device, [photo.model_dump() for photo in body.photos])}
 
 
 @app.post("/phone/photos")
 def small_copies(body: SmallCopies, request: Request):
+    if CATALOG_ENABLED:
+        raise HTTPException(426, "Aggiorna Regista sul telefono: ora si usa il catalogo del PC.")
     """A phone sends small copies of some of its pictures."""
     return {"kept": phones.add(request.state.device, [photo.model_dump() for photo in body.photos])}
 
 
 @app.post("/phone/vectors")
 def phone_vectors(body: Asked, request: Request):
+    if CATALOG_ENABLED:
+        raise HTTPException(426, "Aggiorna Regista sul telefono: ora si usa il catalogo del PC.")
     """What this computer has read in some pictures of a phone: an old phone takes a second to look at each, and this was done already."""
     return {"vectors": phones.vectors_of(request.state.device, [photo.model_dump() for photo in body.photos])}
 
@@ -841,6 +896,8 @@ async def _answer(text: str, device: str, gone, heard=None) -> dict | None:
 
 @app.post("/phone/ask")
 async def phone_ask(body: Typed, request: Request):
+    if CATALOG_ENABLED:
+        raise HTTPException(426, "Aggiorna Regista sul telefono: ora si usa il catalogo del PC.")
     """A request typed on a phone's own screen, understood by this computer's director: the pictures of that phone it
     asks for, all at the end (_answer). The apps made before /phone/ask/stream ask here."""
     return {"answer": await _answer(body.text, request.state.device, request.is_disconnected)}
@@ -848,6 +905,8 @@ async def phone_ask(body: Typed, request: Request):
 
 @app.post("/phone/ask/stream")
 async def phone_ask_stream(body: Typed, request: Request):
+    if CATALOG_ENABLED:
+        raise HTTPException(426, "Aggiorna Regista sul telefono: ora si usa il catalogo del PC.")
     """The same, as it is found: JSON lines, "looked" after each picture looked at and "photo" for each one that
     shows what was asked, by the phone's name of it; last "answer", as /phone/ask gives it."""
     device = request.state.device
@@ -927,6 +986,8 @@ def _fingerprint(path: Path) -> str:
 
 @app.get("/phone/models")
 def models_for_the_phone():
+    if CATALOG_ENABLED:
+        raise HTTPException(426, "Aggiorna Regista sul telefono: ora si usa il catalogo del PC.")
     """The models a phone can take from this computer to look at pictures by itself: each with its size and what it is.
     None when this computer does not have all of them."""
     paths = [PHONE_MODELS / name for name in MODEL_FILES]
@@ -937,6 +998,8 @@ def models_for_the_phone():
 
 @app.get("/phone/models/{name}")
 def model_for_the_phone(name: str):
+    if CATALOG_ENABLED:
+        raise HTTPException(426, "Aggiorna Regista sul telefono: ora si usa il catalogo del PC.")
     """One of those models, with what it is, for the phone to check what arrives."""
     path = PHONE_MODELS / name
     if name not in MODEL_FILES or not path.is_file():
@@ -1017,6 +1080,8 @@ async def song_for_the_phone(identifier: str):
 
 @app.get("/phone/kinds")
 async def kinds_for_the_phone():
+    if CATALOG_ENABLED:
+        raise HTTPException(426, "Aggiorna Regista sul telefono: ora si usa il catalogo del PC.")
     """What each kind of picture comes to in numbers (kinds.py), for a phone to sort its own pictures by kind,
     also away from home. They are the numbers of the same model the phone's pictures are read with."""
     said = await asyncio.to_thread(photos.kinds.sentences)

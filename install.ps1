@@ -4,10 +4,8 @@
 #
 # What Regista needs, and what this does about each:
 #   Ollama             runs the models. If missing, installs it with winget (Windows' own installer).
-#   the director       the lightest model that does the job well on this computer: qwen3.5:4b with an
-#                      NVIDIA card of 4 GB or more, or 16 GB of memory; granite4.1:3b otherwise. Qwen also
-#                      sees: it looks at the pictures a search finds, one by one, and keeps the right ones.
-#   the picture models two small models that read pictures and sentences, here and on the phone (220 MB).
+#   Qwen               one exact, explicitly configured tag for direction and persistent photo annotations.
+#                      No hardware-based fallback, CLIP download, or phone model download.
 #   the program        Regista itself, with the official Python inside it, signed by those who make it:
 #                      copied from this folder, nothing to download, no Docker.
 # Nothing is downloaded or installed without a yes typed here: one yes, for the list it shows.
@@ -28,6 +26,7 @@
 # the settings of Windows has to change.
 param(
     [string]$Photos = '',
+    [ValidatePattern('^[a-zA-Z0-9][a-zA-Z0-9_.:/-]{0,199}$')][string]$QwenModel = 'qwen3-vl:2b-instruct',
     [switch]$Check,
     [switch]$Yes,
     [string]$Icon = [Environment]::GetFolderPath('Desktop'),
@@ -69,6 +68,13 @@ $Into = [IO.Path]::GetFullPath($Into)
 
 Say "`nRegista: preparo questo computer.`n" 'Cyan'
 
+# what an earlier installation chose, offered again
+$before = $null
+$written = Join-Path $Into 'settings.json'
+if (Test-Path $written) { try { $before = Get-Content $written -Raw -Encoding UTF8 | ConvertFrom-Json } catch {} }
+
+if (-not $PSBoundParameters.ContainsKey('QwenModel') -and $before -and $before.qwen_model) { $QwenModel = $before.qwen_model }
+
 # ---- 1. the computer, and the model that fits it
 
 Say '1. Il computer' 'Cyan'
@@ -82,15 +88,9 @@ if ($computer.RamGB -lt 8) { $short += "almeno 8 GB di memoria (ne ha $($compute
 if ($computer.FreeGB -lt 10) { $short += "almeno 10 GB liberi sul disco (ce ne sono $($computer.FreeGB))" }
 if ($short) { Stop-Here "Questo computer non basta per Regista: servono $($short -join ', ')." }
 
-# The model that directs: the lightest that does the job well here. Measured on this project's own test
-# (selftest.py): qwen3.5:4b right in 17 cases of 17 and 98 decisions of 99, granite4.1:3b in 13 of 17.
-# Qwen wants a graphics card of 4 GB, or the memory to run on the processor at a bearable speed.
-if (($computer.GpuKind -eq 'nvidia' -and $computer.GpuGB -ge 4) -or $computer.RamGB -ge 16) {
-    $model = [pscustomobject]@{ Name = 'qwen3.5:4b'; GB = 3.3; Why = 'il migliore che ci sta: alle prove ha capito 98 richieste su 99, e guarda le foto trovate una per una' }
-} else {
-    $model = [pscustomobject]@{ Name = 'granite4.1:3b'; GB = 2.1; Why = 'il più leggero che fa bene il lavoro con questa memoria' }
-}
-Say "   Modello regista: $($model.Name), $($model.Why)." 'Green'
+# One explicit model for direction and vision, never selected from hardware or other installed tags.
+$model = [pscustomobject]@{ Name = $QwenModel; GB = 2.0; Why = 'modello unico esplicitamente configurato; qualità da collaudare' }
+Say "   Modello configurato: $($model.Name)." 'Green'
 
 # ---- 2. what is there, and what is missing
 
@@ -101,10 +101,7 @@ try {
     $ollamaOn = $true
 } catch {}
 $ollama = $ollamaOn -or (Test-Command 'ollama') -or (Test-Path (Join-Path $env:LOCALAPPDATA 'Programs\Ollama\ollama.exe'))
-# a model that directs well already there is enough: nothing is downloaded twice. A copy of Qwen made
-# without its eyes, by an earlier version of this file, is not: Qwen whole shares its files, and adds the eyes.
-$present = $models | Where-Object { $_ -in @('qwen3.5:4b', 'granite4.1:3b') } | Select-Object -First 1
-$sees = @('vision.onnx', 'text.onnx', 'vocab.txt', 'dense.safetensors') | Where-Object { -not (Test-Path (Join-Path $Into "models\phone\$_")) }
+$present = $models | Where-Object { $_ -eq $QwenModel } | Select-Object -First 1
 $size = (Get-ChildItem $program -Recurse -File | Measure-Object -Property Length -Sum).Sum / 1GB
 
 Say "`n2. Cosa serve" 'Cyan'
@@ -113,8 +110,7 @@ Say ("   Ollama:          " + $(if ($ollamaOn) { 'c''è ed è acceso' } elseif (
 if (-not $ollama) { $downloads += [pscustomobject]@{ What = 'Ollama'; GB = 1.0 } }
 Say ("   Modello regista: " + $(if ($present) { "c'è ($present)" } else { "da scaricare ($($model.Name), $(Size $model.GB))" }))
 if (-not $present) { $downloads += [pscustomobject]@{ What = $model.Name; GB = $model.GB } }
-Say ("   Modelli che leggono le foto: " + $(if ($sees) { 'da scaricare (0,2 GB)' } else { 'ci sono' }))
-if ($sees) { $downloads += [pscustomobject]@{ What = 'i modelli che leggono le foto'; GB = 0.2 } }
+Say '   Il telefono usa il catalogo PC: nessun modello foto da scaricare sul telefono.'
 Say "   Il programma:    è in questa cartella ($(Size $size)): lo copio in $Into"
 if ($Check) { exit 0 }
 
@@ -130,7 +126,7 @@ if (-not $ollama) {
 if (-not $ollamaOn) {
     # Ollama starts by itself once installed, and at every start of Windows; after it was closed, from here
     $ollamaApp = Join-Path $env:LOCALAPPDATA 'Programs\Ollama\ollama app.exe'
-    if (Test-Path $ollamaApp) { Start-Process $ollamaApp }
+    if (Test-Path $ollamaApp) { Start-Process $ollamaApp -WindowStyle Hidden }
     foreach ($second in 1..60) {
         try { Invoke-RestMethod http://127.0.0.1:11434/api/version -TimeoutSec 2 | Out-Null; $ollamaOn = $true; break } catch { Start-Sleep -Seconds 1 }
     }
@@ -142,16 +138,6 @@ if (-not $present) {
     ollama pull $model.Name
     if ($LASTEXITCODE -ne 0) { Stop-Here "Non sono riuscito a scaricare il modello. Riprova più tardi rilanciando questo file." }
 }
-
-if ($sees) {
-    & (Join-Path $here 'tools\phone-models.ps1') -Into (Join-Path $Into 'models\phone')
-    if ($LASTEXITCODE -ne 0) { Stop-Here 'I modelli che leggono le foto non sono arrivati interi. Rilancia questo file.' }
-}
-
-# what an earlier installation chose, offered again
-$before = $null
-$written = Join-Path $Into 'settings.json'
-if (Test-Path $written) { try { $before = Get-Content $written -Raw -Encoding UTF8 | ConvertFrom-Json } catch {} }
 
 # ---- 3. which pictures
 
@@ -203,7 +189,7 @@ if ($FromDocker) {
     }
 }
 
-$settings = [ordered]@{ photos = $Photos; read_only = $false; phone = ($Phone -eq 'yes'); port = $Port; phone_port = $PhonePort; addresses = @() }
+$settings = [ordered]@{ photos = $Photos; read_only = $false; phone = ($Phone -eq 'yes'); port = $Port; phone_port = $PhonePort; addresses = @(); qwen_model = $QwenModel; photo_catalog = $true }
 [IO.File]::WriteAllText((Join-Path $Into 'settings.json'), ($settings | ConvertTo-Json), (New-Object Text.UTF8Encoding $false))
 
 $python = Join-Path $Into 'python\pythonw.exe'

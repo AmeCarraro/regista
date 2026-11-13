@@ -11,6 +11,9 @@ services:
       # this PC. Closed to the network unless the app is started with .\run.ps1 -Phone
       - "${PHONE_BIND:-127.0.0.1}:${PHONE_HOST_PORT:-8443}:8443"
     environment:
+      REGISTA_PHOTO_CATALOG: ${REGISTA_PHOTO_CATALOG:-1}
+      REGISTA_QWEN_MODEL: ${REGISTA_QWEN_MODEL:-qwen3-vl:2b-instruct}
+      PHOTOS_READ_ONLY: ${PHOTOS_READ_ONLY:-false}
       OLLAMA_URL: http://host.docker.internal:11434
       PHONE_OPEN: ${PHONE_OPEN:-0}
       # the port a phone knocks at, written in the link that pairs it

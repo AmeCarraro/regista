@@ -123,10 +123,10 @@ export default function Side({ models, library, changes, phone, onPhoneChange, t
 
       <nav className="views" aria-label="Cosa mostrare">
         <button type="button" aria-pressed={view === 'chat'} onClick={() => onView('chat')}>
-          <icons.Talk /> Chat
+          <icons.Talk /> Assistente
         </button>
         <button type="button" aria-pressed={view === 'photos'} onClick={() => onView('photos')}>
-          <icons.Picture /> Foto
+          <icons.Picture /> Catalogo foto
         </button>
         <button type="button" aria-pressed={view === 'music'} onClick={() => onView('music')}>
           <icons.Note /> Musica
@@ -169,15 +169,16 @@ export default function Side({ models, library, changes, phone, onPhoneChange, t
         <h2>
           <icons.Layers /> Modelli locali
         </h2>
-        {models?.problem && <p className="fine warn">Non raggiungo Ollama: è acceso? ({models.problem})</p>}
+        {models?.problem && <p className="fine warn">{models.problem}</p>}
+        {models?.catalog_enabled && <p className="fine mono">{models.configured_model}</p>}
         {models && !models.problem && models.models.length === 0 && <p className="fine">Nessun modello installato in Ollama.</p>}
         <ul className="models">
-          {models?.models.map((model) => (
+          {models?.models.filter(model => !models.catalog_enabled || model.name === models.configured_model).map((model) => (
             <ModelRow key={model.name} model={model} director={model.name === director} />
           ))}
         </ul>
         {models?.suggested && !models.problem && <Advice suggested={models.suggested} />}
-        {testing ? (
+        {!models?.catalog_enabled && (testing ? (
           <p className="fine progress">
             Provo <b className="mono">{testing.model}</b>: {testing.done} di {testing.of}
             <span className="bar">
@@ -185,13 +186,12 @@ export default function Side({ models, library, changes, phone, onPhoneChange, t
             </span>
           </p>
         ) : (
-          <button type="button" className="quiet-button" onClick={onTest} disabled={!models || models.models.length === 0}>
+          <button type="button" className="quiet-button" onClick={onTest} disabled={!models || models.models.length === 0 || !!models.catalog_enabled}>
             <icons.Bolt /> Prova i modelli su questo computer
           </button>
-        )}
+        ))}
         <p className="fine">
-          Il "regista" legge ogni richiesta e decide cosa fare. Viene scelto tra i modelli che stanno in questo computer,
-          preferendo chi, alla prova, usa meglio gli strumenti.
+          Il modello Qwen configurato interpreta le richieste. Il catalogo conserva tag e descrizioni: le ricerche non riesaminano le immagini.
         </p>
       </section>
 

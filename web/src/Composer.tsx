@@ -70,7 +70,7 @@ export default function Composer({ models, model, onModel, busy, onSend, onStop 
         onKeyDown={sendOnEnter}
       />
       <div className="composer-bar">
-        <div className="picker" ref={picker}>
+        {models?.catalog_enabled ? <span className="pill"><icons.Spark />{models.configured_model}</span> : <div className="picker" ref={picker}>
           <button type="button" className="pill" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen(!open)}>
             <icons.Spark />
             {model === 'auto' ? 'Automatico' : model}
@@ -103,7 +103,7 @@ export default function Composer({ models, model, onModel, busy, onSend, onStop 
               {choices.length === 0 && <li className="none">Nessun modello locale trovato.</li>}
             </ul>
           )}
-        </div>
+        </div>}
         {busy ? (
           <button type="button" className="round ghost" aria-label="Ferma" onClick={onStop}>
             <icons.Stop />
