@@ -1,6 +1,7 @@
 package app.regista
 
 import android.os.Build
+import android.net.Uri
 import android.util.Base64
 import org.json.JSONArray
 import org.json.JSONObject
@@ -56,6 +57,7 @@ class Link(
 
     /** How many originals went to the computer in this round. */
     @Volatile private var sentNow = 0
+    private var catalogProtocol = false
 
     fun close() {
         open = false
@@ -91,15 +93,15 @@ class Link(
                         update?.let { newer(reached, it) }
                         if (describe(reached)) {
                             told = System.currentTimeMillis()
-                            borrow(reached)
+
                         }
-                        kinds?.let { learnKinds(reached, it) }
+
                     }
                     // once the computer knows the pictures, the ones the user chose on the phone can go
-                    askToTake(reached)
-                    if (memory.wantsSight && !sight.ready) takeSight(reached)
+                    if (catalogProtocol) importCatalog(reached) else askToTake(reached)
+
                     update?.let { if (it.wanted) takeUpdate(reached, it) }
-                    !send(reached)
+                    if (catalogProtocol) true else !send(reached)
                 } finally {
                     ROUNDS.unlock()
                 }
@@ -140,6 +142,7 @@ class Link(
         try {
             val reached = reach() ?: return 0
             if (!describe(reached)) return 0
+            if (catalogProtocol) { importCatalog(reached); return sentNow }
             askToTake(reached)
             // a few times, as the computer asks for what was just put in line
             for (round in 1..20) {
@@ -165,7 +168,9 @@ class Link(
     private fun first(ways: List<Computer>): Computer? {
         for (way in ways) {
             try {
-                way.ask("GET", "/phone/hello")
+                val hello = way.ask("GET", "/phone/hello")
+                if (hello.optInt("protocol", 1) != 2) throw Refused(426, "Aggiorna Regista sul PC: serve il protocollo catalogo 2.")
+                catalogProtocol = hello.optBoolean("catalog", false)
                 memory.worked(way.address)
                 return way
             } catch (refused: Refused) {
@@ -205,6 +210,7 @@ class Link(
             return false
         }
         val photos = gallery.all()
+        if (catalogProtocol) { queueNew(photos); return true }
         val listing = JSONArray()
         photos.forEach { listing.put(JSONObject().put("id", it.id.toString()).put("stamp", it.stamp)) }
         val answer = computer.ask("POST", "/phone/library", JSONObject().put("photos", listing)).getJSONArray("wanted")
@@ -234,67 +240,6 @@ class Link(
         return true
     }
 
-    /**
-     * Takes what the computer read in the pictures this phone has not looked at yet: it read their
-     * small copies with the same model the phone has, and an old phone takes a second for each.
-     */
-    /** Takes from the computer what each kind of picture comes to in numbers: then the phone sorts its pictures by kind by itself. */
-    private fun learnKinds(computer: Computer, kinds: Kinds) {
-        try {
-            kinds.keep(computer.ask("GET", "/phone/kinds"))
-        } catch (older: Refused) {
-            // a computer from before the kinds: the phone shows its pictures as they are
-            if (older.status != 404) throw older
-        }
-    }
-
-    private fun borrow(computer: Computer) {
-        var kept = 0
-        for (batch in library.notLookedAt().chunked(500)) {
-            if (!open) return
-            val asked = JSONArray()
-            batch.forEach { (id, stamp) -> asked.put(JSONObject().put("id", id.toString()).put("stamp", stamp)) }
-            val vectors = computer.ask("POST", "/phone/vectors", JSONObject().put("photos", asked)).optJSONObject("vectors") ?: return
-            kept += library.keep(vectors, batch.toMap())
-        }
-        if (kept > 0) tell("Il computer mi ha detto cosa mostrano $kept foto: non devo guardarle una a una.")
-    }
-
-    /** Takes from the computer the two models with which this phone looks at pictures by itself. Each file is checked as it arrives. */
-    private fun takeSight(computer: Computer) {
-        val listed = computer.ask("GET", "/phone/models").getJSONArray("models")
-        if (listed.length() == 0) {
-            memory.wantsSight = false
-            tell("Il computer non ha il modello da darmi: va scaricato prima sul computer.")
-            return
-        }
-        val files = (0 until listed.length()).map { listed.getJSONObject(it) }
-        sight.size = files.sumOf { it.getLong("size") }
-        sight.got = files.filter { sight.has(it.getString("name"), it.getLong("size")) }.sumOf { it.getLong("size") }
-        var told = 0L
-        for (file in files) {
-            val name = file.getString("name")
-            if (sight.has(name, file.getLong("size"))) continue
-            val kept = computer.fetch("/phone/models/$name") { stream, fingerprint ->
-                sight.keep(name, stream, fingerprint) { read ->
-                    sight.got += read
-                    if (sight.got - told > 4_000_000) {
-                        told = sight.got
-                        tell("Prendo dal computer il modello per guardare le foto: ${sight.got / 1_000_000} di ${sight.size / 1_000_000} MB")
-                    }
-                }
-            }
-            if (!kept) {
-                tell("Il modello non è arrivato intero: riprovo.")
-                return
-            }
-        }
-        if (sight.ready) {
-            tell("Il modello è sul telefono: ora guardo le foto, una alla volta.")
-            changed()
-        }
-    }
-
     /** The app the computer has for this phone's processor, the kind it runs best first: {"kind", "version", "size", "sha256"}, or null. */
     private fun offered(computer: Computer): JSONObject? =
         computer.ask("GET", "/phone/app?kinds=${Build.SUPPORTED_ABIS.joinToString(",")}").optJSONObject("app")
@@ -322,6 +267,71 @@ class Link(
             update.size = 0
         }
         tell(if (handed) "Android ti chiede se installare l'app nuova: dopo, questa si chiude e la riapri." else "L'app nuova non è arrivata intera: riprova.")
+    }
+
+    /** All Android-visible folders, originals only; the PC deduplicates bytes before tagging. */
+    private fun importCatalog(computer: Computer) {
+        val request = computer.ask("GET", "/phone/catalog/import-request").optString("request_id")
+        val all = gallery.all()
+        val offered = memory.offers().toSet()
+        val photos = if (request.isNotEmpty()) all else all.filter { it.id.toString() in offered }
+        if (photos.isEmpty() && request.isEmpty()) return
+        var copied = 0
+        var duplicates = 0
+        var failed = 0
+        fun progress(done: Boolean) {
+            if (request.isNotEmpty()) computer.ask("POST", "/phone/catalog/progress", JSONObject()
+                .put("request_id", request).put("total", photos.size).put("copied", copied).put("duplicates", duplicates)
+                .put("done", done).put("error", if (failed > 0) "$failed foto non leggibili o non supportate; riprova l’importazione." else ""))
+        }
+        progress(false)
+        for (batch in photos.chunked(100)) {
+            if (!open) return
+            val identities = gallery.identities(batch.map { it.id })
+            val hashes = HashMap<String, String>()
+            val sources = HashMap<String, android.net.Uri>()
+            val manifest = JSONArray()
+            for (photo in batch) {
+                if (!open) return
+                val source = gallery.source(photo.id, whole = true)
+                val identity = identities[photo.id]
+                if (source == null || identity == null) { failed++; continue }
+                val hash = memory.photoHash(photo.id, identity) ?: gallery.fingerprint(source)?.also { memory.photoHash(photo.id, identity, it) }
+                if (hash == null) { failed++; continue }
+                hashes[photo.id.toString()] = hash
+                sources[photo.id.toString()] = source
+                manifest.put(JSONObject().put("media", photo.id.toString()).put("stamp", identity).put("sha256", hash))
+            }
+            val missing = computer.ask("POST", "/phone/catalog/missing", JSONObject().put("protocol", 2).put("photos", manifest)).getJSONArray("wanted")
+            val wanted = (0 until missing.length()).map { missing.getString(it) }.toSet()
+            for (photo in batch) {
+                if (!open) return
+                val media = photo.id.toString()
+                val hash = hashes[media] ?: continue
+                val identity = identities[photo.id] ?: continue
+                if (media !in wanted) {
+                    duplicates++
+                    memory.offered(listOf(media))
+                    continue
+                }
+                try {
+                    // Recheck identity after hashing: no cached hash may authorize changed bytes.
+                    if (gallery.identities(listOf(photo.id))[photo.id] != identity) { failed++; continue }
+                    val stream = gallery.open(sources[media]!!) ?: throw IOException("Foto non leggibile")
+                    val answer = computer.send("/phone/catalog/import?media=${Uri.encode(media)}&stamp=${Uri.encode(identity)}&name=${Uri.encode(photo.name)}", 0, stream, hash)
+                    if (answer.optBoolean("duplicate")) duplicates++ else { copied++; sentNow++ }
+                    memory.offered(listOf(media))
+                } catch (refused: Refused) {
+                    if (refused.status == 401) throw refused
+                    failed++
+                }
+                tell("Importazione: $copied copiate, $duplicates già presenti, $failed errori, su ${photos.size}. Tag in pausa.")
+            }
+            progress(false)
+        }
+        progress(true)
+        if (copied > 0) memory.copied(copied)
+        tell("Importazione completata: $copied copiate, $duplicates già presenti, $failed errori. Avvia i tag dal PC quando vuoi.")
     }
 
     /** Puts in line for the computer the pictures added to the gallery since the user asked for the new ones to go by themselves. */

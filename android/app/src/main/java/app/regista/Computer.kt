@@ -275,6 +275,13 @@ class Memory(context: Context) {
         kept.edit().clear().putBoolean("sight", sight).apply()
     }
 
+    fun photoHash(id: Long, identity: String): String? = kept.getString("hash:$id", null)
+        ?.takeIf { it.startsWith("$identity|") }?.substringAfterLast('|')
+
+    fun photoHash(id: Long, identity: String, hash: String) {
+        kept.edit().putString("hash:$id", "$identity|$hash").apply()
+    }
+
     /** Whether the new pictures of this phone go to the computer by themselves, on a Wi-Fi where it answers (CopyJob). */
     var autoCopy: Boolean
         get() = kept.getBoolean("auto", false)

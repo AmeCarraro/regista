@@ -60,7 +60,7 @@ class Library(context: Context, private val gallery: Gallery, private val places
         thread(name = "library", priority = Thread.MIN_PRIORITY) {
             try {
                 read()
-                if (sight.ready) look()
+                // Metadata only: no photo inference on the phone.
             } finally {
                 reading.set(false)
             }

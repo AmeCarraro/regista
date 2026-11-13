@@ -126,6 +126,10 @@ export type App = {
 
 /** What the app offers the page: every answer is text, as JSON. */
 type Native = {
+  catalogRequest?(path: string, body: string, token: string): void
+  catalogResponse?(token: string): string
+  cancelCatalog?(token: string): void
+  importAll?(): string
   pictures(): string
   reading(): string
   state(): string

@@ -18,7 +18,7 @@ android {
         // A larger number at every build, the minutes since 2026 began: a phone takes from the computer an app
         // with a larger one than its own, with no cable (Update.kt). The last number set by hand was 3.
         versionCode = (System.currentTimeMillis() / 60_000 - 29_453_760).toInt()
-        versionName = "0.4"
+        versionName = "0.5"
     }
 
     // One app file for each kind of phone, each with only its own copy of the engine that runs the models:
@@ -72,6 +72,5 @@ android {
 }
 
 dependencies {
-    // the engine that runs the two models with which the phone looks at pictures by itself (Microsoft, MIT licence)
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.29.0")
+    // Photo models run only on the PC; no neural runtime is shipped to the phone.
 }

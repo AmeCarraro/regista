@@ -119,7 +119,7 @@ class MainActivity : Activity() {
 
     override fun onStart() {
         super.onStart()
-        library.refresh()
+        // The PC owns the photo catalog; Android only lists files when importing.
         connect()
         if (commands.available) speech.onStart()
     }
@@ -145,7 +145,7 @@ class MainActivity : Activity() {
             speech.permissionResult(results.firstOrNull() == PackageManager.PERMISSION_GRANTED)
             return
         }
-        library.refresh()
+        // The PC owns the photo catalog; Android only lists files when importing.
         link?.refresh()
     }
 
@@ -579,7 +579,7 @@ class MainActivity : Activity() {
             }
             // the gallery is not as the computer knows it any more
             runOnUiThread {
-                library.refresh()
+                // The PC owns the photo catalog; Android only lists files when importing.
                 link?.refresh()
             }
         }

@@ -202,6 +202,45 @@ class Phone(
         }
     }
 
+    private val catalogAnswers = ConcurrentHashMap<String, String>()
+
+    /** Only catalog reads are exposed to the local page; pairing keys stay native. */
+    @JavascriptInterface
+    fun catalogRequest(path: String, body: String, token: String) {
+        if (!TOKEN.matches(token) || catalogAnswers.size >= 32) return
+        if (path !in setOf("/api/catalog/status", "/api/catalog/search", "/api/catalog/plan")) return
+        catalogAnswers[token] = ""
+        thread(name = "catalog") {
+            val result = try {
+                val computer = app.reached ?: throw IOException("Computer non raggiungibile: accendilo e collegalo.")
+                val payload = if (body.isBlank()) null else JSONObject(body)
+                computer.ask(if (payload == null) "GET" else "POST", path, payload)
+            } catch (problem: Exception) {
+                JSONObject().put("error", problem.message ?: "Computer non raggiungibile")
+            }
+            if (catalogAnswers.containsKey(token)) catalogAnswers[token] = result.toString()
+        }
+    }
+
+    @JavascriptInterface
+    fun catalogResponse(token: String): String {
+        val result = catalogAnswers[token] ?: return ""
+        if (result.isNotEmpty()) catalogAnswers.remove(token)
+        return result
+    }
+
+    @JavascriptInterface
+    fun cancelCatalog(token: String) { catalogAnswers.remove(token) }
+
+    @JavascriptInterface
+    fun importAll(): String {
+        if (!gallery.allowed) return JSONObject().put("error", "Concedi l’accesso alle foto nelle impostazioni Android.").toString()
+        val photos = gallery.all()
+        memory.offer(photos.map { it.id.toString() })
+        app.runOnUiThread { app.offered(photos.size) }
+        return JSONObject().put("queued", photos.size).toString()
+    }
+
     @JavascriptInterface
     fun pictures(): String = library.json()
 
@@ -345,6 +384,31 @@ class Phone(
         val address = request.url
         val path = address.path.orEmpty()
         if (address.scheme != "https" || address.host != HOST) return refused()
+        if (Regex("/catalog-media/[a-f0-9]{64}/(thumb|full)").matches(path)) {
+            val computer = app.reached ?: return refused(503)
+            val remote = path.removePrefix("/catalog-media/")
+            return try {
+                var data = ByteArray(0)
+                val valid = computer.fetch("/api/catalog/photos/$remote") { input, expected ->
+                    val bytes = java.io.ByteArrayOutputStream()
+                    val digest = java.security.MessageDigest.getInstance("SHA-256")
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        if (bytes.size() + read > 64 * 1024 * 1024) throw IOException("Immagine troppo grande")
+                        digest.update(buffer, 0, read)
+                        bytes.write(buffer, 0, read)
+                    }
+                    data = bytes.toByteArray()
+                    digest.digest().joinToString("") { "%02x".format(it) }.equals(expected, ignoreCase = true)
+                }
+                if (!valid) return refused(502)
+                val stream = ByteArrayInputStream(data)
+                val type = java.net.URLConnection.guessContentTypeFromStream(stream) ?: "image/jpeg"
+                WebResourceResponse(type, null, 200, "OK", mapOf("Cache-Control" to "no-store"), stream)
+            } catch (problem: IOException) { refused(503) }
+        }
         if (path.startsWith("/thumb/")) {
             val small = path.removePrefix("/thumb/").toLongOrNull()?.let(gallery::small) ?: return refused(404)
             return WebResourceResponse("image/jpeg", null, 200, "OK", mapOf("Cache-Control" to "max-age=86400"), ByteArrayInputStream(small))
