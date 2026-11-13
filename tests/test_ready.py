@@ -50,12 +50,12 @@ def test_a_model_not_in_memory_is_loaded_with_the_context_every_call_uses(monkey
     assert ollama.asked == [{"model": "qwen3.5:4b", "keep_alive": "30m", "options": {"num_ctx": llm.NUM_CTX}}]
 
 
-def test_a_model_loaded_with_clearly_less_in_video_memory_than_it_can_have_is_loaded_again_once(monkeypatch):
+def test_an_existing_allocation_is_never_unloaded_even_when_gpu_share_is_lower(monkeypatch):
     ollama = Ollama(now=0.37, again=0.48)
     monkeypatch.setattr(llm.httpx2, "AsyncClient", ollama)
 
-    assert asyncio.run(llm.ready("qwen3.5:4b", 0.48)) == 0.48
-    assert [request["keep_alive"] for request in ollama.asked] == [0, "30m"]
+    assert asyncio.run(llm.ready("qwen3.5:4b", 0.48)) == 0.37
+    assert ollama.asked == []
 
 
 def test_a_model_already_in_memory_as_it_should_be_is_left_alone(monkeypatch):

@@ -2,13 +2,14 @@
 
 Ollama is the only thing that knows the models. Nothing here chooses one: that is catalog.py.
 """
-import asyncio
 import base64
 import json
 import os
 import re
 
 import httpx2
+
+from inference_scheduler import scheduler
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
 # 6144 is the largest context that keeps a 3B model entirely inside 4 GB of video memory
@@ -17,6 +18,14 @@ NUM_CTX = int(os.getenv("NUM_CTX", "6144"))
 # then a search after a pause waits 15 to 20 seconds for the model to be loaded again. Half an hour,
 # and the memory goes back to the computer when Regista is not being used.
 KEEP_ALIVE = os.getenv("KEEP_ALIVE", "30m")
+
+
+async def model_digest(name: str) -> str:
+    """Read the exact tag without collapsing aliases or changing any model allocation."""
+    async with httpx2.AsyncClient(timeout=20) as client:
+        response = await client.get(f'{OLLAMA_URL}/api/tags')
+        response.raise_for_status()
+        return next((model['digest'] for model in response.json().get('models', []) if model['name'] == name), '')
 
 
 async def installed() -> list[dict]:
@@ -28,15 +37,16 @@ async def installed() -> list[dict]:
         running.raise_for_status()
         loaded = {model["digest"]: model for model in running.json().get("models", [])}
 
-        # the same model under two names, "llama3.2:3b" and "llama3.2:latest", is listed once, by its exact name
+        # Preserve every exact installed tag, including aliases sharing a digest.
         unique: dict[str, dict] = {}
         for tag in tags.json()["models"]:
-            known = unique.get(tag["digest"])
+            known = unique.get(tag["name"])
             if known is None or known["name"].endswith(":latest"):
-                unique[tag["digest"]] = tag
+                unique[tag["name"]] = tag
 
         models = []
-        for digest, tag in unique.items():
+        for tag in unique.values():
+            digest = tag["digest"]
             show = await client.post(f"{OLLAMA_URL}/api/show", json={"model": tag["name"]})
             show.raise_for_status()
             details = show.json()
@@ -44,6 +54,8 @@ async def installed() -> list[dict]:
             models.append({
                 "name": tag["name"],
                 "bytes": tag["size"],
+                "digest": digest,
+                "quantization": details.get("details", {}).get("quantization_level", ""),
                 "parameters": details.get("details", {}).get("parameter_size", ""),
                 "capabilities": details.get("capabilities", []),
                 "loaded": in_memory is not None,
@@ -56,13 +68,10 @@ async def installed() -> list[dict]:
 async def ready(model: str, share: float | None = None) -> float | None:
     """Puts a model in memory before it is asked anything, so that the first request does not wait for it.
 
-    `share` is how much of it was once seen in video memory (selftest.py). Ollama decides how much goes
-    there when it loads the model, by what is free in the card at that moment: loaded while other
-    programs held some of it, the model is slower until it is loaded again (on a 4 GB card, 37% of
-    Qwen against 48%: 1.3 seconds a picture against 0.8). So a model with clearly less than that is
-    taken out once, and loaded again. Returns how much of it is in video memory now, None if not known.
+    Existing allocations are left alone, including models loaded by other clients. `share` is
+    retained for legacy callers, but never authorizes unloading. Returns the current GPU share.
     """
-    async with httpx2.AsyncClient(timeout=300) as client:
+    async with scheduler.slot(), httpx2.AsyncClient(timeout=300) as client:
 
         async def now() -> float | None:
             running = (await client.get(f"{OLLAMA_URL}/api/ps")).json().get("models", [])
@@ -70,13 +79,6 @@ async def ready(model: str, share: float | None = None) -> float | None:
             return round(found["size_vram"] / found["size"], 2) if found and found.get("size") else None
 
         loaded = await now()
-        if loaded is not None and share is not None and loaded < share - 0.05:
-            await client.post(f"{OLLAMA_URL}/api/generate", json={"model": model, "keep_alive": 0})
-            for _ in range(40):
-                if await now() is None:
-                    break
-                await asyncio.sleep(0.25)
-            loaded = None
         if loaded is None:
             # a request with nothing to answer only loads the model: with the context size of every other call,
             # or the first real request would load it again
@@ -118,7 +120,7 @@ async def sees_many(model: str, pictures: list[bytes], what: str, english: bool 
         "options": {"temperature": 0, "num_ctx": NUM_CTX, "num_predict": 8 * count},
         "keep_alive": KEEP_ALIVE,
     }
-    async with httpx2.AsyncClient(timeout=300) as client:
+    async with scheduler.slot(), httpx2.AsyncClient(timeout=300) as client:
         response = await client.post(f"{OLLAMA_URL}/api/chat", json=payload)
     if response.status_code != 200:
         raise RuntimeError(f"Ollama answered {response.status_code}: {response.text[:300]}")
@@ -144,7 +146,7 @@ async def sees(model: str, picture: bytes, question: str) -> bool:
         "options": {"temperature": 0, "num_ctx": NUM_CTX, "num_predict": 3},
         "keep_alive": KEEP_ALIVE,
     }
-    async with httpx2.AsyncClient(timeout=300) as client:
+    async with scheduler.slot(), httpx2.AsyncClient(timeout=300) as client:
         response = await client.post(f"{OLLAMA_URL}/api/chat", json=payload)
     if response.status_code != 200:
         raise RuntimeError(f"Ollama answered {response.status_code}: {response.text[:300]}")
@@ -171,7 +173,7 @@ async def stream(model: str, messages: list[dict], max_tokens: int = 700, schema
     }
     if schema:
         payload["format"] = schema
-    async with httpx2.AsyncClient(timeout=300) as client:
+    async with scheduler.slot(), httpx2.AsyncClient(timeout=300) as client:
         async with client.stream("POST", f"{OLLAMA_URL}/api/chat", json=payload) as response:
             if response.status_code != 200:
                 body = (await response.aread()).decode(errors="replace")
@@ -191,3 +193,14 @@ async def stream(model: str, messages: list[dict], max_tokens: int = 700, schema
                         # a model that was not in memory had to be loaded first: this is how long that took
                         "load_seconds": round(chunk.get("load_duration", 0) / 1e9, 1),
                     }
+
+
+async def structured(model: str, messages: list[dict], schema: dict, *, background=False, max_tokens=1000) -> dict:
+    """A nonstreaming JSON response; all inference uses the same arbiter."""
+    async with scheduler.slot(background=background), httpx2.AsyncClient(timeout=300) as client:
+        response = await client.post(f"{OLLAMA_URL}/api/chat", json={
+            "model": model, "messages": messages, "format": schema, "stream": False, "think": False,
+            "options": {"temperature": 0, "num_ctx": NUM_CTX, "num_predict": max_tokens}, "keep_alive": KEEP_ALIVE,
+        })
+        response.raise_for_status()
+        return response.json()
