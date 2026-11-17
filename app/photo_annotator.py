@@ -17,6 +17,7 @@ from photo_catalog import normalized
 MODEL = os.getenv('REGISTA_QWEN_MODEL', 'qwen3-vl:2b-instruct')
 PROMPT_VERSION = 'catalog-it-3'
 SCHEMA_VERSION = '2'
+FILTER_VERSION = 'italian-forms-1'
 VERSION = f'{MODEL}/{PROMPT_VERSION}/{SCHEMA_VERSION}'
 SIDE = int(os.getenv('REGISTA_IMAGE_SIDE', '512'))
 MAX_TOKENS = 4096
@@ -67,6 +68,38 @@ def tag_key(term):
     return f'{COUNTS[COUNT_FORMS[match[1]]]} {match[2]}' if match else term
 
 
+def word_forms(word):
+    """Limited Italian singular-to-plural forms; never approximate arbitrary spelling or synonyms."""
+    if word == 'uomo':
+        return ('uomo', 'uomini')
+    forms = [word]
+    if len(word) >= 4 and word not in COUNT_FORMS:
+        if word.endswith(('ca', 'ga')):
+            forms.append(word[:-1] + 'he')
+        elif word.endswith('a'):
+            forms.append(word[:-1] + 'e')
+        elif word.endswith('o'):
+            forms.append(word[:-1] + 'i')
+            if word.endswith(('co', 'go')):
+                forms.append(word[:-1] + 'hi')
+        elif word.endswith('e'):
+            forms.append(word[:-1] + 'i')
+    return tuple(forms)
+
+
+def term_pattern(term):
+    parts, previous = [], 0
+    for word in re.finditer(r'[^\W\d_]+', term):
+        parts.extend((re.escape(term[previous:word.start()]), '(?:' + '|'.join(map(re.escape, word_forms(word[0]))) + ')'))
+        previous = word.end()
+    parts.append(re.escape(term[previous:]))
+    return ''.join(parts)
+
+
+def same_tag(left, right):
+    return left == right or re.fullmatch(term_pattern(left), right) is not None or re.fullmatch(term_pattern(right), left) is not None
+
+
 def supported_tags(annotation: Annotation) -> tuple[list[dict], list[dict], list[dict]]:
     """Keep unique, extractive tags; this checks caption consistency, not visual truth."""
     description = normalized(annotation.description)
@@ -81,12 +114,22 @@ def supported_tags(annotation: Annotation) -> tuple[list[dict], list[dict], list
         if quantity:
             count = COUNT_FORMS[quantity[1]]
             forms = [f'{prefix} {quantity[2]}' for prefix in (str(count), COUNTS[count])]
-        reason = 'duplicate' if key in seen else 'not_in_description'
-        if key in seen or not any(re.search(r'(?<!\w)' + re.escape(form) + r'(?!\w)', description) for form in forms):
+        duplicate = key in seen or any(same_tag(key, previous['tag']) for previous in tags)
+        support = next((match for form in forms if (match := re.search(r'(?<!\w)' + re.escape(form) + r'(?!\w)', description))), None)
+        inflected = False
+        if support is None:
+            support = next((match for form in forms if (match := re.search(r'(?<!\w)' + term_pattern(form) + r'(?!\w)', description))), None)
+            inflected = support is not None
+        reason = 'duplicate' if duplicate else 'not_in_description'
+        if duplicate or support is None:
             rejected.append({**item.model_dump(), 'reason': reason})
         else:
+            if quantity:
+                key = tag_key(support[0])
             tags.append({'tag': key, 'category': item.category})
             seen.add(key)
+            if inflected:
+                derived.append({'tag': key, 'source': 'description_inflection', 'evidence': support[0]})
     duplicates = sum(item['reason'] == 'duplicate' for item in rejected)
     if duplicates >= 3 and duplicates > len(annotation.tags) / 2:
         raise ValueError('Risposta Qwen ripetitiva: la foto resta da catalogare.')
@@ -95,13 +138,13 @@ def supported_tags(annotation: Annotation) -> tuple[list[dict], list[dict], list
     for item in list(tags):
         if item['category'] not in ('object', 'animal', 'scene'):
             continue
-        term = re.escape(item['tag'])
+        term = term_pattern(item['tag'])
         patterns = [(rf'(?<!\w)({COUNT_PATTERN})\s+{term}(?!\w)', 'quantity'),
                     (rf'(?<!\w){term}\s+(?:{COLOR_PATTERN})(?!\w)', 'color')]
         for pattern, kind in patterns:
             for match in re.finditer(pattern, description):
                 label = tag_key(match[0])
-                if label not in seen and len(tags) < 80:
+                if label not in seen and len(tags) < 80 and not any(same_tag(label, tag['tag']) for tag in tags):
                     tags.append({'tag': label, 'category': 'attribute' if kind == 'quantity' else 'color'})
                     derived.append({'tag': label, 'source': 'description_' + kind, 'evidence': match[0]})
                     seen.add(label)
@@ -161,4 +204,4 @@ class PhotoAnnotator:
                     '_prompt': PROMPT, '_schema': schema, '_image_side': SIDE, '_context': llm.NUM_CTX,
                     '_generation': {**GENERATION_OPTIONS, 'num_predict': MAX_TOKENS},
                     '_response_content': result['message']['content'], '_rejected_tags': rejected,
-                    '_accepted_tags': tags, '_derived_tags': derived}}
+                    '_accepted_tags': tags, '_derived_tags': derived, '_tag_filter_version': FILTER_VERSION}}

@@ -745,3 +745,65 @@ def test_read_only_catalog_can_annotate_without_relocating_previously_imported_f
     catalog.scan(VERSION, stable_seconds=0)
     assert catalog.path_of(sha) == pending and pending.is_file()
     assert search(catalog, SearchPlan(stage='classified'))['total'] == 1
+
+
+@pytest.mark.parametrize(('description', 'term', 'quantity'), [
+    ('Un uomo tiene due pesci.', 'pesce', 'due pesci'),
+    ('Due palline da golf bianche.', 'pallina da golf', 'due palline da golf'),
+    ('Due cani neri nel prato.', 'cane nero', 'due cani neri'),
+    ('Tre libri sul tavolo.', 'libro', 'tre libri'),
+    ('Due uomini in una stanza.', 'uomo', 'due uomini'),
+])
+def test_inflected_subject_tags_keep_counts_from_the_actual_description(description, term, quantity):
+    from photo_annotator import supported_tags
+    annotation = Annotation(description=description, tags=[{'term': term, 'category': 'object'}])
+    tags, rejected, evidence = supported_tags(annotation)
+    assert {term, quantity} <= {tag['tag'] for tag in tags}
+    assert not rejected
+    assert any(item['source'] == 'description_inflection' for item in evidence)
+    assert any(item['tag'] == quantity and item['source'] == 'description_quantity' for item in evidence)
+
+
+@pytest.mark.parametrize('terms', [('gatto', 'gatti'), ('gatti', 'gatto')])
+def test_singular_and_plural_labels_do_not_duplicate_the_same_subject(terms):
+    from photo_annotator import supported_tags
+    tags, rejected, _ = supported_tags(Annotation(description='Due gatti.', tags=[
+        {'term': term, 'category': 'animal'} for term in terms]))
+    assert len(tags) == 2  # One subject label plus its explicit quantity.
+    assert sum(tag['tag'] == 'due gatti' for tag in tags) == 1
+    assert len(rejected) == 1 and rejected[0]['reason'] == 'duplicate'
+
+
+@pytest.mark.parametrize(('description', 'term'), [
+    ('Due gatti sul prato.', 'cane'), ('Un pescatore sulla riva.', 'pesce'), ('Un pianoforte.', 'corno'),
+])
+def test_inflection_matching_does_not_add_different_objects_or_word_substrings(description, term):
+    from photo_annotator import supported_tags
+    with pytest.raises(ValueError, match='Nessun tag coerente'):
+        supported_tags(Annotation(description=description, tags=[{'term': term, 'category': 'object'}]))
+
+
+def test_inflected_count_tags_are_saved_and_searchable_without_another_vision_call(library, monkeypatch):
+    import llm
+    from photo_annotator import FILTER_VERSION
+    root, catalog, jobs, _ = library
+    photo(root / 'test.png')
+    catalog.scan(VERSION, stable_seconds=0)
+    calls = []
+    async def structured(*args, **kwargs):
+        calls.append(1)
+        return {'done': True, 'done_reason': 'stop', 'message': {'content': json.dumps({
+            'description': 'Due palline da golf bianche.', 'tags': [{'term': 'pallina da golf', 'category': 'object'}]})}}
+    async def digest(model):
+        return 'test'
+    monkeypatch.setattr(llm, 'structured', structured)
+    monkeypatch.setattr(llm, 'model_digest', digest)
+    jobs.annotator = PhotoAnnotator()
+    jobs.annotator.identity = {'digest': 'test'}
+    drain(jobs)
+    assert search(catalog, SearchPlan(terms=['due palline da golf']))['total'] == 1
+    assert search(catalog, SearchPlan(terms=['pallina da golf']))['total'] == 1
+    with catalog.connect() as db:
+        raw = json.loads(db.execute('SELECT result FROM annotations').fetchone()[0])
+    assert raw['_tag_filter_version'] == FILTER_VERSION
+    assert calls == [1]

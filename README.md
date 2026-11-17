@@ -17,7 +17,7 @@ Nell’Assistente puoi inviare un’immagine temporanea e fare una domanda. **Sa
 
 Il candidato predefinito è `qwen3-vl:2b-instruct`, configurabile con `REGISTA_QWEN_MODEL` oppure `qwen_model` nel `settings.json` desktop. Serve il tag esatto: nessun modello alternativo viene scelto automaticamente e nessun modello viene scaricato all’avvio.
 
-Su questo PC è stato installato e provato `qwen3-vl:2b-instruct` Q4_K_M. Il tag esatto e il digest vengono verificati prima e dopo ogni annotazione. I tag non supportati dalla descrizione e i duplicati vengono esclusi dal risultato salvato; questo controllo non garantisce che la descrizione visiva sia corretta. [Prova su tre foto pubbliche e tag ottenuti](docs/prova-qwen-instruct.md).
+Su questo PC è stato installato e provato `qwen3-vl:2b-instruct` Q4_K_M. Il tag esatto e il digest vengono verificati prima e dopo ogni annotazione. I tag non supportati dalla descrizione e i duplicati vengono esclusi dal risultato salvato; questo controllo non garantisce che la descrizione visiva sia corretta. [Prova su venti immagini locali, tag ed errori osservati](docs/prova-qwen-20-foto.md).
 
 L'attesa massima per una risposta locale è di **5 minuti** per impostazione predefinita. `REGISTA_INFERENCE_TIMEOUT` permette di cambiarla in secondi; `0` disattiva il timeout della risposta. Il limite comprende tutta la risposta di Qwen, esclusa l'attesa del turno GPU. Timeout e risposte invalide lasciano la foto **Da catalogare**, con motivo salvato e riprova esplicita. Il budget della risposta è distinto dal tempo e rimane di 4.096 token.
 

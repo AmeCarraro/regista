@@ -10,6 +10,8 @@ I tag sono normalizzati e verificati rispetto alla descrizione. Dai soggetti acc
 
 Il profilo di generazione attuale usa temperatura 0,4, top-p 0,8, top-k 20, repetition penalty 1,05, presence penalty 0,3, frequency penalty 0,3 e seed 42. Si tratta di una configurazione applicativa misurata localmente, diversa dal preset generale Qwen della prima prova.
 
+La successiva [prova su venti immagini locali](prova-qwen-20-foto.md) ha individuato una perdita di tag dovuta al confronto letterale fra singolare e plurale. Il filtro `italian-forms-1` ammette varianti italiane comuni, mantenendo i tag generali e ricavando il conteggio dalla forma effettivamente presente nel testo: `pesce` in «due pesci» conserva anche `due pesci`; `pallina da golf` in «due palline da golf» conserva il conteggio. Le varianti dello stesso tag vengono deduplicate. Le corrispondenze sono registrate come `description_inflection` e il filtro effettivo in `_tag_filter_version`. Sono regole limitate, non un riconoscitore semantico o una grammatica italiana completa. Non correggono i soggetti che Qwen ha identificato male.
+
 Ultima prova su tre foto pubbliche, modello già caricato: gatti 6 tag in 3,168 s; cane 4 tag in 3,837 s; stanza 8 tag in 6,535 s. Per i gatti sono stati salvati `cuscino`, `due gatti`, `due telecomandi`, `gatti`, `telecomandi`, `telecomandi bianchi`. L'aumento di dettaglio non garantisce accuratezza: nella descrizione dei telecomandi rimane una formulazione contraddittoria sul conteggio, e Qwen può ancora sbagliare colori o oggetti. Non è una valutazione su una libreria completa.
 
 ## Cinque minuti, motivo e riprova
