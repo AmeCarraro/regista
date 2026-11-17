@@ -6,7 +6,7 @@ import llm
 import pytest
 
 
-@pytest.mark.parametrize(('value', 'seconds'), [(None, 3600), ('0', None), ('7200', 7200)])
+@pytest.mark.parametrize(('value', 'seconds'), [(None, 300), ('0', None), ('7200', 7200)])
 def test_local_inference_allows_long_responses_or_an_unlimited_wait(monkeypatch, value, seconds):
     if value is None:
         monkeypatch.delenv('REGISTA_INFERENCE_TIMEOUT', raising=False)
@@ -39,6 +39,35 @@ def test_structured_request_uses_the_response_timeout_and_visual_sampling(monkey
     assert captured['timeout']['read'] is None
     assert captured['payload']['options'] == {'temperature': 0.7, 'presence_penalty': 1.5,
                                                'num_ctx': llm.NUM_CTX, 'num_predict': 4096}
+
+
+def test_structured_response_deadline_cancels_slow_inference(monkeypatch):
+    monkeypatch.setenv('REGISTA_INFERENCE_TIMEOUT', '0.01')
+    stopped = []
+    async def handle(request):
+        try:
+            await asyncio.sleep(1)
+        finally:
+            stopped.append(True)
+        return llm.httpx2.Response(200, json={'done': True})
+    real_client = llm.httpx2.AsyncClient
+    monkeypatch.setattr(llm.httpx2, 'AsyncClient', lambda **kwargs: real_client(transport=llm.httpx2.MockTransport(handle), **kwargs))
+    with pytest.raises(TimeoutError):
+        asyncio.run(llm.structured('test', [], {'type': 'object'}))
+    assert stopped == [True]
+
+
+def test_waiting_for_the_gpu_does_not_consume_the_model_response_deadline(monkeypatch):
+    monkeypatch.setenv('REGISTA_INFERENCE_TIMEOUT', '0.05')
+    real_client = llm.httpx2.AsyncClient
+    transport = llm.httpx2.MockTransport(lambda request: llm.httpx2.Response(200, json={'done': True}))
+    monkeypatch.setattr(llm.httpx2, 'AsyncClient', lambda **kwargs: real_client(transport=transport, **kwargs))
+    async def run():
+        async with llm.scheduler.slot():
+            request = asyncio.create_task(llm.structured('test', [], {'type': 'object'}, background=True))
+            await asyncio.sleep(0.1)
+        assert (await request)['done']
+    asyncio.run(run())
 
 
 class Answer:

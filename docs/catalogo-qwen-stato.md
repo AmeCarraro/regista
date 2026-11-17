@@ -1,10 +1,10 @@
 # Catalogo Qwen: implementazione e collaudo
 
-13 novembre 2026. Riferimento: `piano-catalogo-qwen.md`, conservato senza modifiche.
+13 novembre 2026, aggiornato il 17 novembre. Riferimento: `piano-catalogo-qwen.md`, conservato senza modifiche. Ultimo aggiornamento: [originali ZIP, tag con quantità e stati di catalogazione](originali-e-classificazione.md).
 
 ## Percorso implementato
 
-- SQLite separato dagli originali, WAL, migrazioni fino alla versione 2, FTS5. Identità SHA-256 del contenuto e posizioni multiple, senza inviare percorsi assoluti ai telefoni.
+- SQLite separato dagli originali, WAL, migrazioni fino alla versione 3, FTS5. Identità SHA-256 del contenuto e posizioni multiple, senza inviare percorsi assoluti ai telefoni.
 - Scansione ricorsiva incrementale, nanosecondi e dimensione, hash dei file nuovi/modificati, controllo di stabilità, esclusione di collegamenti, cestino, raccolte di output e directory dell'indice. Una radice temporaneamente assente non viene trattata come un disco svuotato. Radici annidate non producono copie fittizie.
 - La scansione non chiama modelli. Dopo ogni avvio del servizio l'analisi resta in pausa. Avvia/Riprendi, Pausa, modalità inattivo conservativa, riprova errori e rianalisi della selezione sono espliciti.
 - Un worker, job durevoli con lease, scadenza e recupero, tre tentativi con backoff, commit atomico di annotazione/tag/job. Risultati validi precedenti restano disponibili durante una rianalisi. Nessuna promessa di inferenza exactly-once dopo un crash.
@@ -36,9 +36,9 @@ Aggiornamento del 17 novembre: installato e provato `qwen3-vl:2b-instruct`, dige
 
 `REGISTA_IMAGE_SIDE`, `NUM_CTX`, `KEEP_ALIVE` configurano i budget. La modalità inattivo usa `REGISTA_IDLE_SECONDS` (60), `REGISTA_IDLE_GPU_PERCENT` (10), `REGISTA_IDLE_FREE_MB` (768), `REGISTA_IDLE_STABLE_SECONDS` (30). Richiede telemetria NVIDIA e, su Windows, alimentazione di rete; in assenza dei dati resta conservativa. Questi valori sono iniziali, non soglie collaudate come garanzia su questo hardware.
 
-`REGISTA_INFERENCE_TIMEOUT` controlla l'attesa della risposta Ollama: 3.600 secondi per default, `0` per disattivarla. Connessione e invio hanno timeout separati di 20 e 60 secondi; le richieste di stato/modelli mantengono 20 secondi. Il worker rinnova la lease ogni 60 secondi durante attesa e inferenza, così il vecchio limite di 15 minuti della prenotazione non interrompe la proprietà di un lavoro ancora attivo.
+`REGISTA_INFERENCE_TIMEOUT` controlla l'attesa della risposta Ollama: 300 secondi per default, `0` per disattivarla. Per le chiamate JSON il limite copre tutta la risposta, esclusa la coda GPU. Connessione e invio hanno timeout separati di 20 e 60 secondi; le richieste di stato/modelli mantengono 20 secondi. Il worker rinnova la lease ogni 60 secondi durante attesa e inferenza. Timeout e risposte invalide restano da catalogare con motivo persistente e riprova esplicita.
 
-Annotazioni `catalog-it-2`, schema `2`: istruzioni e schema sono presenti nel testo della richiesta e nel decoder; categorie enum, budget di 4.096 token, campionamento visivo Qwen con seed registrato. Il risultato salvato include solo tag unici che compaiono come parole o espressioni complete nella descrizione normalizzata. Tag scartati e risposta originale restano nei dati diagnostici. È una scelta conservativa: sinonimi e riformulazioni possono essere esclusi. Una descrizione errata può ancora produrre tag errati. Le annotazioni già salvate e le correzioni manuali restano disponibili; per applicare la nuova versione alle foto già analizzate occorre **Rianalizza selezione**.
+Annotazioni `catalog-it-3`, schema `2`: istruzioni e schema sono presenti nel testo della richiesta e nel decoder; categorie enum, budget di 4.096 token, campionamento con penalità sulle ripetizioni e seed registrato. Il risultato salvato include tag unici supportati dalla descrizione, con arricchimento di quantità e colori; le scritture numeriche e in lettere dei conteggi sono equivalenti. Tag scartati, evidenze delle aggiunte e risposta originale restano nei dati diagnostici. È una scelta conservativa: sinonimi e riformulazioni possono essere esclusi. Una descrizione errata può ancora produrre tag errati. Le annotazioni già salvate e le correzioni manuali restano disponibili; per applicare la nuova versione alle foto già analizzate occorre **Rianalizza selezione**.
 
 ## Diagnostica
 

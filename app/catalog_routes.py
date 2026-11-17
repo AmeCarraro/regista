@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import tempfile
+import zipfile
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response
@@ -42,6 +43,7 @@ class ImportPhoto(BaseModel):
     media: str = Field(min_length=1, max_length=100)
     stamp: str = Field(max_length=100)
     sha256: str = Field(pattern='^[a-f0-9]{64}$')
+    name: str = Field(default='', max_length=300)
 
 
 class Manifest(BaseModel):
@@ -72,6 +74,9 @@ def phone_only(request):
 
 def routes(catalog, jobs, import_dir: Path, read_only=False, phones=None):
     router = APIRouter()
+    catalog.organize_imports = not read_only
+    from photo_storage import adopt
+    adopt(catalog, import_dir)
 
     @router.get('/api/catalog/status')
     def status(request: Request):
@@ -81,7 +86,11 @@ def routes(catalog, jobs, import_dir: Path, read_only=False, phones=None):
             state.update(errors=[], problem='', scan_error='')
         with catalog.connect() as db:
             imports = [dict(row) for row in db.execute('SELECT state,total,copied,duplicates,error FROM phone_import_requests')]
-        return {**state, 'protocol': PROTOCOL, 'roots': catalog.roots(local=local), 'imports': imports if local else [], 'computer': local}
+            incoming = [dict(row) for row in db.execute('''SELECT sha256,max(name) name,count(*) copies,
+                CASE WHEN max(length(error))>0 THEN 'error' ELSE 'wanted' END state,max(error) error
+                FROM phone_import_items WHERE state!='received' GROUP BY sha256 ORDER BY name LIMIT 20''')] if local else []
+        return {**state, 'protocol': PROTOCOL, 'roots': catalog.roots(local=local), 'imports': imports if local else [],
+                'incoming': incoming, 'computer': local}
 
     @router.post('/api/catalog/phone-import')
     def request_import(request: Request):
@@ -114,6 +123,9 @@ def routes(catalog, jobs, import_dir: Path, read_only=False, phones=None):
             db.execute('''UPDATE phone_import_requests SET state=?,total=?,copied=?,duplicates=?,error=?
                 WHERE device=? AND request_id=?''', ('done' if body.done else 'copying', body.total, body.copied, body.duplicates,
                                                   body.error, device, body.request_id))
+            if body.done and body.error:
+                db.execute("UPDATE phone_import_items SET state='error',error=? WHERE device=? AND state!='received'",
+                           (body.error, device))
         return {'noted': True}
 
     @router.post('/api/catalog/roots')
@@ -148,8 +160,13 @@ def routes(catalog, jobs, import_dir: Path, read_only=False, phones=None):
             raise HTTPException(409, str(error))
 
     @router.post('/api/catalog/search')
-    def find(body: SearchPlan):
-        return search(catalog, body)
+    def find(body: SearchPlan, request: Request):
+        result = search(catalog, body)
+        if getattr(request.state, 'device', None):
+            for photo in result['photos']:
+                if photo['processing']['error']:
+                    photo['processing']['error'] = 'Da catalogare: consulta il motivo sul computer.'
+        return result
 
     @router.post('/api/catalog/plan')
     async def plan(body: Natural):
@@ -190,6 +207,16 @@ def routes(catalog, jobs, import_dir: Path, read_only=False, phones=None):
             raise HTTPException(404, 'Foto non disponibile.')
         return FileResponse(path, filename=path.name, headers={'Cache-Control': 'private,no-cache', 'X-Regista-Sha256': identifier})
 
+    @router.get('/api/catalog/photos/{identifier}/backup')
+    def original_backup(identifier: str, request: Request):
+        computer_only(request)
+        try:
+            path = catalog.archive.path(identifier)
+            catalog.archive.inspect(path, identifier)
+        except (OSError, ValueError, KeyError, zipfile.BadZipFile, EOFError):
+            raise HTTPException(404, 'Backup ZIP verificato non disponibile.')
+        return FileResponse(path, filename=identifier + '.zip', media_type='application/zip')
+
     @router.get('/api/catalog/duplicates')
     def duplicates():
         with catalog.connect() as db:
@@ -207,7 +234,21 @@ def routes(catalog, jobs, import_dir: Path, read_only=False, phones=None):
         jobs.pause()  # Import first, annotation only after another explicit Start.
         wanted = []
         for photo in body.photos:
-            if catalog.path_of(photo.sha256) is None:
+            path = catalog.verified_path_of(photo.sha256)
+            present, reason = False, ''
+            try:
+                if path is not None:
+                    catalog.archive.ensure(path, photo.sha256, photo.name, verify=True)
+                    present = True
+            except (OSError, ValueError) as error:
+                reason = f'Originale o backup non disponibile: {error}'[:1000]
+            with catalog.connect() as db:
+                db.execute('''INSERT INTO phone_import_items(device,media,stamp,sha256,name,state,error) VALUES (?,?,?,?,?,?,?)
+                    ON CONFLICT(device,media) DO UPDATE SET stamp=excluded.stamp,sha256=excluded.sha256,
+                    name=excluded.name,state=excluded.state,error=excluded.error''',
+                           (device, photo.media, photo.stamp, photo.sha256, Path(photo.name).name,
+                            'received' if present else 'wanted', reason))
+            if not present:
                 wanted.append(photo.media)
             else:
                 with catalog.connect() as db:
@@ -253,10 +294,17 @@ def routes(catalog, jobs, import_dir: Path, read_only=False, phones=None):
                 with catalog.connect() as db:
                     db.execute('INSERT INTO import_receipts VALUES (?,?,?,?) ON CONFLICT(device,media) DO UPDATE SET stamp=excluded.stamp,asset_id=excluded.asset_id',
                                (device, media, stamp, result['id']))
+                    db.execute("UPDATE phone_import_items SET state='received',error='' WHERE sha256=?", (result['id'],))
+                    db.execute('''INSERT INTO import_receipts(device,media,stamp,asset_id)
+                        SELECT device,media,stamp,sha256 FROM phone_import_items WHERE sha256=?
+                        ON CONFLICT(device,media) DO UPDATE SET stamp=excluded.stamp,asset_id=excluded.asset_id''', (result['id'],))
                 return result
             try:
                 return await asyncio.to_thread(commit)
-            except ValueError as error:
+            except (ValueError, OSError) as error:
+                with catalog.connect() as db:
+                    db.execute("UPDATE phone_import_items SET state='error',error=? WHERE device=? AND media=?",
+                               (str(error)[:1000], device, media))
                 raise HTTPException(409, str(error))
         finally:
             partial.unlink(missing_ok=True)

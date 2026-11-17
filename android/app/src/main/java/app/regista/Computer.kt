@@ -164,6 +164,8 @@ class Computer(val address: String, private val port: Int, private val fingerpri
     /** Asks the computer something, with a JSON body or none, and returns its JSON answer. */
     fun ask(method: String, path: String, body: JSONObject? = null): JSONObject {
         val connection = open(method, path)
+        // A manifest may verify many original ZIPs before declaring which files are missing.
+        if (path == "/phone/catalog/missing") connection.readTimeout = 300000
         if (body != null) {
             val bytes = body.toString().toByteArray()
             connection.doOutput = true

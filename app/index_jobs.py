@@ -7,6 +7,8 @@ import subprocess
 import time
 import uuid
 
+import httpx2
+import llm
 from inference_scheduler import scheduler
 from photo_annotator import VERSION, ModelChangedError
 from photo_catalog import fingerprint
@@ -141,6 +143,11 @@ class IndexJobs:
 
     def finish(self, job, result):
         with self.catalog.connect() as db:
+            if not db.execute("SELECT 1 FROM jobs WHERE id=? AND lease=? AND state='running'", (job['id'], job['lease'])).fetchone():
+                return
+        from photo_storage import settle
+        settle(self.catalog, job['asset_id'], classified=True)
+        with self.catalog.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             current = db.execute("SELECT 1 FROM jobs WHERE id=? AND lease=? AND state='running'", (job['id'], job['lease'])).fetchone()
             if current is None:
@@ -168,6 +175,7 @@ class IndexJobs:
             path = self.catalog.path_of(job['asset_id'])
             if path is None or await asyncio.to_thread(fingerprint, path) != job['asset_id']:
                 raise ValueError('Foto cambiata o non disponibile: ripeti la scansione.')
+            await asyncio.to_thread(self.catalog.archive.ensure, path, job['asset_id'], verify=True)
             result = await self.annotate(job, path)
             if await asyncio.to_thread(fingerprint, path) != job['asset_id']:
                 raise ValueError('Foto modificata durante l’analisi: ripeti la scansione.')
@@ -180,10 +188,24 @@ class IndexJobs:
             if isinstance(error, ModelChangedError):
                 self.problem = str(error)
                 self.pause()
+            timed_out = isinstance(error, (TimeoutError, httpx2.TimeoutException))
+            if isinstance(error, httpx2.ConnectTimeout):
+                reason = 'Connessione a Ollama scaduta dopo 20 secondi. Foto da catalogare.'
+            elif isinstance(error, httpx2.WriteTimeout):
+                reason = 'Invio della richiesta a Ollama scaduto dopo 60 secondi. Foto da catalogare.'
+            elif isinstance(error, (TimeoutError, httpx2.ReadTimeout)) and llm.inference_seconds() is not None:
+                reason = f'Tempo massimo di {llm.inference_seconds():g} secondi superato durante la risposta di Qwen. Foto da catalogare.'
+            else:
+                reason = f'{type(error).__name__}: {error}'
             with self.catalog.connect() as db:
                 db.execute("""UPDATE jobs SET state=?,next_run=?,error=?,lease=NULL,lease_until=NULL
-                    WHERE id=? AND lease=?""", ('error' if job['attempts'] >= 3 else 'pending', time.time() + 5 * 2 ** job['attempts'],
-                                              f'{type(error).__name__}: {error}'[:1000], job['id'], job['lease']))
+                    WHERE id=? AND lease=?""", ('error' if timed_out or isinstance(error, ValueError) or job['attempts'] >= 3 else 'pending', time.time() + 5 * 2 ** job['attempts'],
+                                              reason[:1000], job['id'], job['lease']))
+            try:
+                from photo_storage import settle
+                await asyncio.to_thread(settle, self.catalog, job['asset_id'], classified=False)
+            except (OSError, ValueError):
+                pass  # The job retains its error and the original ZIP remains separate.
         finally:
             self.current = ''
         return True

@@ -97,7 +97,7 @@ if CATALOG_ENABLED:
     from photo_annotator import PhotoAnnotator
     from index_jobs import IndexJobs
     from catalog_library import CatalogLibrary
-    photo_catalog = PhotoCatalog(Path(INDEX_DIR) / "catalog.sqlite", places)
+    photo_catalog = PhotoCatalog(Path(INDEX_DIR) / "catalog.sqlite", places, organize_imports=not actions.read_only)
     index_jobs = IndexJobs(photo_catalog, PhotoAnnotator())
     photos = CatalogLibrary(photo_catalog, PHOTOS_DIR, INDEX_DIR, photos.embedder, places)
 

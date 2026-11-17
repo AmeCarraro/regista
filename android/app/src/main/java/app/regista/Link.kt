@@ -279,6 +279,7 @@ class Link(
         var copied = 0
         var duplicates = 0
         var failed = 0
+        val confirmedHashes = HashSet<String>()
         fun progress(done: Boolean) {
             if (request.isNotEmpty()) computer.ask("POST", "/phone/catalog/progress", JSONObject()
                 .put("request_id", request).put("total", photos.size).put("copied", copied).put("duplicates", duplicates)
@@ -300,7 +301,7 @@ class Link(
                 if (hash == null) { failed++; continue }
                 hashes[photo.id.toString()] = hash
                 sources[photo.id.toString()] = source
-                manifest.put(JSONObject().put("media", photo.id.toString()).put("stamp", identity).put("sha256", hash))
+                manifest.put(JSONObject().put("media", photo.id.toString()).put("stamp", identity).put("sha256", hash).put("name", photo.name))
             }
             val missing = computer.ask("POST", "/phone/catalog/missing", JSONObject().put("protocol", 2).put("photos", manifest)).getJSONArray("wanted")
             val wanted = (0 until missing.length()).map { missing.getString(it) }.toSet()
@@ -309,7 +310,7 @@ class Link(
                 val media = photo.id.toString()
                 val hash = hashes[media] ?: continue
                 val identity = identities[photo.id] ?: continue
-                if (media !in wanted) {
+                if (media !in wanted || hash in confirmedHashes) {
                     duplicates++
                     memory.offered(listOf(media))
                     continue
@@ -320,6 +321,7 @@ class Link(
                     val stream = gallery.open(sources[media]!!) ?: throw IOException("Foto non leggibile")
                     val answer = computer.send("/phone/catalog/import?media=${Uri.encode(media)}&stamp=${Uri.encode(identity)}&name=${Uri.encode(photo.name)}", 0, stream, hash)
                     if (answer.optBoolean("duplicate")) duplicates++ else { copied++; sentNow++ }
+                    confirmedHashes.add(hash)
                     memory.offered(listOf(media))
                 } catch (refused: Refused) {
                     if (refused.status == 401) throw refused

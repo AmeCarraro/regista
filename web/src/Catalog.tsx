@@ -9,12 +9,16 @@ type Status = {
   computer: boolean; roots: { id: string; label: string; path?: string }[]
   errors: { asset_id: string; error: string; attempts: number }[]
   imports: { state: string; total: number; copied: number; duplicates: number; error: string }[]
+  classified?: number; to_catalog?: number; awaiting_transfer?: number
+  backup?: { count: number; bytes: number; errors: number }
+  incoming?: { sha256: string; name: string; copies: number; state: string; error: string }[]
 }
 type Photo = {
   id: string; name: string; folder: string; description: string; day: string; excluded_reason: string
   metadata: { date: string; precision: string; date_source: string; place: string; place_source: string; path_hint: string; conflicts: string[] }
   tags: { tag: string; source: string }[]; reasons: string[]
   annotation: { model: string; digest: string; prompt_version: string; schema_version: string } | null
+  catalog_state?: string; processing?: { state: string; error: string }; backup_available?: boolean
 }
 type Result = { photos: Photo[]; total: number; coverage: Status; plan: Record<string, unknown>; notice: string }
 
@@ -30,6 +34,7 @@ export default function Catalog({ visible = true, request = catalogRequest, medi
   const [place, setPlace] = useState('')
   const [folder, setFolder] = useState('')
   const [tag, setTag] = useState('')
+  const [stage, setStage] = useState('all')
   const [operator, setOperator] = useState('and')
   const [exclude, setExclude] = useState('')
   const [root, setRoot] = useState('')
@@ -63,9 +68,9 @@ export default function Catalog({ visible = true, request = catalogRequest, medi
       ? await request<Record<string, unknown>>('/api/catalog/plan', { query })
       : { terms: query.trim() ? query.trim().split(/\s+/) : [], operator, exclude: exclude.split(',').map(x => x.trim()).filter(Boolean) })
     const found = await request<Result>('/api/catalog/search', { ...plan, ...(natural && query.trim() ? { exclude: [...new Set([...(Array.isArray(plan.exclude) ? plan.exclude : []), ...exclude.split(',').map(x => x.trim()).filter(Boolean)])] } : {}), ...(since ? { since } : {}), ...(until ? { until } : {}),
-      ...(place ? { place } : {}), ...(folder ? { folder } : {}), ...(tag ? { tag } : {}), root_id: root, limit: 60, offset })
+      ...(place ? { place } : {}), ...(folder ? { folder } : {}), ...(tag ? { tag } : {}), stage, root_id: root, limit: 60, offset })
     setResult(found); setSelected([])
-  }, [request, natural, query, operator, exclude, since, until, place, folder, tag, root])
+  }, [request, natural, query, operator, exclude, since, until, place, folder, tag, stage, root])
 
   useEffect(() => {
     if (!visible) return
@@ -86,7 +91,8 @@ export default function Catalog({ visible = true, request = catalogRequest, medi
     {!status && <p>Catalogo del PC non disponibile. Il computer deve essere acceso e collegato.</p>}
     {status && <>
       <div className="catalog-counts" aria-live="polite">
-        <span><b>{status.discovered}</b> foto diverse</span><span><b>{status.analyzed}</b> analizzate</span>
+        <span><b>{status.discovered}</b> foto diverse</span><span><b>{status.classified ?? status.analyzed}</b> classificate</span>
+        <span><b>{status.to_catalog ?? status.discovered - status.analyzed}</b> da catalogare</span>
         <span><b>{status.pending}</b> in attesa</span><span><b>{status.failed}</b> errori</span><span><b>{status.excluded}</b> escluse dall’analisi</span><span><b>{status.missing}</b> file mancanti</span>
       </div>
       <progress max={100} value={status.coverage} aria-label="Copertura del catalogo" /><p className="catalog-muted">Copertura {status.coverage}% · {status.mode === 'paused' ? 'In pausa' : status.mode === 'idle' ? 'Solo quando inattivo' : 'Analisi avviata'}{status.scanning && ' · Scansione in corso'}{status.current && ' · Una foto in analisi'}</p>
@@ -117,10 +123,22 @@ export default function Catalog({ visible = true, request = catalogRequest, medi
       {(status.problem || status.scan_error || status.waiting_reason) && <p role="status">{status.problem || status.scan_error || status.waiting_reason}</p>}
       {status.imports?.map((item, at) => <p key={at} role="status">Telefono: {item.state === 'requested' ? 'in attesa del telefono' : item.state === 'done' ? 'importazione completata' : 'copia in corso'} · {item.copied} copiate · {item.duplicates} già presenti · {item.total} totali {item.error}</p>)}
       {status.failed > 0 && status.computer && <details><summary>Errori di analisi</summary>{status.errors.map(error => <p key={error.asset_id}>{error.asset_id.slice(0, 8)}: {error.error} ({error.attempts} tentativi)</p>)}</details>}
+      {status.computer && <>
+        <details><summary>Da trasferire dal telefono ({status.awaiting_transfer ?? 0})</summary>
+          <p>Le foto già ricevute vengono riconosciute dal contenuto e non sono richieste di nuovo. Per riprendere usa «Importa tutte le foto dal telefono».</p>
+          {status.incoming?.map(item => <p key={item.sha256}>{item.name || item.sha256.slice(0, 12)}{item.copies > 1 && ` · ${item.copies} copie identiche`} · {item.error || 'In attesa dell’originale'}</p>)}
+          {(status.awaiting_transfer ?? 0) > 20 && <p>Mostrate le prime 20 foto ancora da ricevere.</p>}
+        </details>
+        {status.backup && <details><summary>Backup originali ZIP ({status.backup.count})</summary>
+          <p>{status.backup.count} originali conservati prima della classificazione · {(status.backup.bytes / 1024 ** 2).toFixed(1)} MB{status.backup.errors > 0 && ` · ${status.backup.errors} problemi da risolvere`}</p>
+          <p>Le importazioni sono organizzate in «Da catalogare» e «Classificate». Puoi scaricare il backup originale dalla scheda della foto.</p>
+        </details>}
+      </>}
       <form className="catalog-search" onSubmit={submit}>
         <label>Cerca nelle descrizioni e nei tag<input value={query} onChange={e => setQuery(e.target.value)} placeholder={natural ? 'Cani in Giappone nel marzo 2025' : 'cane nero'} /></label>
         <label className="catalog-check"><input type="checkbox" checked={natural} onChange={e => setNatural(e.target.checked)} />Interpreta la richiesta con Qwen (solo testo)</label>
         <div className="catalog-filters">
+          <label>Stato<select value={stage} onChange={e => setStage(e.target.value)}><option value="all">Tutte le foto</option><option value="classified">Classificate</option><option value="to_catalog">Da catalogare</option><option value="needs_review">Da catalogare con errore</option></select></label>
           <label>Dal<input type="date" value={since} onChange={e => setSince(e.target.value)} /></label>
           <label>Al<input type="date" value={until} onChange={e => setUntil(e.target.value)} /></label>
           <label>Luogo da GPS<input value={place} onChange={e => setPlace(e.target.value)} placeholder="Giappone" /></label>
@@ -139,6 +157,9 @@ export default function Catalog({ visible = true, request = catalogRequest, medi
         <div className="catalog-card-body">
           {status?.computer && <label className="catalog-check"><input type="checkbox" checked={selected.includes(photo.id)} onChange={e => setSelected(before => e.target.checked ? [...before, photo.id] : before.filter(id => id !== photo.id))} />Seleziona</label>}
           <b>{photo.name}</b><p>{photo.excluded_reason || photo.description || 'In attesa di analisi'}</p>
+          <p className="catalog-muted">{photo.catalog_state === 'classified' ? 'Classificata' : photo.catalog_state === 'needs_review' ? 'Da catalogare · da rivedere' : 'Da catalogare'}</p>
+          {photo.processing?.error && <p role="status" className="catalog-alert">{photo.processing.error}</p>}
+          {status?.computer && photo.backup_available && <p><a href={`/api/catalog/photos/${photo.id}/backup`} download>Scarica originale in ZIP</a></p>}
           <div className="catalog-tags">{photo.tags.map(item => <span key={item.tag} title={`Fonte: ${item.source}`}>{item.tag}{status?.computer && <button aria-label={`Escludi tag ${item.tag}`} onClick={() => void perform(async () => {
             await request(`/api/catalog/photos/${photo.id}/tags`, { tag: item.tag, included: false }, 'PUT'); await find(0, result.plan)
           })}>×</button>}</span>)}</div>

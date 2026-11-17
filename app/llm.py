@@ -3,6 +3,7 @@
 Ollama is the only thing that knows the models. Nothing here chooses one: that is catalog.py.
 """
 import base64
+import asyncio
 import json
 import math
 import os
@@ -21,12 +22,16 @@ NUM_CTX = int(os.getenv("NUM_CTX", "6144"))
 KEEP_ALIVE = os.getenv("KEEP_ALIVE", "30m")
 
 
-def inference_timeout() -> httpx2.Timeout:
-    """Allow slow local inference; zero disables the response timeout."""
-    seconds = float(os.getenv('REGISTA_INFERENCE_TIMEOUT', '3600'))
+def inference_seconds() -> float | None:
+    seconds = float(os.getenv('REGISTA_INFERENCE_TIMEOUT', '300'))
     if not math.isfinite(seconds) or seconds < 0:
         raise ValueError('REGISTA_INFERENCE_TIMEOUT deve essere un numero finito maggiore o uguale a zero.')
-    return httpx2.Timeout(None if seconds == 0 else seconds, connect=20, write=60, pool=20)
+    return None if seconds == 0 else seconds
+
+
+def inference_timeout() -> httpx2.Timeout:
+    """Five minutes for a local response; zero disables the response timeout."""
+    return httpx2.Timeout(inference_seconds(), connect=20, write=60, pool=20)
 
 
 async def model_digest(name: str) -> str:
@@ -208,9 +213,11 @@ async def structured(model: str, messages: list[dict], schema: dict, *, backgrou
                      options: dict | None = None) -> dict:
     """A nonstreaming JSON response; all inference uses the same arbiter."""
     async with scheduler.slot(background=background), httpx2.AsyncClient(timeout=inference_timeout()) as client:
-        response = await client.post(f"{OLLAMA_URL}/api/chat", json={
-            "model": model, "messages": messages, "format": schema, "stream": False, "think": False,
-            "options": {"temperature": 0, "num_ctx": NUM_CTX, "num_predict": max_tokens, **(options or {})}, "keep_alive": KEEP_ALIVE,
-        })
+        # Bound the whole response even if Ollama keeps sending occasional bytes; queue wait is separate.
+        async with asyncio.timeout(inference_seconds()):
+            response = await client.post(f"{OLLAMA_URL}/api/chat", json={
+                "model": model, "messages": messages, "format": schema, "stream": False, "think": False,
+                "options": {"temperature": 0, "num_ctx": NUM_CTX, "num_predict": max_tokens, **(options or {})}, "keep_alive": KEEP_ALIVE,
+            })
         response.raise_for_status()
         return response.json()

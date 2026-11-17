@@ -1,5 +1,7 @@
 # Prova locale Qwen Instruct e correzione del catalogo
 
+Questa pagina conserva la prima correzione (`catalog-it-2`). Il timeout è stato successivamente riportato a cinque minuti e i tag arricchiti con quantità: [stato attuale, ZIP originali e nuove prove](originali-e-classificazione.md).
+
 17 novembre 2026. Tre foto pubbliche, nessuna foto personale. NVIDIA RTX 3050 Ti Laptop 4 GB, Ollama 0.40.5, `qwen3-vl:2b-instruct` Q4_K_M, digest `afc393e3572c07db0bc84aa460d928a16c75f3fbb9ca9e0dccc4fbd2dafb573e`. Immagini orientate e adattate a 512 pixel massimi; contesto 6.144 token. Il modello usa GPU e RAM, non risiede interamente in VRAM.
 
 ## Problema riscontrato

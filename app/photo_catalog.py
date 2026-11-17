@@ -18,6 +18,10 @@ FORMATS = {'.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tif', '.tiff', '.gif', '.
 ARCHIVE_FORMATS = {'.heic', '.heif', '.avif', '.dng', '.nef', '.arw', '.cr2'}
 EXCLUDED = {'.regista', '.git', '.cache', '__pycache__', '$recycle.bin', 'system volume information', 'raccolte', 'output'}
 
+CLASSIFICATION_SQL = '''CASE WHEN a.excluded_reason!='' OR EXISTS(SELECT 1 FROM archive_errors e WHERE e.asset_id=a.id)
+    OR (SELECT state FROM jobs j WHERE j.asset_id=a.id ORDER BY j.id DESC LIMIT 1)='error' THEN 'needs_review'
+    WHEN EXISTS(SELECT 1 FROM annotations n WHERE n.asset_id=a.id) THEN 'classified' ELSE 'pending' END'''
+
 
 def normalized(text: str) -> str:
     return ' '.join(unicodedata.normalize('NFKC', text).casefold().split())
@@ -32,10 +36,11 @@ def fingerprint(path: Path) -> str:
 
 
 class PhotoCatalog:
-    def __init__(self, database: str | Path, places=None):
+    def __init__(self, database: str | Path, places=None, *, organize_imports=True):
         self.database = Path(database)
         self.database.parent.mkdir(parents=True, exist_ok=True)
         self.places = places
+        self.organize_imports = organize_imports
         self.scan_lock = threading.Lock()
         self.import_lock = threading.Lock()
         self.scanning = False
@@ -43,7 +48,7 @@ class PhotoCatalog:
         with self.connect() as db:
             version = db.execute('PRAGMA user_version').fetchone()[0]
             existing_version = version
-            if version > 2:
+            if version > 3:
                 raise RuntimeError('Catalogo creato da una versione più recente di Regista.')
             db.execute('PRAGMA journal_mode=WAL')
             if version == 0:
@@ -104,6 +109,26 @@ class PhotoCatalog:
                 if 'excluded_reason' not in {row['name'] for row in db.execute('PRAGMA table_info(assets)')}:
                     db.execute("ALTER TABLE assets ADD COLUMN excluded_reason TEXT NOT NULL DEFAULT ''")
                 db.execute('PRAGMA user_version=2')
+                version = 2
+            if version == 2:
+                backup = self.database.with_name(self.database.stem + '.before-v3.sqlite')
+                if existing_version and not backup.exists():
+                    # Commit the preceding migration before SQLite copies its consistent state.
+                    db.commit()
+                    with sqlite3.connect(backup) as target:
+                        db.backup(target)
+                db.executescript('''BEGIN IMMEDIATE;
+                    CREATE TABLE IF NOT EXISTS original_backups(asset_id TEXT PRIMARY KEY,relative TEXT NOT NULL,
+                        original_size INTEGER NOT NULL,archive_size INTEGER NOT NULL,mtime_ns INTEGER NOT NULL,verified_at REAL NOT NULL);
+                    CREATE TABLE IF NOT EXISTS archive_errors(asset_id TEXT PRIMARY KEY,error TEXT NOT NULL,created REAL NOT NULL);
+                    CREATE TABLE IF NOT EXISTS managed_imports(asset_id TEXT PRIMARY KEY REFERENCES assets(id),
+                        root_id TEXT NOT NULL REFERENCES library_roots(id),base_relative TEXT NOT NULL);
+                    CREATE TABLE IF NOT EXISTS phone_import_items(device TEXT NOT NULL,media TEXT NOT NULL,stamp TEXT NOT NULL,
+                        sha256 TEXT NOT NULL,name TEXT NOT NULL DEFAULT '',state TEXT NOT NULL,error TEXT NOT NULL DEFAULT '',
+                        PRIMARY KEY(device,media));
+                    PRAGMA user_version=3; COMMIT;''')
+        from photo_archive import OriginalArchive
+        self.archive = OriginalArchive(self)
 
     @contextmanager
     def connect(self):
@@ -135,6 +160,23 @@ class PhotoCatalog:
         with self.connect() as db:
             return [{key: row[key] for key in (('id', 'label', 'path') if local else ('id', 'label'))}
                     for row in db.execute('SELECT * FROM library_roots ORDER BY label')]
+
+    def verified_path_of(self, asset_id):
+        with self.connect() as db:
+            locations = db.execute('SELECT * FROM file_locations WHERE asset_id=? AND present=1', (asset_id,)).fetchall()
+        for location in locations:
+            try:
+                path = self.safe_path(location['root_id'], location['relative'])
+                if not path.is_file():
+                    continue
+                if fingerprint(path) == asset_id:
+                    return path
+            except OSError:
+                continue
+            # A changed working file must never acknowledge a duplicate of its old content.
+            with self.connect() as db:
+                db.execute('UPDATE file_locations SET present=0 WHERE id=?', (location['id'],))
+        return None
 
     def safe_path(self, root_id: str, relative: str) -> Path:
         with self.connect() as db:
@@ -213,6 +255,7 @@ class PhotoCatalog:
         return width, height, notes
 
     def register(self, root_id: str, path: Path, version: str, *, force_hash: bool = False) -> tuple[str, bool]:
+        cached = None
         with self.connect() as db:
             root = Path(db.execute('SELECT path FROM library_roots WHERE id=?', (root_id,)).fetchone()[0])
             relative = path.relative_to(root).as_posix()
@@ -224,7 +267,10 @@ class PhotoCatalog:
                     asset = db.execute('SELECT excluded_reason FROM assets WHERE id=?', (old['asset_id'],)).fetchone()
                     if asset and not asset[0]:
                         db.execute('INSERT OR IGNORE INTO jobs(asset_id,version) VALUES (?,?)', (old['asset_id'], version))
-                return old['asset_id'], False
+                cached = old['asset_id']
+        if cached:
+            self.archive.ensure(path, cached)
+            return cached, False
         sha = fingerprint(path)
         width, height, notes = self.metadata(path, relative)
         after = path.stat()
@@ -243,6 +289,7 @@ class PhotoCatalog:
             if not known and not excluded:
                 db.execute('INSERT OR IGNORE INTO jobs(asset_id,version) VALUES (?,?)', (sha, version))
             self.refresh_text(db, sha)
+        self.archive.ensure(path, sha)
         return sha, True
 
     def scan(self, version: str, stable_seconds: float = 1.0) -> dict:
@@ -276,7 +323,7 @@ class PhotoCatalog:
                                 continue
                             _, updated = self.register(root['id'], path, version)
                             changed += int(updated)
-                        except OSError as error:
+                        except (OSError, ValueError) as error:
                             errors.append(f'{name}: {error}')
                 if not walk_errors:
                     with self.connect() as db:
@@ -284,6 +331,8 @@ class PhotoCatalog:
                             if row['relative'] not in seen:
                                 db.execute('UPDATE file_locations SET present=0 WHERE id=?', (row['id'],))
                 errors.extend(str(error) for error in walk_errors)
+            from photo_storage import reconcile
+            errors.extend(reconcile(self))
             self.scan_error = '; '.join(errors[:10])
             return {'changed': changed, 'deferred': deferred, 'errors': errors[:20]}
         finally:
@@ -329,12 +378,20 @@ class PhotoCatalog:
             total = db.execute('SELECT count(DISTINCT asset_id) FROM file_locations WHERE present=1').fetchone()[0]
             annotated = db.execute('''SELECT count(*) FROM assets a WHERE EXISTS(SELECT 1 FROM file_locations l WHERE l.asset_id=a.id AND present=1)
                 AND EXISTS(SELECT 1 FROM annotations n WHERE n.asset_id=a.id)''').fetchone()[0]
-            counts = {row['state']: row['n'] for row in db.execute('SELECT state,count(*) n FROM jobs GROUP BY state')}
+            counts = {row['state']: row['n'] for row in db.execute('''SELECT state,count(*) n FROM jobs j
+                WHERE j.id=(SELECT max(latest.id) FROM jobs latest WHERE latest.asset_id=j.asset_id) GROUP BY state''')}
             missing = db.execute('SELECT count(*) FROM file_locations WHERE present=0').fetchone()[0]
             copies = db.execute('SELECT count(*) FROM file_locations WHERE present=1').fetchone()[0]
             excluded = db.execute("SELECT count(*) FROM assets a WHERE excluded_reason!='' AND EXISTS(SELECT 1 FROM file_locations l WHERE l.asset_id=a.id AND present=1)").fetchone()[0]
-            errors = [dict(row) for row in db.execute("SELECT asset_id,error,attempts FROM jobs WHERE state='error' ORDER BY id DESC LIMIT 20")]
+            errors = [dict(row) for row in db.execute("""SELECT asset_id,error,attempts FROM jobs j WHERE state='error'
+                AND j.id=(SELECT max(latest.id) FROM jobs latest WHERE latest.asset_id=j.asset_id) ORDER BY id DESC LIMIT 20""")]
+            classified = db.execute(f'''SELECT count(*) FROM assets a WHERE EXISTS(SELECT 1 FROM file_locations l WHERE l.asset_id=a.id AND present=1)
+                AND ({CLASSIFICATION_SQL})='classified' ''').fetchone()[0]
+            backup = dict(db.execute('SELECT count(*) count,coalesce(sum(archive_size),0) bytes FROM original_backups').fetchone())
+            backup['errors'] = db.execute('SELECT count(*) FROM archive_errors').fetchone()[0]
+            incoming = db.execute("SELECT count(DISTINCT sha256) FROM phone_import_items WHERE state!='received'").fetchone()[0]
         return {'discovered': total, 'analyzed': annotated, 'pending': counts.get('pending', 0),
                 'running': counts.get('running', 0), 'errors': errors, 'failed': counts.get('error', 0),
-                'missing': missing, 'copies': copies, 'excluded': excluded, 'coverage': round(100 * annotated / total, 1) if total else 0,
-                'scanning': self.scanning, 'scan_error': self.scan_error}
+                'missing': missing, 'copies': copies, 'excluded': excluded, 'coverage': round(100 * classified / total, 1) if total else 0,
+                'scanning': self.scanning, 'scan_error': self.scan_error, 'classified': classified,
+                'to_catalog': total - classified, 'backup': backup, 'awaiting_transfer': incoming}
