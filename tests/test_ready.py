@@ -1,7 +1,44 @@
 """The model put in memory before it is asked anything, and kept there for a while (llm.ready, llm.KEEP_ALIVE)."""
 import asyncio
+import json
 
 import llm
+import pytest
+
+
+@pytest.mark.parametrize(('value', 'seconds'), [(None, 3600), ('0', None), ('7200', 7200)])
+def test_local_inference_allows_long_responses_or_an_unlimited_wait(monkeypatch, value, seconds):
+    if value is None:
+        monkeypatch.delenv('REGISTA_INFERENCE_TIMEOUT', raising=False)
+    else:
+        monkeypatch.setenv('REGISTA_INFERENCE_TIMEOUT', value)
+    timeout = llm.inference_timeout()
+    assert timeout.read == seconds
+    assert timeout.connect == 20
+
+
+@pytest.mark.parametrize('value', ['-1', 'nan', 'inf', 'invalid'])
+def test_invalid_inference_timeouts_are_rejected(monkeypatch, value):
+    monkeypatch.setenv('REGISTA_INFERENCE_TIMEOUT', value)
+    with pytest.raises(ValueError):
+        llm.inference_timeout()
+
+
+def test_structured_request_uses_the_response_timeout_and_visual_sampling(monkeypatch):
+    monkeypatch.setenv('REGISTA_INFERENCE_TIMEOUT', '0')
+    captured = {}
+    def handle(request):
+        captured['timeout'] = request.extensions['timeout']
+        captured['payload'] = json.loads(request.content)
+        return llm.httpx2.Response(200, json={'done': True, 'message': {'content': '{}'}})
+    real_client = llm.httpx2.AsyncClient
+    monkeypatch.setattr(llm.httpx2, 'AsyncClient', lambda **kwargs: real_client(transport=llm.httpx2.MockTransport(handle), **kwargs))
+    result = asyncio.run(llm.structured('test', [], {'type': 'object'}, max_tokens=4096,
+                                       options={'temperature': 0.7, 'presence_penalty': 1.5}))
+    assert result['done']
+    assert captured['timeout']['read'] is None
+    assert captured['payload']['options'] == {'temperature': 0.7, 'presence_penalty': 1.5,
+                                               'num_ctx': llm.NUM_CTX, 'num_predict': 4096}
 
 
 class Answer:

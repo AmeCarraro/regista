@@ -11,6 +11,9 @@ from inference_scheduler import scheduler
 from photo_annotator import VERSION, ModelChangedError
 from photo_catalog import fingerprint
 
+LEASE_SECONDS = 900
+LEASE_REFRESH_SECONDS = 60
+
 
 class IdleGate:
     """Best-effort telemetry; missing telemetry means no unattended inference."""
@@ -110,8 +113,31 @@ class IndexJobs:
             if row is None:
                 return None
             lease = uuid.uuid4().hex
-            db.execute("UPDATE jobs SET state='running',lease=?,lease_until=?,attempts=attempts+1 WHERE id=?", (lease, now + 900, row['id']))
+            db.execute("UPDATE jobs SET state='running',lease=?,lease_until=?,attempts=attempts+1 WHERE id=?", (lease, now + LEASE_SECONDS, row['id']))
             return {**dict(row), 'lease': lease, 'attempts': row['attempts'] + 1}
+
+    def renew(self, job):
+        with self.catalog.connect() as db:
+            return db.execute("UPDATE jobs SET lease_until=? WHERE id=? AND lease=? AND state='running'",
+                              (time.time() + LEASE_SECONDS, job['id'], job['lease'])).rowcount == 1
+
+    async def annotate(self, job, path):
+        # Keep ownership while waiting for the GPU or a slow response, without limiting inference time.
+        task = asyncio.create_task(self.annotator.annotate(path))
+        try:
+            while True:
+                done, _ = await asyncio.wait({task}, timeout=LEASE_REFRESH_SECONDS)
+                if done:
+                    return task.result()
+                if not self.renew(job):
+                    raise ValueError('La prenotazione del lavoro non è più valida: nessuna annotazione salvata.')
+        finally:
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
 
     def finish(self, job, result):
         with self.catalog.connect() as db:
@@ -142,7 +168,7 @@ class IndexJobs:
             path = self.catalog.path_of(job['asset_id'])
             if path is None or await asyncio.to_thread(fingerprint, path) != job['asset_id']:
                 raise ValueError('Foto cambiata o non disponibile: ripeti la scansione.')
-            result = await self.annotator.annotate(path)
+            result = await self.annotate(job, path)
             if await asyncio.to_thread(fingerprint, path) != job['asset_id']:
                 raise ValueError('Foto modificata durante l’analisi: ripeti la scansione.')
             self.finish(job, result)

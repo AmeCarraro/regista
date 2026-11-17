@@ -4,6 +4,7 @@ Ollama is the only thing that knows the models. Nothing here chooses one: that i
 """
 import base64
 import json
+import math
 import os
 import re
 
@@ -12,12 +13,20 @@ import httpx2
 from inference_scheduler import scheduler
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
-# 6144 is the largest context that keeps a 3B model entirely inside 4 GB of video memory
+# Shared context budget; actual GPU allocation depends on the model and available memory.
 NUM_CTX = int(os.getenv("NUM_CTX", "6144"))
 # How long a model stays in memory after it was last asked something. Ollama's own is five minutes:
 # then a search after a pause waits 15 to 20 seconds for the model to be loaded again. Half an hour,
 # and the memory goes back to the computer when Regista is not being used.
 KEEP_ALIVE = os.getenv("KEEP_ALIVE", "30m")
+
+
+def inference_timeout() -> httpx2.Timeout:
+    """Allow slow local inference; zero disables the response timeout."""
+    seconds = float(os.getenv('REGISTA_INFERENCE_TIMEOUT', '3600'))
+    if not math.isfinite(seconds) or seconds < 0:
+        raise ValueError('REGISTA_INFERENCE_TIMEOUT deve essere un numero finito maggiore o uguale a zero.')
+    return httpx2.Timeout(None if seconds == 0 else seconds, connect=20, write=60, pool=20)
 
 
 async def model_digest(name: str) -> str:
@@ -71,7 +80,7 @@ async def ready(model: str, share: float | None = None) -> float | None:
     Existing allocations are left alone, including models loaded by other clients. `share` is
     retained for legacy callers, but never authorizes unloading. Returns the current GPU share.
     """
-    async with scheduler.slot(), httpx2.AsyncClient(timeout=300) as client:
+    async with scheduler.slot(), httpx2.AsyncClient(timeout=inference_timeout()) as client:
 
         async def now() -> float | None:
             running = (await client.get(f"{OLLAMA_URL}/api/ps")).json().get("models", [])
@@ -120,7 +129,7 @@ async def sees_many(model: str, pictures: list[bytes], what: str, english: bool 
         "options": {"temperature": 0, "num_ctx": NUM_CTX, "num_predict": 8 * count},
         "keep_alive": KEEP_ALIVE,
     }
-    async with scheduler.slot(), httpx2.AsyncClient(timeout=300) as client:
+    async with scheduler.slot(), httpx2.AsyncClient(timeout=inference_timeout()) as client:
         response = await client.post(f"{OLLAMA_URL}/api/chat", json=payload)
     if response.status_code != 200:
         raise RuntimeError(f"Ollama answered {response.status_code}: {response.text[:300]}")
@@ -146,7 +155,7 @@ async def sees(model: str, picture: bytes, question: str) -> bool:
         "options": {"temperature": 0, "num_ctx": NUM_CTX, "num_predict": 3},
         "keep_alive": KEEP_ALIVE,
     }
-    async with scheduler.slot(), httpx2.AsyncClient(timeout=300) as client:
+    async with scheduler.slot(), httpx2.AsyncClient(timeout=inference_timeout()) as client:
         response = await client.post(f"{OLLAMA_URL}/api/chat", json=payload)
     if response.status_code != 200:
         raise RuntimeError(f"Ollama answered {response.status_code}: {response.text[:300]}")
@@ -173,7 +182,7 @@ async def stream(model: str, messages: list[dict], max_tokens: int = 700, schema
     }
     if schema:
         payload["format"] = schema
-    async with scheduler.slot(), httpx2.AsyncClient(timeout=300) as client:
+    async with scheduler.slot(), httpx2.AsyncClient(timeout=inference_timeout()) as client:
         async with client.stream("POST", f"{OLLAMA_URL}/api/chat", json=payload) as response:
             if response.status_code != 200:
                 body = (await response.aread()).decode(errors="replace")
@@ -195,12 +204,13 @@ async def stream(model: str, messages: list[dict], max_tokens: int = 700, schema
                     }
 
 
-async def structured(model: str, messages: list[dict], schema: dict, *, background=False, max_tokens=1000) -> dict:
+async def structured(model: str, messages: list[dict], schema: dict, *, background=False, max_tokens=1000,
+                     options: dict | None = None) -> dict:
     """A nonstreaming JSON response; all inference uses the same arbiter."""
-    async with scheduler.slot(background=background), httpx2.AsyncClient(timeout=300) as client:
+    async with scheduler.slot(background=background), httpx2.AsyncClient(timeout=inference_timeout()) as client:
         response = await client.post(f"{OLLAMA_URL}/api/chat", json={
             "model": model, "messages": messages, "format": schema, "stream": False, "think": False,
-            "options": {"temperature": 0, "num_ctx": NUM_CTX, "num_predict": max_tokens}, "keep_alive": KEEP_ALIVE,
+            "options": {"temperature": 0, "num_ctx": NUM_CTX, "num_predict": max_tokens, **(options or {})}, "keep_alive": KEEP_ALIVE,
         })
         response.raise_for_status()
         return response.json()

@@ -295,6 +295,7 @@ def test_interactive_inference_precedes_waiting_background_and_cancel_releases_s
     {'done': True, 'message': {'content': 'not JSON'}},
     {'done': True, 'message': {'content': '{"description":"","tags":[]}'}},
     {'done': True, 'message': {'content': '{"description":"Una foto","tags":[{"term":"x","category":"unknown"}]}'}},
+    {'done': True, 'message': {'content': '{"description":"Un prato.","tags":[{"term":"cane","category":"animal"}]}'}},
 ])
 def test_invalid_or_truncated_annotations_are_not_successes(tmp_path, monkeypatch, response):
     import llm
@@ -308,6 +309,97 @@ def test_invalid_or_truncated_annotations_are_not_successes(tmp_path, monkeypatc
     annotator.identity = {'digest': 'test', 'quantization': 'test'}
     with pytest.raises(ValueError):
         asyncio.run(annotator.annotate(photo(tmp_path / 'test.png')))
+
+
+def test_only_unique_caption_supported_tags_are_saved_and_searchable(library, monkeypatch):
+    import llm
+    root, catalog, jobs, _ = library
+    photo(root / 'test.png')
+    catalog.scan(VERSION, stable_seconds=0)
+    response = {'description': 'Due gatti su un divano rosa accanto a un canestro.', 'tags': [
+        {'term': 'gatti', 'category': 'animal'}, {'term': ' GATTI ', 'category': 'object'},
+        {'term': 'divano rosa', 'category': 'object'}, {'term': 'cane', 'category': 'animal'}]}
+    async def structured(*args, **kwargs):
+        return {'done': True, 'done_reason': 'stop', 'message': {'content': json.dumps(response)}}
+    async def digest(model):
+        return 'test'
+    monkeypatch.setattr(llm, 'structured', structured)
+    monkeypatch.setattr(llm, 'model_digest', digest)
+    jobs.annotator = PhotoAnnotator()
+    jobs.annotator.identity = {'digest': 'test'}
+    drain(jobs)
+    result = search(catalog, SearchPlan())['photos'][0]
+    assert [(tag['tag'], tag['category']) for tag in result['tags']] == [('divano rosa', 'object'), ('gatti', 'animal')]
+    assert search(catalog, SearchPlan(terms=['cani']))['total'] == 0
+    assert search(catalog, SearchPlan(terms=['gatti']))['total'] == 1
+    with catalog.connect() as db:
+        raw = json.loads(db.execute('SELECT result FROM annotations').fetchone()[0])
+    assert raw['_rejected_tags'] == [
+        {'term': ' GATTI ', 'category': 'object', 'reason': 'duplicate'},
+        {'term': 'cane', 'category': 'animal', 'reason': 'not_in_description'}]
+
+
+def test_long_annotation_renews_ownership_until_it_finishes(library, monkeypatch):
+    import index_jobs
+    root, catalog, jobs, annotator = library
+    photo(root / 'test.png')
+    catalog.scan(VERSION, stable_seconds=0)
+    monkeypatch.setattr(index_jobs, 'LEASE_REFRESH_SECONDS', 0.001)
+
+    async def run():
+        started, renewed, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        original_annotate, original_renew = annotator.annotate, jobs.renew
+        async def slow(path):
+            started.set()
+            await release.wait()
+            return await original_annotate(path)
+        def renew(job):
+            owned = original_renew(job)
+            renewed.set()
+            return owned
+        monkeypatch.setattr(annotator, 'annotate', slow)
+        monkeypatch.setattr(jobs, 'renew', renew)
+        worker = asyncio.create_task(jobs.one())
+        try:
+            await asyncio.wait_for(started.wait(), 2)
+            with catalog.connect() as db:
+                db.execute('UPDATE jobs SET lease_until=0')
+            renewed.clear()
+            await asyncio.wait_for(renewed.wait(), 2)
+            assert IndexJobs(catalog, annotator).claim() is None
+            release.set()
+            await asyncio.wait_for(worker, 2)
+        finally:
+            release.set()
+            worker.cancel()
+            await asyncio.gather(worker, return_exceptions=True)
+    asyncio.run(run())
+    assert catalog.status()['analyzed'] == 1
+    assert len(annotator.calls) == 1
+
+
+def test_cancelling_slow_annotation_stops_inference_and_releases_the_job(library, monkeypatch):
+    root, catalog, jobs, annotator = library
+    photo(root / 'test.png')
+    catalog.scan(VERSION, stable_seconds=0)
+    async def run():
+        started, stopped = asyncio.Event(), asyncio.Event()
+        async def slow(path):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                stopped.set()
+        monkeypatch.setattr(annotator, 'annotate', slow)
+        worker = asyncio.create_task(jobs.one())
+        await asyncio.wait_for(started.wait(), 2)
+        worker.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await worker
+        assert stopped.is_set()
+    asyncio.run(run())
+    assert catalog.status()['pending'] == 1
+    assert catalog.status()['running'] == 0
 
 
 def test_version_one_migration_preserves_results_and_keeps_a_sqlite_backup(library):

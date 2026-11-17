@@ -32,9 +32,13 @@ Protocollo telefono 2: ricerca, paginazione e miniature provengono dal PC; origi
 
 `REGISTA_PHOTO_CATALOG=1` è il default. `REGISTA_QWEN_MODEL=qwen3-vl:2b-instruct` è il candidato esplicito predefinito del piano. L'assenza del tag esatto è un errore visibile, senza fallback. In `settings.json` desktop le chiavi corrispondenti sono `photo_catalog` e `qwen_model`. L'installer accetta `-QwenModel` e non scarica più CLIP o modelli per Android; eventuali download dell'installer richiedono la sua conferma esplicita.
 
-Su questo PC è stato trovato `qwen3-vl:2b`, digest `0635d9d857d497aeadba3d7d27485746c50554446f9f6ec01ef39788221adbe8`, quantizzazione Q4_K_M. Il tag `qwen3-vl:2b-instruct` non risulta installato. Non è stato creato un alias e la configurazione predefinita non è stata cambiata. L'esistenza/disponibilità del candidato nel registro e la sua qualità vanno verificate prima dell'installazione; non viene dichiarata equivalenza fra i due tag.
+Aggiornamento del 17 novembre: installato e provato `qwen3-vl:2b-instruct`, digest `afc393e3572c07db0bc84aa460d928a16c75f3fbb9ca9e0dccc4fbd2dafb573e`, quantizzazione Q4_K_M. Il precedente `qwen3-vl:2b` rimane distinto. Nessun alias creato. [Risultati e tag delle tre foto pubbliche](prova-qwen-instruct.md).
 
 `REGISTA_IMAGE_SIDE`, `NUM_CTX`, `KEEP_ALIVE` configurano i budget. La modalità inattivo usa `REGISTA_IDLE_SECONDS` (60), `REGISTA_IDLE_GPU_PERCENT` (10), `REGISTA_IDLE_FREE_MB` (768), `REGISTA_IDLE_STABLE_SECONDS` (30). Richiede telemetria NVIDIA e, su Windows, alimentazione di rete; in assenza dei dati resta conservativa. Questi valori sono iniziali, non soglie collaudate come garanzia su questo hardware.
+
+`REGISTA_INFERENCE_TIMEOUT` controlla l'attesa della risposta Ollama: 3.600 secondi per default, `0` per disattivarla. Connessione e invio hanno timeout separati di 20 e 60 secondi; le richieste di stato/modelli mantengono 20 secondi. Il worker rinnova la lease ogni 60 secondi durante attesa e inferenza, così il vecchio limite di 15 minuti della prenotazione non interrompe la proprietà di un lavoro ancora attivo.
+
+Annotazioni `catalog-it-2`, schema `2`: istruzioni e schema sono presenti nel testo della richiesta e nel decoder; categorie enum, budget di 4.096 token, campionamento visivo Qwen con seed registrato. Il risultato salvato include solo tag unici che compaiono come parole o espressioni complete nella descrizione normalizzata. Tag scartati e risposta originale restano nei dati diagnostici. È una scelta conservativa: sinonimi e riformulazioni possono essere esclusi. Una descrizione errata può ancora produrre tag errati. Le annotazioni già salvate e le correzioni manuali restano disponibili; per applicare la nuova versione alle foto già analizzate occorre **Rianalizza selezione**.
 
 ## Diagnostica
 

@@ -17,7 +17,9 @@ Nell’Assistente puoi inviare un’immagine temporanea e fare una domanda. **Sa
 
 Il candidato predefinito è `qwen3-vl:2b-instruct`, configurabile con `REGISTA_QWEN_MODEL` oppure `qwen_model` nel `settings.json` desktop. Serve il tag esatto: nessun modello alternativo viene scelto automaticamente e nessun modello viene scaricato all’avvio.
 
-Su questo PC è stato trovato `qwen3-vl:2b`; `qwen3-vl:2b-instruct` non risulta installato. I due tag non sono considerati equivalenti. Prima di installare/configurare il modello definitivo occorre verificarne disponibilità e qualità.
+Su questo PC è stato installato e provato `qwen3-vl:2b-instruct` Q4_K_M. Il tag esatto e il digest vengono verificati prima e dopo ogni annotazione. I tag non presenti nella descrizione e i duplicati vengono esclusi dal risultato salvato; questo controllo non garantisce che la descrizione visiva sia corretta. [Prova su tre foto pubbliche e tag ottenuti](docs/prova-qwen-instruct.md).
+
+L'attesa per una risposta locale è di **un'ora** per impostazione predefinita. `REGISTA_INFERENCE_TIMEOUT` permette di cambiarla in secondi; `0` disattiva il timeout della risposta. Le analisi lunghe rinnovano la prenotazione del lavoro in coda. Il budget di risposta è distinto dal tempo e passa a 4.096 token per le annotazioni; risposte troncate restano errori.
 
 ## Avvio e distribuzione
 
