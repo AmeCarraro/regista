@@ -2,6 +2,7 @@
 import base64
 import io
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -133,7 +134,7 @@ def supported_tags(annotation: Annotation) -> tuple[list[dict], list[dict], list
     duplicates = sum(item['reason'] == 'duplicate' for item in rejected)
     if duplicates >= 3 and duplicates > len(annotation.tags) / 2:
         raise ValueError('Risposta Qwen ripetitiva: la foto resta da catalogare.')
-    if annotation.tags and not tags:
+    if not tags:
         raise ValueError('Nessun tag coerente con la descrizione: annotazione rifiutata.')
     for item in list(tags):
         if item['category'] not in ('object', 'animal', 'scene'):
@@ -158,6 +159,22 @@ def prepare(path: Path) -> bytes:
         buffer = io.BytesIO()
         picture.save(buffer, 'JPEG', quality=90)
         return buffer.getvalue()
+
+
+def inference_metrics(response: dict) -> dict:
+    """Ollama timings are nanoseconds; absent/invalid telemetry is not a measured zero."""
+    metrics = {}
+    for source, target in (('total_duration', 'total_seconds'), ('load_duration', 'load_seconds'),
+                           ('prompt_eval_duration', 'prompt_seconds'), ('eval_duration', 'generation_seconds')):
+        value = response.get(source)
+        if type(value) in (int, float) and math.isfinite(value) and value >= 0:
+            metrics[target] = value / 1_000_000_000
+    for source, target in (('prompt_eval_count', 'prompt_tokens'), ('prompt_eval_cached_count', 'prompt_cached_tokens'),
+                           ('eval_count', 'generated_tokens')):
+        value = response.get(source)
+        if type(value) is int and value >= 0:
+            metrics[target] = value
+    return metrics
 
 
 class PhotoAnnotator:
@@ -203,5 +220,6 @@ class PhotoAnnotator:
                 'seconds': time.perf_counter() - started, 'raw': {**json.loads(parsed.model_dump_json()),
                     '_prompt': PROMPT, '_schema': schema, '_image_side': SIDE, '_context': llm.NUM_CTX,
                     '_generation': {**GENERATION_OPTIONS, 'num_predict': MAX_TOKENS},
+                    '_ollama': inference_metrics(result),
                     '_response_content': result['message']['content'], '_rejected_tags': rejected,
                     '_accepted_tags': tags, '_derived_tags': derived, '_tag_filter_version': FILTER_VERSION}}

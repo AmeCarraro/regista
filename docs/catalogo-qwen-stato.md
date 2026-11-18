@@ -1,6 +1,6 @@
 # Catalogo Qwen: implementazione e collaudo
 
-13 novembre 2026, aggiornato il 17 novembre. Riferimento: `piano-catalogo-qwen.md`, conservato senza modifiche. Ultimo aggiornamento: [originali ZIP, tag con quantità e stati di catalogazione](originali-e-classificazione.md).
+13 novembre 2026, aggiornato il 18 novembre. Riferimento: `piano-catalogo-qwen.md`, conservato senza modifiche. Aggiornamenti: [originali ZIP, tag con quantità e stati di catalogazione](originali-e-classificazione.md); [riconoscimento, altre dieci foto e benchmark ripetibile](confronto-qwen-riconoscimento.md).
 
 ## Percorso implementato
 
@@ -39,6 +39,8 @@ Aggiornamento del 17 novembre: installato e provato `qwen3-vl:2b-instruct`, dige
 `REGISTA_INFERENCE_TIMEOUT` controlla l'attesa della risposta Ollama: 300 secondi per default, `0` per disattivarla. Per le chiamate JSON il limite copre tutta la risposta, esclusa la coda GPU. Connessione e invio hanno timeout separati di 20 e 60 secondi; le richieste di stato/modelli mantengono 20 secondi. Il worker rinnova la lease ogni 60 secondi durante attesa e inferenza. Timeout e risposte invalide restano da catalogare con motivo persistente e riprova esplicita.
 
 Annotazioni `catalog-it-3`, schema `2`: istruzioni e schema sono presenti nel testo della richiesta e nel decoder; categorie enum, budget di 4.096 token, campionamento con penalità sulle ripetizioni e seed registrato. Il risultato salvato include tag unici supportati dalla descrizione, con arricchimento di quantità e colori; le scritture numeriche e in lettere dei conteggi sono equivalenti. Tag scartati, evidenze delle aggiunte e risposta originale restano nei dati diagnostici. È una scelta conservativa: sinonimi e riformulazioni possono essere esclusi. Una descrizione errata può ancora produrre tag errati. Le annotazioni già salvate e le correzioni manuali restano disponibili; per applicare la nuova versione alle foto già analizzate occorre **Rianalizza selezione**.
+
+Dal 18 novembre sono rifiutate anche le risposte prive di tag; restano da catalogare con il motivo. Le nuove annotazioni includono i tempi e i conteggi di token restituiti da Ollama, separati dal tempo complessivo. Non sono cambiati modello, prompt o campionamento. Il [nuovo collaudo](prova-qwen-altre-10-foto.md) porta a trenta le immagini pubbliche distinte provate con il catalogatore; gli errori di riconoscimento e conteggio restano un limite aperto. La suite backend aggiornata supera 486 test.
 
 ## Diagnostica
 

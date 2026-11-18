@@ -295,6 +295,7 @@ def test_interactive_inference_precedes_waiting_background_and_cancel_releases_s
     {'done': True, 'done_reason': 'length', 'message': {'content': '{}'}},
     {'done': True, 'message': {'content': 'not JSON'}},
     {'done': True, 'message': {'content': '{"description":"","tags":[]}'}},
+    {'done': True, 'message': {'content': '{"description":"Nessun soggetto riconoscibile.","tags":[]}'}},
     {'done': True, 'message': {'content': '{"description":"Una foto","tags":[{"term":"x","category":"unknown"}]}'}},
     {'done': True, 'message': {'content': '{"description":"Un prato.","tags":[{"term":"cane","category":"animal"}]}'}},
     {'done': True, 'message': {'content': json.dumps({'description': 'Due gatti.', 'tags': [{'term': 'gatti', 'category': 'animal'}] * 8})}},
@@ -341,6 +342,55 @@ def test_only_unique_caption_supported_tags_are_saved_and_searchable(library, mo
     assert raw['_rejected_tags'] == [
         {'term': ' GATTI ', 'category': 'object', 'reason': 'duplicate'},
         {'term': 'cane', 'category': 'animal', 'reason': 'not_in_description'}]
+
+
+def test_empty_tags_leave_photo_for_review_with_original_backup(library, monkeypatch):
+    import llm
+    root, catalog, jobs, _ = library
+    path = photo(root / 'unclear.png')
+    original = path.read_bytes()
+    catalog.scan(VERSION, stable_seconds=0)
+    async def structured(*args, **kwargs):
+        return {'done': True, 'message': {'content': '{"description":"Foto non chiara.","tags":[]}'}}
+    async def digest(model):
+        return 'test'
+    monkeypatch.setattr(llm, 'structured', structured)
+    monkeypatch.setattr(llm, 'model_digest', digest)
+    jobs.annotator = PhotoAnnotator()
+    jobs.annotator.identity = {'digest': 'test'}
+    drain(jobs)
+    assert path.read_bytes() == original
+    assert catalog.status()['analyzed'] == 0
+    assert catalog.status()['failed'] == 1
+    with catalog.connect() as db:
+        job = db.execute('SELECT state,attempts,error FROM jobs').fetchone()
+        assert job['state'] == 'error' and job['attempts'] == 1
+        assert 'Nessun tag' in job['error']
+        assert db.execute('SELECT count(*) FROM original_backups').fetchone()[0] == 1
+
+
+def test_annotation_preserves_ollama_timings_and_ignores_missing_or_invalid_metrics(tmp_path, monkeypatch):
+    import llm
+    from photo_annotator import inference_metrics
+    async def structured(*args, **kwargs):
+        return {'done': True, 'message': {'content': '{"description":"Un cane.","tags":[{"term":"cane","category":"animal"}]}'},
+                'total_duration': 3_000_000_000, 'load_duration': 1_000_000_000,
+                'prompt_eval_duration': 500_000_000, 'eval_duration': 1_500_000_000,
+                'prompt_eval_count': 100, 'prompt_eval_cached_count': 20, 'eval_count': 30}
+    async def digest(model):
+        return 'test'
+    monkeypatch.setattr(llm, 'structured', structured)
+    monkeypatch.setattr(llm, 'model_digest', digest)
+    annotator = PhotoAnnotator()
+    annotator.identity = {'digest': 'test'}
+    result = asyncio.run(annotator.annotate(photo(tmp_path / 'dog.png')))
+    assert result['raw']['_ollama'] == {'total_seconds': 3, 'load_seconds': 1, 'prompt_seconds': 0.5,
+        'generation_seconds': 1.5, 'prompt_tokens': 100, 'prompt_cached_tokens': 20, 'generated_tokens': 30}
+    assert inference_metrics({}) == {}
+    assert inference_metrics({'load_duration': -1, 'eval_duration': float('nan'), 'total_duration': float('inf'),
+                              'prompt_eval_duration': True, 'eval_count': '10', 'prompt_eval_count': -1,
+                              'prompt_eval_cached_count': 1.5}) == {}
+    assert inference_metrics({'load_duration': 0, 'eval_count': 0}) == {'load_seconds': 0, 'generated_tokens': 0}
 
 
 def test_long_annotation_renews_ownership_until_it_finishes(library, monkeypatch):

@@ -1,0 +1,62 @@
+{
+  "title": "Qwen: altre dieci foto pubbliche (010–019)",
+  "note": "Riferimenti da ispezione delle immagini, preparati prima delle chiamate Qwen. Il riferimento 019 è stato poi corretto dopo un'ispezione separata: la funzione della copertura dorata è ambigua, quindi paracadute non viene vietato come nome. Le classi Imagenette non bastano a certificare il contenuto. Campione piccolo di immagini circa 224×224, non rappresentativo di tutte le foto personali.",
+  "cases": [
+    {
+      "file": "010.jpg",
+      "reference": "Un uomo tiene davanti a sé un grande pesce; giacca verde, cappello, vegetazione sullo sfondo.",
+      "checks": [{"label": "pesce nei tag", "any_tags": ["pesce", "carpa"]}]
+    },
+    {
+      "file": "011.jpg",
+      "reference": "Un cane nero e bianco cammina su terreno secco portando in bocca una bottiglia di plastica con parti blu.",
+      "checks": [
+        {"label": "cane nei tag", "any_tags": ["cane", "cagnolino", "cucciolo"]},
+        {"label": "bottiglia nei tag", "any_tags": ["bottiglia", "bottiglietta"]}
+      ]
+    },
+    {
+      "file": "012.jpg",
+      "reference": "Primo piano di un apparecchio audio portatile grigio con sportello per cassette, comandi e parti di due altoparlanti.",
+      "checks": [{"label": "apparecchio audio nei tag", "any_tags": ["registratore", "radio", "stereo", "lettore", "boombox", "apparecchio audio"]}]
+    },
+    {
+      "file": "013.jpg",
+      "reference": "Motosega blu e nera con barra chiara e catena visibile, su fondo bianco. Non ci sono persone.",
+      "checks": [{"label": "motosega nei tag", "any_tags": ["motosega", "sega a catena"], "forbidden_tags": ["scopa", "serratura"]}]
+    },
+    {
+      "file": "014.jpg",
+      "reference": "Facciata invecchiata di un edificio chiaro con decorazioni verticali, apertura con grata e vegetazione. Il ritaglio non basta per certificarne la funzione.",
+      "checks": [{"label": "edificio o facciata nei tag", "any_tags": ["edificio", "facciata", "palazzo", "costruzione", "muro", "chiesa"]}]
+    },
+    {
+      "file": "015.jpg",
+      "reference": "Un uomo con occhiali, abito scuro e papillon tiene un grande strumento a fiato in ottone con ampia campana. Non usare la classe del dataset per imporre il nome corno francese.",
+      "checks": [{"label": "strumento musicale nei tag", "any_tags": ["strumento musicale", "strumento a fiato", "tuba", "eufonio", "bombardino", "corno", "trombone"]}]
+    },
+    {
+      "file": "016.jpg",
+      "reference": "Un autocarro con cassone blu ribaltabile sollevato, all'aperto. Ruote e telaio sono visibili; la foto non prova che trasporti rifiuti.",
+      "checks": [{"label": "autocarro nei tag", "any_tags": ["camion", "autocarro", "veicolo"]}]
+    },
+    {
+      "file": "017.jpg",
+      "reference": "Tre pompe di carburante d'epoca gialla, rossa e verde affiancate, con tubi e insegne rotonde; edificio sullo sfondo.",
+      "checks": [
+        {"label": "pompe o distributori nei tag", "any_tags": ["pompa", "pompe", "distributore", "distributori"]},
+        {"label": "quantità tre nei tag", "any_tags": ["tre pompe", "3 pompe", "tre distributori", "3 distributori"]}
+      ]
+    },
+    {
+      "file": "018.jpg",
+      "reference": "Una pallina da golf bianca su una superficie verde; testo scuro sulla pallina e parte di una mazza sullo sfondo.",
+      "checks": [{"label": "pallina da golf nei tag", "any_tags": ["pallina da golf", "palla da golf"]}]
+    },
+    {
+      "file": "019.jpg",
+      "reference": "Una copertura dorata con corde è sospesa sopra una persona in mezzo ad altre persone a terra. Sono visibili oggetti rettangolari appesi. La funzione della copertura non è certa: non imporre un nome e non dedurre una scena di volo.",
+      "checks": [{"label": "copertura dorata nei tag, senza dedurre un volo", "any_tags": ["telo", "baldacchino", "tessuto", "tenda", "drappo", "copertura", "cupola", "paracadute"], "forbidden_tags": ["in volo", "volando"]}]
+    }
+  ]
+}
