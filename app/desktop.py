@@ -20,6 +20,7 @@ the sources, it keeps them in %LOCALAPPDATA%\\Regista, or where --home says.
 """
 import argparse
 import ctypes
+import ipaddress
 import json
 import os
 import socket
@@ -146,6 +147,64 @@ def home_address() -> str:
             return probe.getsockname()[0]
         except OSError:
             return ""
+
+
+def _adapter_addresses() -> list[str]:
+    """Windows IPv4 adapters, including USB tethering even when Wi-Fi is the default route."""
+    class Address(ctypes.Structure):
+        pass
+    Address._fields_ = [('next', ctypes.POINTER(Address)), ('ip', ctypes.c_char * 16),
+                        ('mask', ctypes.c_char * 16), ('context', ctypes.c_uint32)]
+    class Adapter(ctypes.Structure):
+        pass
+    Adapter._fields_ = [('next', ctypes.POINTER(Adapter)), ('combo', ctypes.c_uint32),
+        ('name', ctypes.c_char * 260), ('description', ctypes.c_char * 132), ('length', ctypes.c_uint32),
+        ('mac', ctypes.c_ubyte * 8), ('index', ctypes.c_uint32), ('kind', ctypes.c_uint32),
+        ('dhcp', ctypes.c_uint32), ('current', ctypes.POINTER(Address)), ('addresses', Address)]
+    try:
+        get = ctypes.windll.iphlpapi.GetAdaptersInfo
+        get.argtypes = [ctypes.POINTER(Adapter), ctypes.POINTER(ctypes.c_uint32)]
+        size = ctypes.c_uint32()
+        if get(None, ctypes.byref(size)) != 111 or not size.value:
+            return []
+        buffer = ctypes.create_string_buffer(size.value)
+        adapter = ctypes.cast(buffer, ctypes.POINTER(Adapter))
+        if get(adapter, ctypes.byref(size)):
+            return []
+        found = []
+        while adapter:
+            address = ctypes.pointer(adapter.contents.addresses)
+            while address:
+                found.append(address.contents.ip.decode('ascii'))
+                address = address.contents.next
+            adapter = adapter.contents.next
+        return found
+    except (AttributeError, OSError, ValueError):
+        return []
+
+
+def network_addresses() -> list[str]:
+    allowed = [ipaddress.ip_network(net) for net in ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '100.64.0.0/10')]
+    found = []
+    for value in [home_address(), *_adapter_addresses()]:
+        try:
+            address = ipaddress.ip_address(value)
+            if address.version == 4 and any(address in net for net in allowed) and value not in found:
+                found.append(value)
+        except ValueError:
+            pass
+    return found
+
+
+def follow_networks(service, addresses: list[str], stop: threading.Event, configured=()) -> None:
+    """Add/remove private network listeners without displacing a still-connected Wi-Fi interface."""
+    while not stop.wait(FOLLOW_EVERY):
+        now = list(dict.fromkeys([*network_addresses(), *configured]))
+        if stop.is_set():
+            break
+        if set(now) != set(addresses):
+            service.sync_phone_doors(now)
+            addresses = now
 
 
 def _answers(url: str, seconds: float = 2) -> bool:
@@ -297,7 +356,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     addresses = []
     if chosen["phone"]:
-        addresses = list(dict.fromkeys(address for address in [home_address(), *chosen["addresses"]] if address and not address.startswith("127.")))
+        addresses = list(dict.fromkeys(address for address in [*network_addresses(), *chosen["addresses"]] if address and not address.startswith("127.")))
         if not addresses:
             print("no network a phone could reach this PC on: the door of the phones stays on this PC alone", flush=True)
 
@@ -319,8 +378,8 @@ def main(argv: list[str] | None = None) -> int:
         say(f"Regista non è partito. Quello che è successo è scritto in {home / 'regista.log'}.", problem=True)
         return 1
     print(f"Regista: {url} (pictures: {photos}; phones: {', '.join(addresses) or 'this PC only'}, port {chosen['phone_port']})", flush=True)
-    if addresses:
-        threading.Thread(target=follow, args=(service, addresses[0], threading.Event()), daemon=True).start()
+    if chosen['phone']:
+        threading.Thread(target=follow_networks, args=(service, addresses, threading.Event(), chosen['addresses']), daemon=True).start()
 
     if options.no_window:
         running.join()

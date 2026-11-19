@@ -171,6 +171,19 @@ def move_phone_door(before: str, now: str) -> None:
     logger.info("this PC is at %s in the home network, no longer at %s: the door of the phones moved there", now, before)
 
 
+def sync_phone_doors(addresses: list[str]) -> None:
+    """Listen on newly connected private interfaces, including USB, and update pairing links."""
+    global PHONE_OPEN
+    for address in addresses:
+        if address not in doors:
+            _open_door(address)
+    for address in list(doors):
+        if address not in addresses:
+            doors.pop(address).should_exit = True
+    phones.addresses = list(addresses)
+    PHONE_OPEN = bool(addresses)
+
+
 async def ready_the_director() -> None:
     """The model that directs, and looks too, is put in memory as the app starts: the first request does not wait for it."""
     try:
@@ -256,7 +269,7 @@ class Gate:
             await outer(message)
 
         # an original from a phone is counted by who writes it to disk, as it arrives
-        if not (scope["method"] == "PUT" and path.startswith(("/phone/transfers/", "/phone/music/", "/phone/catalog/import"))):
+        if not (scope["method"] == "PUT" and path.startswith(("/phone/transfers/", "/phone/music/", "/phone/catalog/import", "/phone/media-backup/upload"))):
             most = PAIRING_BODY if path in PAIRING else BODY
             declared = headers.get(b"content-length", "")
             if declared.isdigit() and int(declared) > most:

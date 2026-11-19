@@ -19,6 +19,8 @@ Con l'APK **0.6**, il telefono riceve una copia indicizzata del catalogo: tag, d
 
 Musica locale e widget funzionano senza PC. Nella scheda **Video** scegli i file del telefono e riproducili con pausa e avanzamento; gli originali restano nelle loro cartelle. Le foto che esistono soltanto sul PC richiedono il collegamento per aprire l'immagine, mentre i relativi tag rimangono disponibili offline. [Uso e limiti del nuovo APK](docs/telefono-offline-e-video.md).
 
+Con l'APK **0.7**, **Impostazioni e backup** contiene il comando confermato per copiare sul PC immagini, audio e video accessibili, con cartelle supplementari selezionabili, deduplicazione SHA-256, ZIP verificati e ripresa. Supporta la rete del tethering USB; il solo cavo in modalità ricarica/MTP non basta. [Copertura, collegamento e recupero](docs/backup-completo-telefono.md).
+
 ## Modello esplicito
 
 Il candidato predefinito è `qwen3-vl:2b-instruct`, configurabile con `REGISTA_QWEN_MODEL` oppure `qwen_model` nel `settings.json` desktop. Serve il tag esatto: nessun modello alternativo viene scelto automaticamente e nessun modello viene scaricato all’avvio.

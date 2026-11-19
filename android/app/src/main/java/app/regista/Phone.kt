@@ -37,7 +37,31 @@ class Phone(
     private val tags: ManualTags,
     private val catalogCache: CatalogCache,
     private val videos: Videos,
+    private val mediaBackup: MediaBackup,
+    private val backupFolders: BackupFolders,
 ) {
+    @JavascriptInterface
+    fun mediaBackupState(): String = JSONObject(mediaBackup.state()).put("folders", backupFolders.state().getJSONArray("folders"))
+        .put("paired", memory.paired).put("reachable", app.reached != null).put("address", app.reached?.address.orEmpty())
+        .put("missing_permissions", JSONArray(mediaBackup.missingPermissions().toList())).toString()
+
+    @JavascriptInterface
+    fun startMediaBackup() = app.runOnUiThread { app.requestMediaBackup() }
+
+    @JavascriptInterface
+    fun cancelMediaBackup() = mediaBackup.cancel()
+
+    @JavascriptInterface
+    fun chooseBackupFolder() = app.runOnUiThread { app.chooseBackupFolder() }
+
+    @JavascriptInterface
+    fun removeBackupFolder(id: String) { if (!mediaBackup.busy) backupFolders.remove(id) }
+
+    @JavascriptInterface
+    fun openBackupNetworkSettings() = app.runOnUiThread {
+        try { app.startActivity(Intent(android.provider.Settings.ACTION_WIRELESS_SETTINGS)) }
+        catch (_: android.content.ActivityNotFoundException) { app.openSettings() }
+    }
     /** The pictures of this phone by kind (Kinds.sorted); null until the computer said what the kinds are. */
     @JavascriptInterface
     fun kinds(): String = kinds.sorted()

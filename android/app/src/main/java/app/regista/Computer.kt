@@ -71,7 +71,7 @@ fun readInvite(text: String): Invite? {
  */
 fun neighbours(): List<String> = try {
     NetworkInterface.getNetworkInterfaces().toList()
-        .filter { it.isUp && !it.isLoopback && (it.name.startsWith("wlan") || it.name.startsWith("eth")) }
+        .filter { it.isUp && !it.isLoopback && BackupNetwork.localInterface(it.name) }
         .flatMap { it.inetAddresses.toList() }
         .filterIsInstance<Inet4Address>()
         .mapNotNull { it.hostAddress }
@@ -162,18 +162,26 @@ class Computer(val address: String, private val port: Int, private val fingerpri
     }
 
     /** Asks the computer something, with a JSON body or none, and returns its JSON answer. */
-    fun ask(method: String, path: String, body: JSONObject? = null): JSONObject {
+    fun ask(method: String, path: String, body: JSONObject? = null, connectionChanged: (HttpsURLConnection?) -> Unit = {}): JSONObject {
         val connection = open(method, path)
-        // A manifest may verify many original ZIPs before declaring which files are missing.
-        if (path == "/phone/catalog/missing") connection.readTimeout = 300000
-        if (body != null) {
-            val bytes = body.toString().toByteArray()
-            connection.doOutput = true
-            connection.setRequestProperty("Content-Type", "application/json")
-            connection.setFixedLengthStreamingMode(bytes.size)
-            connection.outputStream.use { it.write(bytes) }
+        try {
+            connectionChanged(connection)
+            // Explicit backups can verify large local ZIPs; the user can disconnect to cancel.
+            if (path == "/phone/media-backup/manifest") connection.readTimeout = 0
+            else if (path.startsWith("/phone/media-backup/")) connection.readTimeout = 10000
+            else if (path == "/phone/catalog/missing") connection.readTimeout = 300000
+            if (body != null) {
+                val bytes = body.toString().toByteArray()
+                connection.doOutput = true
+                connection.setRequestProperty("Content-Type", "application/json")
+                connection.setFixedLengthStreamingMode(bytes.size)
+                connection.outputStream.use { it.write(bytes) }
+            }
+            return answer(connection)
+        } finally {
+            connection.disconnect()
+            connectionChanged(null)
         }
-        return answer(connection)
     }
 
     /** Asks the computer something whose answer comes a line at a time, each a JSON object: each goes to `each` as it arrives. */
@@ -214,15 +222,21 @@ class Computer(val address: String, private val port: Int, private val fingerpri
     }
 
     /** Sends a file as it is, without holding it all in memory, with the fingerprint the computer checks it against. */
-    fun send(path: String, length: Long, source: InputStream, fingerprint: String): JSONObject {
+    fun send(path: String, length: Long, source: InputStream, fingerprint: String, connectionChanged: (HttpsURLConnection?) -> Unit = {}): JSONObject {
         val connection = open("PUT", path)
-        connection.doOutput = true
-        connection.readTimeout = 180000
-        connection.setRequestProperty("Content-Type", "application/octet-stream")
-        connection.setRequestProperty("X-Regista-Sha256", fingerprint)
-        if (length > 0) connection.setFixedLengthStreamingMode(length) else connection.setChunkedStreamingMode(64 * 1024)
-        source.use { input -> connection.outputStream.use { output -> input.copyTo(output, 64 * 1024) } }
-        return answer(connection)
+        try {
+            connectionChanged(connection)
+            connection.doOutput = true
+            connection.readTimeout = if (path.startsWith("/phone/media-backup/")) 0 else 180000
+            connection.setRequestProperty("Content-Type", "application/octet-stream")
+            connection.setRequestProperty("X-Regista-Sha256", fingerprint)
+            if (length > 0) connection.setFixedLengthStreamingMode(length) else connection.setChunkedStreamingMode(64 * 1024)
+            source.use { input -> connection.outputStream.use { output -> input.copyTo(output, 64 * 1024) } }
+            return answer(connection)
+        } finally {
+            connection.disconnect()
+            connectionChanged(null)
+        }
     }
 }
 

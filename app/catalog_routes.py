@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import tempfile
 import zipfile
+import zlib
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response
@@ -213,7 +214,7 @@ def routes(catalog, jobs, import_dir: Path, read_only=False, phones=None):
         try:
             path = catalog.archive.path(identifier)
             catalog.archive.inspect(path, identifier)
-        except (OSError, ValueError, KeyError, zipfile.BadZipFile, EOFError):
+        except (OSError, ValueError, KeyError, zipfile.BadZipFile, EOFError, zlib.error):
             raise HTTPException(404, 'Backup ZIP verificato non disponibile.')
         return FileResponse(path, filename=identifier + '.zip', media_type='application/zip')
 
@@ -248,12 +249,19 @@ def routes(catalog, jobs, import_dir: Path, read_only=False, phones=None):
         jobs.pause()  # Import first, annotation only after another explicit Start.
         wanted = []
         for photo in body.photos:
+            from photo_import import RestoreBackupError, restore_backup
             path = catalog.verified_path_of(photo.sha256)
             present, reason = False, ''
+            restore_failed = False
             try:
                 if path is not None:
                     catalog.archive.ensure(path, photo.sha256, photo.name, verify=True)
                     present = True
+                else:
+                    present = restore_backup(catalog, photo.sha256, import_dir, photo.name) is not None
+            except RestoreBackupError as error:
+                restore_failed = True
+                reason = str(error)[:1000]
             except (OSError, ValueError) as error:
                 reason = f'Originale o backup non disponibile: {error}'[:1000]
             with catalog.connect() as db:
@@ -261,7 +269,9 @@ def routes(catalog, jobs, import_dir: Path, read_only=False, phones=None):
                     ON CONFLICT(device,media) DO UPDATE SET stamp=excluded.stamp,sha256=excluded.sha256,
                     name=excluded.name,state=excluded.state,error=excluded.error''',
                            (device, photo.media, photo.stamp, photo.sha256, Path(photo.name).name,
-                            'received' if present else 'wanted', reason))
+                            'received' if present else 'error' if restore_failed else 'wanted', reason))
+            if restore_failed:
+                raise HTTPException(409, reason)
             if not present:
                 wanted.append(photo.media)
             else:
@@ -323,4 +333,6 @@ def routes(catalog, jobs, import_dir: Path, read_only=False, phones=None):
         finally:
             partial.unlink(missing_ok=True)
 
+    from media_backup import routes as media_routes
+    router.include_router(media_routes(catalog, jobs, read_only=read_only))
     return router

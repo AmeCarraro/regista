@@ -10,6 +10,7 @@ import threading
 import time
 import uuid
 import zipfile
+import zlib
 
 from photo_files import move_new
 
@@ -56,18 +57,18 @@ class OriginalArchive:
                        (sha, path.relative_to(self.root).as_posix(), manifest['size'], stamp.st_size, stamp.st_mtime_ns, time.time()))
             db.execute('DELETE FROM archive_errors WHERE asset_id=?', (sha,))
 
-    def ensure(self, source, sha, name='', *, verify=False):
+    def ensure(self, source, sha, name='', *, verify=False, compression=zipfile.ZIP_DEFLATED):
         """Never acknowledge an import or relocate its working copy before this succeeds."""
         with self.lock:
             try:
-                return self._ensure(Path(source), sha, name, verify)
+                return self._ensure(Path(source), sha, name, verify, compression)
             except Exception as error:
                 with self.catalog.connect() as db:
                     db.execute('INSERT INTO archive_errors VALUES (?,?,?) ON CONFLICT(asset_id) DO UPDATE SET error=excluded.error,created=excluded.created',
                                (sha, f'Backup originale: {type(error).__name__}: {error}'[:1000], time.time()))
                 raise
 
-    def _ensure(self, source, sha, name, verify):
+    def _ensure(self, source, sha, name, verify, compression):
         destination = self.path(sha)
         with self.catalog.connect() as db:
             known = db.execute('SELECT * FROM original_backups WHERE asset_id=?', (sha,)).fetchone()
@@ -79,7 +80,7 @@ class OriginalArchive:
                 return destination
             try:
                 manifest = self.inspect(destination, sha)
-            except (OSError, ValueError, KeyError, zipfile.BadZipFile, EOFError):
+            except (OSError, ValueError, KeyError, zipfile.BadZipFile, EOFError, zlib.error):
                 pass  # Replace only after a new archive has been fully verified; retain the damaged archive.
             else:
                 self._remember(sha, destination, manifest)
@@ -93,7 +94,8 @@ class OriginalArchive:
                     'size': source.stat().st_size, 'created_utc': datetime.now(timezone.utc).isoformat()}
         try:
             digest, size = hashlib.sha256(), 0
-            with zipfile.ZipFile(temporary, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True) as archive:
+            with zipfile.ZipFile(temporary, 'w', compression=compression,
+                                 compresslevel=6 if compression == zipfile.ZIP_DEFLATED else None, allowZip64=True) as archive:
                 with source.open('rb') as original, archive.open(manifest['original'], 'w', force_zip64=True) as target:
                     for chunk in iter(lambda: original.read(1024 * 1024), b''):
                         digest.update(chunk)
@@ -108,7 +110,7 @@ class OriginalArchive:
             if destination.exists():
                 try:
                     landed = self.inspect(destination, sha)
-                except (OSError, ValueError, KeyError, zipfile.BadZipFile, EOFError):
+                except (OSError, ValueError, KeyError, zipfile.BadZipFile, EOFError, zlib.error):
                     destination.rename(destination.with_name(sha + '.corrotto-' + uuid.uuid4().hex + '.zip'))
                 else:
                     self._remember(sha, destination, landed)

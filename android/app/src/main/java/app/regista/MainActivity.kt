@@ -17,6 +17,7 @@ import android.os.CancellationSignal
 import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.view.View
+import android.view.WindowManager
 import android.webkit.CookieManager
 import android.webkit.SslErrorHandler
 import android.webkit.WebResourceRequest
@@ -52,11 +53,14 @@ class MainActivity : Activity() {
     private lateinit var songs: Songs
     private lateinit var videos: Videos
     private lateinit var catalogCache: CatalogCache
+    private lateinit var mediaBackup: MediaBackup
+    private lateinit var backupFolders: BackupFolders
     private lateinit var kinds: Kinds
     private lateinit var commands: CommandPreview
     private lateinit var speech: CommandSpeech
     private lateinit var tags: ManualTags
     private var link: Link? = null
+    private var foreground = false
 
     /** The computer, when it answered last; null while it cannot be reached. */
     @Volatile var reached: Computer? = null
@@ -85,6 +89,19 @@ class MainActivity : Activity() {
         songs = Songs(this)
         videos = Videos(this)
         catalogCache = CatalogCache(this, memory)
+        backupFolders = BackupFolders(this)
+        mediaBackup = MediaBackup(this, memory, { reached }, onStarting = {
+            runOnUiThread { window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
+            val previous = link
+            previous?.close()
+            previous?.join(2000)
+            link = null
+        }, onFinished = {
+            runOnUiThread {
+                window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                if (foreground) connect()
+            }
+        })
         kinds = Kinds(this, library)
         commands = CommandPreview(assets)
         tags = ManualTags(this, gallery)
@@ -124,6 +141,7 @@ class MainActivity : Activity() {
 
     override fun onStart() {
         super.onStart()
+        foreground = true
         // The PC owns the photo catalog; Android only lists files when importing.
         connect()
         if (commands.available) speech.onStart()
@@ -132,6 +150,8 @@ class MainActivity : Activity() {
     /** The phone works for the computer only while the app is in front. */
     override fun onStop() {
         super.onStop()
+        foreground = false
+        mediaBackup.cancel()
         speech.onStop()
         link?.close()
         link = null
@@ -139,6 +159,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        mediaBackup.close()
         commands.close()
         tags.close()
         super.onDestroy()
@@ -298,6 +319,28 @@ class MainActivity : Activity() {
         } catch (_: ActivityNotFoundException) { say("Non riesco ad aprire la selezione dei video su questo telefono.") }
     }
 
+    fun requestMediaBackup() {
+        if (mediaBackup.busy) return
+        val missing = mediaBackup.missingPermissions()
+        if (missing.isNotEmpty()) { requestPermissions(mediaBackup.permissionRequest(), BACKUP_PERMISSIONS); return }
+        if (reached == null) { say("Collega il PC prima di avviare il backup completo."); return }
+        AlertDialog.Builder(this).setTitle("Avviare il backup completo?")
+            .setMessage("Verranno cercate foto, immagini, audio e video accessibili ad Android e nelle cartelle supplementari. Sul PC saranno copiati e archiviati in ZIP solo i contenuti mancanti. Gli originali sul telefono restano intatti. Lascia l’app aperta durante il backup.")
+            .setPositiveButton("Avvia backup") { _, _ ->
+                val result = JSONObject(mediaBackup.start())
+                if (result.has("error")) say(result.getString("error"))
+            }.setNegativeButton("Annulla", null).show()
+    }
+
+    fun chooseBackupFolder() {
+        if (mediaBackup.busy) return
+        try {
+            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+                .putExtra(Intent.EXTRA_LOCAL_ONLY, true)
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION), BACKUP_FOLDER)
+        } catch (_: ActivityNotFoundException) { say("La selezione delle cartelle non è disponibile su questo telefono.") }
+    }
+
     /** Pictures were put in line for the computer on the phone's page: they go as soon as it answers. */
     fun offered(count: Int) {
         say(if (reached != null) "Mando $count foto al computer…" else "$count foto in fila per il computer: le mando appena lo raggiungo.")
@@ -311,7 +354,7 @@ class MainActivity : Activity() {
         page.settings.domStorageEnabled = true
         page.settings.allowFileAccess = false
         page.settings.allowContentAccess = false
-        val phone = Phone(this, library, places, gallery, memory, sight, update, songs, kinds, commands, speech, tags, catalogCache, videos)
+        val phone = Phone(this, library, places, gallery, memory, sight, update, songs, kinds, commands, speech, tags, catalogCache, videos, mediaBackup, backupFolders)
         // the page calls the app through this, and only this page can: it is the app's own, and nothing else opens in here
         page.addJavascriptInterface(phone, "Regista")
         page.webViewClient = object : WebViewClient() {
@@ -368,7 +411,7 @@ class MainActivity : Activity() {
     }
 
     private fun connect() {
-        if (link != null || !memory.paired) return
+        if (link != null || !memory.paired || mediaBackup.busy) return
         link = Link(
             memory,
             gallery,
@@ -498,6 +541,7 @@ class MainActivity : Activity() {
 
     /** A new computer: what the app kept of the one before goes, and the new one is looked for. */
     private fun paired() {
+        mediaBackup.cancel()
         catalogCache.clear()
         link?.close()
         link = null
@@ -523,6 +567,7 @@ class MainActivity : Activity() {
 
     /** This phone is no longer paired: by the user's choice, or because the computer forgot it. */
     private fun forgotten(why: String) {
+        mediaBackup.cancel()
         catalogCache.clear()
         memory.forget()
         CopyJob.plan(this, false)
@@ -559,6 +604,13 @@ class MainActivity : Activity() {
     /** The user answered Android's question. The computer is told which pictures left, or that none did. */
     override fun onActivityResult(request: Int, result: Int, data: Intent?) {
         super.onActivityResult(request, result, data)
+        if (request == BACKUP_FOLDER) {
+            if (result == RESULT_OK && data?.data != null) {
+                try { backupFolders.add(data.data!!) }
+                catch (_: Exception) { say("Non riesco ad accedere a questa cartella. Scegli una cartella consentita da Android.") }
+            }
+            return
+        }
         if (request == ADD_VIDEOS) {
             if (result == RESULT_OK && data != null) {
                 val chosen = data.clipData?.let { clip -> (0 until clip.itemCount).map { clip.getItemAt(it).uri } } ?: listOfNotNull(data.data)
@@ -611,6 +663,8 @@ class MainActivity : Activity() {
         // Android's window where the user chooses songs to add
         const val ADD_SONGS = 5
         const val ADD_VIDEOS = 6
+        const val BACKUP_PERMISSIONS = 7
+        const val BACKUP_FOLDER = 8
         // the tab the app is opened on, when it is not the first one
         const val TAB = "app.regista.TAB"
 

@@ -129,7 +129,11 @@ class Gallery(private val context: Context) {
             // arrive from the computer are written as files: Android asks once for both
             listOf(permission, Manifest.permission.WRITE_EXTERNAL_STORAGE)
         }
-        return wanted.filter { context.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }.toTypedArray()
+        val missing = wanted.filter { context.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }.toMutableList()
+        if (Build.VERSION.SDK_INT >= 34 && permission in missing) {
+            missing += Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
+        }
+        return missing.toTypedArray()
     }
 
     /**

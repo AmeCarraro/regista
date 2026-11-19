@@ -4,11 +4,78 @@ import json
 from pathlib import Path
 import shutil
 import tempfile
+import hashlib
+import zipfile
+import zlib
 
 from PIL import Image
 
 from photo_annotator import VERSION
 from photo_catalog import fingerprint
+
+
+class RestoreBackupError(ValueError):
+    """The original is already backed up, but a local catalog copy could not be created."""
+
+
+def restore_backup(catalog, sha: str, import_dir: Path, name: str = '') -> dict | None:
+    """Restore only a verified original member, never extract archive-supplied filesystem paths.
+
+    Missing/corrupt ZIPs require another transfer. Once the ZIP is valid, disk/decoder
+    failures are reported explicitly rather than asking the phone to resend the same bytes.
+    """
+    try:
+        archive_path = catalog.archive.path(sha)
+    except ValueError as error:
+        raise RestoreBackupError('Percorso del backup non disponibile sul PC.') from error
+    try:
+        if not archive_path.exists():
+            return None
+    except OSError as error:
+        raise RestoreBackupError('Il backup è sul PC, ma non è accessibile. Controlla i permessi sul PC.') from error
+    partial = None
+    try:
+        with catalog.archive.lock:
+            try:
+                manifest = catalog.archive.inspect(archive_path, sha)
+            except (ValueError, KeyError, zipfile.BadZipFile, EOFError, zlib.error):
+                return None
+            staging = catalog.database.parent / 'catalog-staging'
+            staging.mkdir(parents=True, exist_ok=True)
+            descriptor, filename = tempfile.mkstemp(prefix='restore-', suffix='.part', dir=staging)
+            partial = Path(filename)
+            digest, size = hashlib.sha256(), 0
+            with os.fdopen(descriptor, 'wb') as output:
+                try:
+                    with zipfile.ZipFile(archive_path) as archive, archive.open(manifest['original']) as original:
+                        for chunk in iter(lambda: original.read(1024 * 1024), b''):
+                            digest.update(chunk)
+                            size += len(chunk)
+                            output.write(chunk)
+                except (KeyError, zipfile.BadZipFile, EOFError, zlib.error):
+                    return None
+                output.flush()
+                os.fsync(output.fileno())
+            if size != manifest['size'] or digest.hexdigest() != sha:
+                return None
+        # Do not hold the archive lock while keep() takes the import lock: normal
+        # uploads acquire those locks in the opposite order.
+        original_name = name or manifest['filename']
+        result = keep(catalog, partial, import_dir, original_name)
+        if result['id'] != sha:
+            raise RestoreBackupError('La copia ripristinata non corrisponde al backup.')
+        return {**result, 'restored_from_backup': True}
+    except RestoreBackupError:
+        raise
+    except (OSError, ValueError, Image.DecompressionBombError) as error:
+        raise RestoreBackupError('Originale già salvato nello ZIP, ma ripristino locale non riuscito: '
+                                 'controlla spazio, permessi e formato sul PC. Nessun nuovo trasferimento richiesto.') from error
+    finally:
+        if partial is not None:
+            try:
+                partial.unlink(missing_ok=True)
+            except OSError as error:
+                raise RestoreBackupError('Ripristino dal backup interrotto: controlla i permessi della cartella temporanea sul PC. Nessun nuovo trasferimento richiesto.') from error
 
 
 def image_extension(source: Path, name: str = '') -> str:

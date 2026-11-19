@@ -764,3 +764,7 @@ body {
 .video-list { list-style: none; padding: 0; }
 .video-list li { display: flex; flex-wrap: wrap; gap: 8px; border-bottom: 1px solid var(--line); padding: 12px 0; }
 .video-list li button:first-child { flex: 1; text-align: left; overflow-wrap: anywhere; }
+.backup-settings { padding: 18px; margin: 16px; border: 1px solid var(--line); border-radius: 12px; }
+.backup-settings button { margin: 6px 8px 6px 0; }
+.backup-settings progress { width: 100%; }
+.backup-settings li { overflow-wrap: anywhere; margin: 10px 0; }

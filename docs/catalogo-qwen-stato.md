@@ -2,6 +2,8 @@
 
 13 novembre 2026, aggiornato il 19 novembre. Riferimento: `piano-catalogo-qwen.md`, conservato senza modifiche. Aggiornamenti: [originali ZIP, tag con quantità e stati di catalogazione](originali-e-classificazione.md); [riconoscimento e benchmark](confronto-qwen-riconoscimento.md); [APK 0.6: catalogo offline, musica e video](telefono-offline-e-video.md).
 
+L'APK **0.7** aggiunge [backup completo dei media accessibili e rete USB](backup-completo-telefono.md): comando nelle impostazioni con conferma, immagini/audio/video e cartelle supplementari, ZIP per contenuto e manifesti di recupero, ripresa e deduplicazione anche fra backup e successiva importazione foto. La suite aggiornata supera 511 test backend, 119 web e 15 JVM Android; il trasferimento fisico rimane da provare.
+
 ## Percorso implementato
 
 - SQLite separato dagli originali, WAL, migrazioni fino alla versione 3, FTS5. Identità SHA-256 del contenuto e posizioni multiple, senza inviare percorsi assoluti ai telefoni.

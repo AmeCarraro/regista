@@ -126,6 +126,12 @@ export type App = {
 
 /** What the app offers the page: every answer is text, as JSON. */
 type Native = {
+  mediaBackupState?(): string
+  startMediaBackup?(): void
+  cancelMediaBackup?(): void
+  chooseBackupFolder?(): void
+  removeBackupFolder?(id: string): void
+  openBackupNetworkSettings?(): void
   cachedCatalog?(): string
   syncCatalog?(): void
   searchCachedCatalog?(query: string, offset: number, token: string): void
