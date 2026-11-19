@@ -126,6 +126,13 @@ export type App = {
 
 /** What the app offers the page: every answer is text, as JSON. */
 type Native = {
+  cachedCatalog?(): string
+  syncCatalog?(): void
+  searchCachedCatalog?(query: string, offset: number, token: string): void
+  videos?(): string
+  addVideos?(): void
+  playVideo?(id: string): void
+  removeVideo?(id: string): void
   catalogRequest?(path: string, body: string, token: string): void
   catalogResponse?(token: string): string
   cancelCatalog?(token: string): void

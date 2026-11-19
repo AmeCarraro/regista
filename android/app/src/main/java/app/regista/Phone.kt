@@ -2,6 +2,7 @@ package app.regista
 
 import android.appwidget.AppWidgetManager
 import android.content.ComponentName
+import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.webkit.JavascriptInterface
@@ -34,6 +35,8 @@ class Phone(
     private val commands: CommandPreview,
     private val speech: CommandSpeech,
     private val tags: ManualTags,
+    private val catalogCache: CatalogCache,
+    private val videos: Videos,
 ) {
     /** The pictures of this phone by kind (Kinds.sorted); null until the computer said what the kinds are. */
     @JavascriptInterface
@@ -92,6 +95,21 @@ class Phone(
     /** How the songs chosen last are being added (Songs.adding). */
     @JavascriptInterface
     fun added(): String = songs.adding()
+
+    @JavascriptInterface
+    fun videos(): String = videos.state()
+
+    @JavascriptInterface
+    fun addVideos() = app.runOnUiThread { app.addVideos() }
+
+    @JavascriptInterface
+    fun playVideo(id: String) {
+        if (videos.named(id) == null) return
+        app.runOnUiThread { app.startActivity(Intent(app, VideoActivity::class.java).putExtra("id", id)) }
+    }
+
+    @JavascriptInterface
+    fun removeVideo(id: String) = videos.remove(id)
 
     /** The songs of the computer, while it answers: {"reachable", "songs"}, asked of it again every half minute. */
     @JavascriptInterface
@@ -204,6 +222,26 @@ class Phone(
 
     private val catalogAnswers = ConcurrentHashMap<String, String>()
 
+    @JavascriptInterface
+    fun cachedCatalog(): String {
+        catalogCache.sync(app.reached)
+        return catalogCache.state().toString()
+    }
+
+    @JavascriptInterface
+    fun syncCatalog() = catalogCache.sync(app.reached, force = true)
+
+    @JavascriptInterface
+    fun searchCachedCatalog(query: String, offset: Int, token: String) {
+        if (!TOKEN.matches(token) || catalogAnswers.size >= 32) return
+        catalogAnswers[token] = ""
+        thread(name = "local catalog search") {
+            val result = try { catalogCache.search(query, offset) }
+                catch (problem: Exception) { JSONObject().put("error", problem.message ?: "Catalogo non disponibile.") }
+            catalogAnswers.replace(token, result.toString())
+        }
+    }
+
     /** Only catalog reads are exposed to the local page; pairing keys stay native. */
     @JavascriptInterface
     fun catalogRequest(path: String, body: String, token: String) {
@@ -218,7 +256,7 @@ class Phone(
             } catch (problem: Exception) {
                 JSONObject().put("error", problem.message ?: "Computer non raggiungibile")
             }
-            if (catalogAnswers.containsKey(token)) catalogAnswers[token] = result.toString()
+            catalogAnswers.replace(token, result.toString())
         }
     }
 
@@ -253,8 +291,8 @@ class Phone(
     /** Whether the phone can see what pictures show: its models, how much of them has arrived, how many pictures it has looked at. */
     @JavascriptInterface
     fun sight(): String = JSONObject()
-        .put("ready", sight.ready)
-        .put("wanted", memory.wantsSight)
+        .put("ready", false)
+        .put("wanted", false)
         .put("got", sight.got)
         .put("size", sight.size)
         .put("seen", library.seen)
@@ -264,8 +302,7 @@ class Phone(
     /** The user wants the models: they come from the computer, as soon as it answers. */
     @JavascriptInterface
     fun wantSight() {
-        memory.wantsSight = true
-        app.runOnUiThread { app.sightWanted() }
+        // Experiment on standby. No download, activation or deletion of old weights.
     }
 
     /** Whether the computer has a newer app for this phone, and how much of it has arrived while it is taken. */
@@ -385,6 +422,18 @@ class Phone(
         val path = address.path.orEmpty()
         if (address.scheme != "https" || address.host != HOST) return refused()
         if (Regex("/catalog-media/[a-f0-9]{64}/(thumb|full)").matches(path)) {
+            val id = path.split('/')[2]
+            val local = runCatching { catalogCache.local(id, gallery) }.getOrNull()
+            if (local != null) {
+                try {
+                    if (path.endsWith("/thumb")) gallery.small(local)?.let {
+                        return WebResourceResponse("image/jpeg", null, ByteArrayInputStream(it))
+                    }
+                    if (path.endsWith("/full")) gallery.open(gallery.named(local))?.let {
+                        return WebResourceResponse(app.contentResolver.getType(gallery.named(local)) ?: "image/jpeg", null, it)
+                    }
+                } catch (_: Exception) { /* The PC copy may still be available. */ }
+            }
             val computer = app.reached ?: return refused(503)
             val remote = path.removePrefix("/catalog-media/")
             return try {

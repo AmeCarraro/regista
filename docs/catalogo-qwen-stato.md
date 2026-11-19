@@ -1,6 +1,6 @@
 # Catalogo Qwen: implementazione e collaudo
 
-13 novembre 2026, aggiornato il 18 novembre. Riferimento: `piano-catalogo-qwen.md`, conservato senza modifiche. Aggiornamenti: [originali ZIP, tag con quantità e stati di catalogazione](originali-e-classificazione.md); [riconoscimento, altre dieci foto e benchmark ripetibile](confronto-qwen-riconoscimento.md).
+13 novembre 2026, aggiornato il 19 novembre. Riferimento: `piano-catalogo-qwen.md`, conservato senza modifiche. Aggiornamenti: [originali ZIP, tag con quantità e stati di catalogazione](originali-e-classificazione.md); [riconoscimento e benchmark](confronto-qwen-riconoscimento.md); [APK 0.6: catalogo offline, musica e video](telefono-offline-e-video.md).
 
 ## Percorso implementato
 
@@ -26,7 +26,7 @@ Manifest con SHA-256, upload in streaming con hash verificato, file temporaneo e
 
 Ogni importazione mette in pausa il tagging. Al termine, o quando l'utente decide, Avvia/Riprendi sul PC abilita la coda. Un'inferenza già in corso può terminare prima della pausa.
 
-Protocollo telefono 2: ricerca, paginazione e miniature provengono dal PC; originale richiesto soltanto all'apertura. Pairing, certificati, revoca, musica, widget e copia periodica autorizzata restano. Android non include ONNX Runtime; gli adattatori Sight/CommandPreview non caricano modelli. Vettori, categorie vettoriali, download pesi e vecchia ricerca telefono ricevono HTTP 426 nel nuovo percorso. I vecchi APK vanno aggiornati insieme al servizio.
+Protocollo telefono 2: il PC conserva analisi e catalogo principale. Dal 19 novembre, su richiesta dell'utente, l'APK 0.6 riceve una copia SQLite sanitizzata e indicizzata di tag, descrizioni e metadati per cercare offline; FTS4 sul telefono non richiede modelli. Per le foto presenti anche sul telefono viene verificata l'identità MediaStore prima dell'apertura locale; le immagini presenti soltanto sul PC richiedono il collegamento. La ricerca avanzata del PC rimane disponibile online. Pairing, certificati, revoca, musica, widget e copia periodica autorizzata restano. La scheda Video riproduce i file locali scelti tramite Android. Android non include ONNX Runtime; Sight/CommandPreview rimangono in standby. I vecchi APK vanno aggiornati insieme al servizio.
 
 ## Modello e configurazione
 

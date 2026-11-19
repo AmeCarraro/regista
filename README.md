@@ -1,6 +1,6 @@
 # Regista
 
-Assistente locale sul PC, catalogo fotografico persistente e musica. Il telefono è un client del PC: cerca nel catalogo e importa gli originali, senza caricare modelli neurali.
+Assistente locale sul PC, catalogo fotografico persistente e musica. Il telefono importa gli originali sul PC e conserva tag e metadati per cercare offline, senza caricare modelli neurali. Riproduce musica e video locali.
 
 Le immagini vengono identificate con SHA-256. Scansioni ripetute, copie identiche e rinomine non richiedono una nuova analisi visiva. Tag, descrizioni, metadati e correzioni restano in SQLite; le ricerche usano i dati salvati.
 
@@ -12,6 +12,12 @@ Le immagini vengono identificate con SHA-256. Scansioni ripetute, copie identich
 4. Cerca con termini e filtri oppure abilita la ricerca naturale. Qwen interpreta soltanto il testo della query. Le immagini non vengono riesaminate per cercarle.
 
 Nell’Assistente puoi inviare un’immagine temporanea e fare una domanda. **Salva nel catalogo** è un comando separato. Musica e widget mantengono il loro percorso esistente.
+
+## Telefono: ricerca offline, musica e video
+
+Con l'APK **0.6**, il telefono riceve una copia indicizzata del catalogo: tag, descrizioni, date e luoghi sono ricercabili anche a PC spento. La sincronizzazione avviene alla connessione e periodicamente mentre si usa la schermata Foto; **Aggiorna il catalogo dal PC** la avvia subito. L'analisi AI e le correzioni restano sul PC.
+
+Musica locale e widget funzionano senza PC. Nella scheda **Video** scegli i file del telefono e riproducili con pausa e avanzamento; gli originali restano nelle loro cartelle. Le foto che esistono soltanto sul PC richiedono il collegamento per aprire l'immagine, mentre i relativi tag rimangono disponibili offline. [Uso e limiti del nuovo APK](docs/telefono-offline-e-video.md).
 
 ## Modello esplicito
 
@@ -37,7 +43,7 @@ Lo stack rimane FastAPI, React/Vite e desktop Python con pywebview. Il backend p
 
 Gli script esistenti `run.ps1`, `tools/desktop.ps1`, `tools/package.ps1` e `android.ps1 build` mantengono i rispettivi ruoli. L’installer accetta `-QwenModel` e mostra/conferma gli eventuali download; non scarica CLIP o modelli per il telefono. Desktop e APK vanno aggiornati insieme: i vecchi client foto ricevono “aggiornamento richiesto”. Pairing, certificati e revoca rimangono necessari.
 
-Il servizio lavora solo con PC acceso e non sospeso. Chiudere la finestra desktop arresta il servizio; una nuova modalità tray e l’avvio con Windows non sono ancora implementati.
+Il servizio e l'analisi AI lavorano con PC acceso e non sospeso. Il catalogo già sincronizzato, la musica e i video locali sul telefono restano disponibili offline. Chiudere la finestra desktop arresta il servizio; una nuova modalità tray e l’avvio con Windows non sono ancora implementati.
 
 ## Verifiche e documentazione
 

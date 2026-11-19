@@ -50,6 +50,8 @@ class MainActivity : Activity() {
     private lateinit var sight: Sight
     private lateinit var update: Update
     private lateinit var songs: Songs
+    private lateinit var videos: Videos
+    private lateinit var catalogCache: CatalogCache
     private lateinit var kinds: Kinds
     private lateinit var commands: CommandPreview
     private lateinit var speech: CommandSpeech
@@ -81,6 +83,8 @@ class MainActivity : Activity() {
         library = Library(this, gallery, places, sight)
         update = Update(this)
         songs = Songs(this)
+        videos = Videos(this)
+        catalogCache = CatalogCache(this, memory)
         kinds = Kinds(this, library)
         commands = CommandPreview(assets)
         tags = ManualTags(this, gallery)
@@ -95,6 +99,7 @@ class MainActivity : Activity() {
         setUpPairing()
         findViewById<TextView>(R.id.tab_phone).setOnClickListener { show(PHONE) }
         findViewById<TextView>(R.id.tab_music).setOnClickListener { show(MUSIC) }
+        findViewById<TextView>(R.id.tab_video).setOnClickListener { show(VIDEO) }
         findViewById<TextView>(R.id.tab_computer).setOnClickListener { openComputer() }
         findViewById<TextView>(R.id.status).setOnLongClickListener {
             if (memory.paired) unpair()
@@ -160,11 +165,11 @@ class MainActivity : Activity() {
         if (tab != PHONE) speech.cancel()
         val paired = memory.paired
         // the pictures and the music are two views of the phone's own page
-        phonePage.visibility = if (tab == PHONE || tab == MUSIC) View.VISIBLE else View.GONE
+        phonePage.visibility = if (tab == PHONE || tab == MUSIC || tab == VIDEO) View.VISIBLE else View.GONE
         if (tab != COMPUTER) phonePage.evaluateJavascript("window.registaView && window.registaView('$tab')", null)
         computerPage.visibility = if (tab == COMPUTER && paired) View.VISIBLE else View.GONE
         pairing.visibility = if (tab == COMPUTER && !paired) View.VISIBLE else View.GONE
-        for ((id, name) in listOf(R.id.tab_phone to PHONE, R.id.tab_music to MUSIC, R.id.tab_computer to COMPUTER)) {
+        for ((id, name) in listOf(R.id.tab_phone to PHONE, R.id.tab_music to MUSIC, R.id.tab_video to VIDEO, R.id.tab_computer to COMPUTER)) {
             val button = findViewById<TextView>(id)
             button.isSelected = name == tab
             button.setTextColor(getColor(if (name == tab) R.color.text else R.color.muted))
@@ -238,16 +243,9 @@ class MainActivity : Activity() {
         }
     }
 
-    /** The user asked for the models on the phone's page: they come from the computer as soon as it answers. */
+    /** Legacy callback: local model experiments remain on standby. */
     fun sightWanted() {
-        say(
-            when {
-                !memory.paired -> "Il modello arriva dal computer: collegalo dalla scheda «Computer»."
-                reached != null -> "Prendo il modello dal computer…"
-                else -> "Prendo il modello dal computer appena lo raggiungo."
-            },
-        )
-        link?.refresh()
+        say("L’analisi delle foto viene eseguita sul PC. Sul telefono arrivano il catalogo e i tag.")
     }
 
     /** The user asked for the newer app on the phone's page: it comes from the computer as soon as it answers. */
@@ -293,6 +291,13 @@ class MainActivity : Activity() {
         }
     }
 
+    fun addVideos() {
+        try {
+            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+                .setType("video/*").putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true).putExtra(Intent.EXTRA_LOCAL_ONLY, true), ADD_VIDEOS)
+        } catch (_: ActivityNotFoundException) { say("Non riesco ad aprire la selezione dei video su questo telefono.") }
+    }
+
     /** Pictures were put in line for the computer on the phone's page: they go as soon as it answers. */
     fun offered(count: Int) {
         say(if (reached != null) "Mando $count foto al computer…" else "$count foto in fila per il computer: le mando appena lo raggiungo.")
@@ -306,7 +311,7 @@ class MainActivity : Activity() {
         page.settings.domStorageEnabled = true
         page.settings.allowFileAccess = false
         page.settings.allowContentAccess = false
-        val phone = Phone(this, library, places, gallery, memory, sight, update, songs, kinds, commands, speech, tags)
+        val phone = Phone(this, library, places, gallery, memory, sight, update, songs, kinds, commands, speech, tags, catalogCache, videos)
         // the page calls the app through this, and only this page can: it is the app's own, and nothing else opens in here
         page.addJavascriptInterface(phone, "Regista")
         page.webViewClient = object : WebViewClient() {
@@ -371,6 +376,7 @@ class MainActivity : Activity() {
             library,
             found = { computer ->
                 reached = computer
+                catalogCache.sync(computer)
                 runOnUiThread { open(computer) }
             },
             lost = { reached = null },
@@ -492,6 +498,7 @@ class MainActivity : Activity() {
 
     /** A new computer: what the app kept of the one before goes, and the new one is looked for. */
     private fun paired() {
+        catalogCache.clear()
         link?.close()
         link = null
         reached = null
@@ -516,6 +523,7 @@ class MainActivity : Activity() {
 
     /** This phone is no longer paired: by the user's choice, or because the computer forgot it. */
     private fun forgotten(why: String) {
+        catalogCache.clear()
         memory.forget()
         CopyJob.plan(this, false)
         link?.close()
@@ -526,7 +534,7 @@ class MainActivity : Activity() {
         computerPage.loadUrl("about:blank")
         show(COMPUTER)
         pairingSays(why)
-        say("Nessun computer collegato: la ricerca tra le foto di questo telefono funziona lo stesso.")
+        say("Nessun computer collegato. Musica e video del telefono restano disponibili.")
     }
 
     // ---- taking pictures off this phone
@@ -551,6 +559,13 @@ class MainActivity : Activity() {
     /** The user answered Android's question. The computer is told which pictures left, or that none did. */
     override fun onActivityResult(request: Int, result: Int, data: Intent?) {
         super.onActivityResult(request, result, data)
+        if (request == ADD_VIDEOS) {
+            if (result == RESULT_OK && data != null) {
+                val chosen = data.clipData?.let { clip -> (0 until clip.itemCount).map { clip.getItemAt(it).uri } } ?: listOfNotNull(data.data)
+                videos.selected(chosen)
+            }
+            return
+        }
         if (request == ADD_SONGS) {
             if (result != RESULT_OK || data == null) return
             val chosen = data.clipData?.let { clip -> (0 until clip.itemCount).map { clip.getItemAt(it).uri } } ?: listOfNotNull(data.data)
@@ -589,11 +604,13 @@ class MainActivity : Activity() {
     companion object {
         const val PHONE = "phone"
         const val MUSIC = "music"
+        const val VIDEO = "video"
         const val COMPUTER = "computer"
         // the question about the songs, to tell its answer from the one about the pictures
         const val SONGS = 4
         // Android's window where the user chooses songs to add
         const val ADD_SONGS = 5
+        const val ADD_VIDEOS = 6
         // the tab the app is opened on, when it is not the first one
         const val TAB = "app.regista.TAB"
 

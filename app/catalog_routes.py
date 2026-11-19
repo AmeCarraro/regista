@@ -217,6 +217,20 @@ def routes(catalog, jobs, import_dir: Path, read_only=False, phones=None):
             raise HTTPException(404, 'Backup ZIP verificato non disponibile.')
         return FileResponse(path, filename=identifier + '.zip', media_type='application/zip')
 
+    @router.get('/phone/catalog/snapshot')
+    def phone_snapshot(request: Request):
+        device = phone_only(request)
+        from phone_catalog import SnapshotResponse, snapshot
+        from photo_catalog import fingerprint
+        path = snapshot(catalog, device)
+        try:
+            digest = fingerprint(path)
+            return SnapshotResponse(path, media_type='application/vnd.sqlite3', filename='catalogo.sqlite',
+                headers={'Cache-Control': 'private,no-store', 'X-Regista-Sha256': digest})
+        except BaseException:
+            path.unlink(missing_ok=True)
+            raise
+
     @router.get('/api/catalog/duplicates')
     def duplicates():
         with catalog.connect() as db:

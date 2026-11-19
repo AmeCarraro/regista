@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import Catalog from '../Catalog.tsx'
 import type { CatalogRequest } from '../catalogApi.ts'
 import { connect } from './bridge.ts'
+import OfflineCatalog from './OfflineCatalog.tsx'
 
 let serial = 0
 const request: CatalogRequest = <T,>(path: string, body?: unknown): Promise<T> => new Promise((resolve, reject) => {
@@ -23,19 +24,21 @@ const request: CatalogRequest = <T,>(path: string, body?: unknown): Promise<T> =
 })
 const mediaUrl = async (id: string, full: boolean) => `/catalog-media/${id}/${full ? 'full' : 'thumb'}`
 
-export default function Telefono() {
+export default function Telefono({ visible = true }: { visible?: boolean }) {
   const [state, setState] = useState(() => connect().state())
   const [copying, setCopying] = useState(() => connect().autoCopy())
   const [note, setNote] = useState('')
   const [update, setUpdate] = useState(() => connect().update())
+  const [remote, setRemote] = useState(false)
   useEffect(() => {
+    if (!visible) return
     const timer = setInterval(() => { setState(connect().state()); setCopying(connect().autoCopy()); setUpdate(connect().update()) }, 2000)
     return () => clearInterval(timer)
-  }, [])
+  }, [visible])
   return <div className="phone-catalog">
     <div style={{ padding: '16px' }}>
-      <h1>Le foto sul PC</h1>
-      <p>{state.reachable ? `Collegato a ${state.computer || 'PC'}` : 'Computer non raggiungibile. Accendilo e collegalo per cercare le foto.'}</p>
+      <h1>Le tue foto</h1>
+      <p>{state.reachable ? `Collegato a ${state.computer || 'PC'}` : 'PC non raggiungibile. Puoi cercare nella copia del catalogo già salvata sul telefono.'}</p>
       <p>Importa le immagini da tutte le cartelle accessibili ad Android. I contenuti identici vengono copiati una sola volta. I tag si avviano dal PC.</p>
       <button onClick={() => {
         const answer = window.Regista?.importAll?.()
@@ -51,6 +54,8 @@ export default function Telefono() {
       {copying.count > 0 && <p>Ultima copia: {copying.count} foto.</p>}
       {update.newer && <button onClick={() => connect().takeUpdate()}>Aggiorna Regista</button>}
     </div>
-    {state.reachable && <Catalog request={request} mediaUrl={mediaUrl} />}
+    <OfflineCatalog visible={visible} />
+    {state.reachable && <div className="remote-catalog"><button onClick={() => setRemote(value => !value)}>{remote ? 'Chiudi catalogo del PC' : 'Apri filtri e ricerca del PC'}</button>
+      {remote && <Catalog visible={visible} request={request} mediaUrl={mediaUrl} />}</div>}
   </div>
 }

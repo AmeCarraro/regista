@@ -49,7 +49,7 @@ def test_default_catalog_does_not_infer_until_start_and_models_never_fall_back(s
     assert client.get('/api/command-demo').status_code == 404
 
 
-def test_new_phone_protocol_keeps_pairing_revocation_and_blocks_management(service):
+def test_new_phone_protocol_keeps_pairing_revocation_and_blocks_management(service, monkeypatch):
     module, client = service
     invite = client.post('/api/phone/invite').json()
     # Use the existing pairing service contract directly; no credential bypass in Gate.
@@ -65,6 +65,21 @@ def test_new_phone_protocol_keeps_pairing_revocation_and_blocks_management(servi
     assert TestClient(module.app, base_url='https://192.168.1.23:8443').get('/api/catalog/status').status_code == 401
     assert phone.post('/api/catalog/scan', json={}, headers=headers).status_code == 403
     assert phone.get('/api/catalog/status', headers=headers).json()['computer'] is False
+    import hashlib
+    import phone_catalog
+    exported = []
+    create = phone_catalog.snapshot
+    def capture(*args):
+        path = create(*args)
+        exported.append(path)
+        return path
+    monkeypatch.setattr(phone_catalog, 'snapshot', capture)
+    assert TestClient(module.app, base_url='https://192.168.1.23:8443').get('/phone/catalog/snapshot').status_code == 401
+    assert client.get('/phone/catalog/snapshot').status_code == 404
+    portable = phone.get('/phone/catalog/snapshot', headers=headers)
+    assert portable.status_code == 200 and portable.content.startswith(b'SQLite format 3\x00')
+    assert hashlib.sha256(portable.content).hexdigest() == portable.headers['x-regista-sha256']
+    assert exported and all(not path.exists() for path in exported)
     for path in ('/phone/vectors', '/phone/library'):
         assert phone.post(path, json={'photos': []}, headers=headers).status_code == 426
     assert phone.get('/phone/models', headers=headers).status_code == 426
@@ -74,6 +89,7 @@ def test_new_phone_protocol_keeps_pairing_revocation_and_blocks_management(servi
     device = module.phones.devices[0]['id']
     client.post(f'/api/phone/devices/{device}/forget')
     assert phone.get('/api/catalog/status', headers=headers).status_code == 401
+    assert phone.get('/phone/catalog/snapshot', headers=headers).status_code == 401
 
 
 def test_saved_data_chat_search_has_no_image_calls(service, monkeypatch):

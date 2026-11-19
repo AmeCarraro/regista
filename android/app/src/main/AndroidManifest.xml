@@ -58,6 +58,8 @@
             </intent-filter>
         </activity>
 
+        <activity android:name=".VideoActivity" android:exported="false" />
+
         <!-- what Android says of a newer app handed to it (Update): only Android, for this app, can call it -->
         <receiver
             android:name=".Installed"
