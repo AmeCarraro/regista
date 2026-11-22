@@ -273,7 +273,8 @@ class ArchiveCleanup:
         except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError, zipfile.BadZipFile, EOFError, zlib.error) as error:
             raise HTTPException(409, f'ZIP non verificato: {error}') from error
         for sha in {item['sha256'] for item in files}:
-            if self.batches.normal_path(sha) is None:
+            normal = self.batches.normal_path(sha)
+            if normal is None or normal.resolve().is_relative_to(self.batches.staging):
                 raise HTTPException(409, 'Manca una copia normale verificata sul PC.')
 
     def confirm(self, identifier, yes, keep=(), only=None):

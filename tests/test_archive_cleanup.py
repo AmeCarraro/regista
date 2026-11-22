@@ -50,6 +50,18 @@ def test_missing_normal_copy_blocks_phone_deletion_even_with_valid_zip(batches,t
     assert cleanup.status(job)['state']=='matched'
 
 
+def test_staged_copy_does_not_count_as_published_pc_backup(batches, tmp_path):
+    cleanup, batch, job, item = ready_cleanup(batches, tmp_path)
+    cleanup.matched('phone-1', Matched(job_id=job, files=[item]))
+    batches.staging.mkdir(exist_ok=True)
+    staged = batches.staging / 'in-progress.png'
+    batches.normal_path(item.sha256).replace(staged)
+    with batches.connect() as db:
+        db.execute('UPDATE normal_files SET path=? WHERE sha256=?', (str(staged), item.sha256))
+    with pytest.raises(HTTPException, match='copia normale'):
+        cleanup.confirm(job, True)
+
+
 def test_corrupt_zip_blocks_phone_deletion_even_with_valid_normal_copy(batches,tmp_path):
     cleanup,batch,job,item=ready_cleanup(batches,tmp_path)
     cleanup.matched('phone-1',Matched(job_id=job,files=[item]))
