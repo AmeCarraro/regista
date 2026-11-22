@@ -11,8 +11,10 @@ class PhotoImportStore(context: Context) {
     private val preferences = context.applicationContext.getSharedPreferences("photo-import", Context.MODE_PRIVATE)
 
     fun read(): ImportCheckpoint = synchronized(LOCK) {
+        val raw = preferences.getString("checkpoint", "{}") ?: "{}"
+        cached?.let { (saved, state) -> if (saved == raw) return@synchronized state }
         try {
-            val value = JSONObject(preferences.getString("checkpoint", "{}") ?: "{}")
+            val value = JSONObject(raw)
             val ids = value.optJSONArray("remaining") ?: JSONArray()
             val errors = value.optJSONArray("failed_media") ?: JSONArray()
             ImportCheckpoint(work=value.optString("work"), peer=value.optString("peer"), request=value.optString("request"),
@@ -25,6 +27,7 @@ class PhotoImportStore(context: Context) {
                 members=(value.optJSONObject("members") ?: JSONObject()).let { map -> map.keys().asSequence().associateWith { map.getString(it) } },
                 batches=(value.optJSONObject("batches") ?: JSONObject()).let { map -> map.keys().asSequence().associateWith { map.getString(it) } },
                 finishedGroups=(value.optJSONArray("finished_groups") ?: JSONArray()).let { list -> (0 until list.length()).map { list.getString(it) }.toSet() })
+                .also { cached = raw to it }
         } catch (_: Exception) {
             ImportCheckpoint(phase = "paused", message = "Avanzamento non leggibile. Premi Importa per ricontrollare i file già salvati sul PC.")
         }
@@ -37,7 +40,9 @@ class PhotoImportStore(context: Context) {
             .put("failed", value.failed).put("phase", value.phase).put("message", value.message)
             .put("scope",value.scope).put("batch",value.batch).put("transport",value.transport).put("failed_media",JSONArray(value.failedMedia))
             .put("groups",JSONObject(value.groups)).put("members",JSONObject(value.members)).put("batches",JSONObject(value.batches)).put("finished_groups",JSONArray(value.finishedGroups.toList()))
-        if (!preferences.edit().putString("checkpoint", json.toString()).commit()) throw IOException("Non riesco a salvare l’avanzamento sul telefono.")
+        val raw = json.toString()
+        if (!preferences.edit().putString("checkpoint", raw).commit()) throw IOException("Non riesco a salvare l’avanzamento sul telefono.")
+        cached = raw to value
         return value
     }
 
@@ -62,7 +67,8 @@ class PhotoImportStore(context: Context) {
     fun update(work: String, change: (ImportCheckpoint) -> ImportCheckpoint): ImportCheckpoint = synchronized(LOCK) {
         val before = read()
         if (before.work != work || !before.requested) return before
-        write(change(before))
+        val after = change(before)
+        if (after == before) before else write(after)
     }
 
     fun pause(message: String, dismissRequest: Boolean = true) = synchronized(LOCK) {
@@ -87,7 +93,10 @@ class PhotoImportStore(context: Context) {
             .put("busy",PhotoImportService.running || value.requested).toString()
     }
 
-    companion object { private val LOCK = Any() }
+    companion object {
+        private val LOCK = Any()
+        private var cached: Pair<String, ImportCheckpoint>? = null
+    }
 }
 
 /** Adapts an import pass to its persisted scope; retried acknowledgements cannot inflate counters. */

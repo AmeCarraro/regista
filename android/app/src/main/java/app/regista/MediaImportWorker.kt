@@ -33,10 +33,6 @@ class MediaImportWorker(private val context:Context,private val memory:Memory,pr
         if (next!=null && cancelled()) { next.disconnect(); throw CancellationException() }
     }
     private fun phase(phase:String,message:String) { store.update(work) { it.copy(phase=phase,message=message) } }
-    private fun failed(media:String,message:String) { store.update(work) { it.confirmed(media,ImportOutcome.FAILED).copy(message=message) } }
-    private fun confirm(media:String,outcome:String) {
-        store.update(work) { it.confirmed(media,if(outcome=="copied") ImportOutcome.COPIED else ImportOutcome.DUPLICATE) }
-    }
     private data class Hashed(val item:BackupMedia,val digest:BackupRules.Digest)
 
     fun once():Boolean {
@@ -45,26 +41,30 @@ class MediaImportWorker(private val context:Context,private val memory:Memory,pr
         var selected=routes.choose() ?: return false
         found(selected.computer)
         store.update(work) { it.copy(transport=selected.transport) }
-        val kinds=when(value().scope) { "documents" -> setOf("document"); "all-media" -> setOf("image","video","audio","document"); else -> setOf("image","video") }
+        val initialState = value()
+        val kinds=when(initialState.scope) { "documents" -> setOf("document"); "all-media" -> setOf("image","video","audio","document"); else -> setOf("image","video") }
         val scan=MediaFiles(context,kinds)
         scanner=scan
-        val needSources=!value().prepared || value().remaining.isNotEmpty()
+        val needSources=!initialState.prepared || initialState.remaining.isNotEmpty()
         val all=if(needSources) {
             if(scan.missingPermissions().isNotEmpty()) throw ImportNeedsUser("Concedi l’accesso a foto e video nelle impostazioni, poi premi Riprendi importazione.")
             phase("scanning","Leggo le raccolte e le cartelle autorizzate.")
             val warnings=mutableListOf<String>()
             val listed=if(kinds.any { it in setOf("image","video","audio") }) scan.scan(::cancelled,{ warnings+=it }) else emptyList()
-            val extra=BackupFolders(context).scan(::cancelled,{ warnings+=it }).filter { it.kind in kinds }
+            val extra=BackupFolders(context).scan(::cancelled,{ warnings+=it }, kinds)
             val documents=if("document" in kinds) SelectedDocuments(context).scan { warnings+=it } else emptyList()
             if(warnings.isNotEmpty()) throw ImportNeedsUser(warnings.take(3).joinToString("; "))
             (listed+extra+documents).distinctBy { it.media }.sortedWith(compareBy<BackupMedia> { it.day }.thenBy { it.media })
         } else emptyList()
         check()
-        store.update(work) { it.prepare(all.map { item->item.media }) }
+        val prepared = store.update(work) { it.prepare(all.map { item->item.media }) }
         val byId=all.associateBy { it.media }
-        for(id in value().remaining) if(id !in byId) failed(id,"Un file del blocco non è più accessibile: $id")
-        if(value().groups.isEmpty() && value().remaining.isNotEmpty()) {
-            if(value().remaining.any { it !in byId }) throw ImportNeedsUser("Alcuni file selezionati non sono più accessibili. Controlla cartelle e permessi, poi riprendi.")
+        val missing = prepared.remaining.filterNot { it in byId }
+        if (missing.isNotEmpty()) {
+            store.update(work) { it.confirmed(missing.associateWith { ImportOutcome.FAILED }) }
+            if (prepared.groups.isEmpty()) throw ImportNeedsUser("Alcuni file selezionati non sono più accessibili. Controlla cartelle e permessi, poi riprendi.")
+        }
+        if(prepared.groups.isEmpty() && prepared.remaining.isNotEmpty()) {
             store.update(work) { state ->
                 val members=state.remaining.associateWith { id -> byId.getValue(id).let { ImportGroups.key(it.folder,it.kind,it.name) } }
                 state.copy(members=members,groups=members.values.groupingBy { it }.eachCount())
@@ -99,26 +99,54 @@ class MediaImportWorker(private val context:Context,private val memory:Memory,pr
         var selected=initial
         val starting=value()
         val scope=if(group.contains("-documents-")) "documents" else if(starting.scope=="all-media") "all-media" else "photos-videos"
-        val started=selected.computer.ask("POST","/phone/imports/start",JSONObject().put("work_id",work)
+        val started=selected.computer.ask("POST","/phone/imports/start",JSONObject()
             .put("work_id",work+"-"+group).put("source",group.substringBefore('-'))
             .put("document_type",if(scope=="documents") group.substringAfter("-documents-") else "")
             .put("request_id",starting.request).put("scope",scope).put("total",starting.groups.getValue(group)).put("transport",selected.transport),connectionChanged=::changed)
         if(started.optInt("protocol")!=2) throw ImportNeedsUser("Il PC non supporta i nuovi archivi per blocco.")
         val batch=started.getString("id")
         store.update(work) { it.copy(batch=batch,batches=it.batches+(group to batch)) }
+        val pending = starting.remaining.filter { starting.members[it] == group }
         if(started.optBoolean("zip_ready")) {
-            if(value().remaining.any { value().members[it]==group }) throw ImportNeedsUser("Il blocco risulta chiuso sul PC ma mancano conferme sul telefono. Controlla lo stato prima di continuare.")
+            if(pending.isNotEmpty()) throw ImportNeedsUser("Il blocco risulta chiuso sul PC ma mancano conferme sul telefono. Controlla lo stato prima di continuare.")
             finishGroup(group); return selected
         }
-        val pending=value().remaining.filter { value().members[it]==group }
         for(ids in pending.chunked(100)) {
             check()
             routes.choose(usbOnly=true)?.let { selected=it; found(it.computer); store.update(work) { state->state.copy(transport=it.transport) } }
+            transferChunk(selected, batch, ids, byId)
+        }
+        check()
+        val checkpoint = value()
+        if(checkpoint.remaining.any { checkpoint.members[it]==group }) throw ImportNeedsUser("Restano file da verificare in ${ImportGroups.label(group)}. Le copie confermate restano salvate; premi Riprendi per riprovare.")
+        phase("finalizing","Il PC sta creando e verificando lo ZIP: ${ImportGroups.label(group)}. Puoi tenere spento lo schermo.")
+        var status=selected.computer.ask("POST","/phone/imports/finalize",JSONObject().put("batch_id",batch),connectionChanged=::changed)
+        while(!status.optBoolean("zip_ready")) {
+            check()
+            if(status.optString("state")=="error") throw ImportNeedsUser(status.optString("error","ZIP non verificato."))
+            Thread.sleep(2000)
+            status=selected.computer.ask("GET","/phone/imports/status?batch_id=${Uri.encode(batch)}",connectionChanged=::changed)
+        }
+        finishGroup(group)
+        return selected
+    }
+
+    private fun transferChunk(selected: ImportConnection, batch: String, ids: List<String>, byId: Map<String, BackupMedia>) {
+        val recorded = mutableMapOf<String, ImportOutcome>()
+        var warning = ""
+        fun failed(media: String, message: String) {
+            recorded[media] = ImportOutcome.FAILED
+            warning = message
+        }
+        fun confirm(media: String, outcome: String) {
+            recorded[media] = if (outcome == "copied") ImportOutcome.COPIED else ImportOutcome.DUPLICATE
+        }
+        try {
+            phase("hashing", "Verifico i contenuti di ${ids.size} file.")
             val hashed=mutableListOf<Hashed>()
             for(id in ids) {
                 check()
                 val item=byId[id] ?: continue
-                phase("hashing",item.name)
                 try {
                     if(!item.current()) throw ImportNeedsUser("${item.name} è cambiato: riprova la selezione.")
                     val digest=BackupRules.hash(item.open(),::cancelled)
@@ -129,7 +157,7 @@ class MediaImportWorker(private val context:Context,private val memory:Memory,pr
                     failed(id,"${item.name}: ${error.message.orEmpty()}")
                 }
             }
-            if(hashed.isEmpty()) continue
+            if(hashed.isEmpty()) return
             val manifest=JSONArray()
             for((item,digest) in hashed) manifest.put(JSONObject().put("media",item.media).put("stamp",item.stamp)
                 .put("sha256",digest.sha256).put("name",item.name).put("folder",item.folder).put("kind",item.kind)
@@ -143,12 +171,12 @@ class MediaImportWorker(private val context:Context,private val memory:Memory,pr
                 if(entry.item.current()) confirm(entry.item.media,confirmed.getString(entry.item.media))
                 else failed(entry.item.media,"Un file è cambiato dopo la verifica.")
             }
+            if (wanted.isNotEmpty()) phase("uploading", "Copio i file che mancano sul PC.")
             for(group in hashed.filter { it.item.media in wanted }.groupBy { it.digest.sha256 }.values) {
                 check()
                 val selectedFile=group.first()
                 val item=selectedFile.item
                 if(!item.current()) { failed(item.media,"${item.name} è cambiato prima dell’invio."); continue }
-                phase("uploading",item.name)
                 val input=BackupRules.Sending(item.open(),::cancelled,{})
                 val result=input.use { selected.computer.send("/phone/imports/upload?batch_id=${Uri.encode(batch)}&media=${Uri.encode(item.media)}",
                     selectedFile.digest.bytes,it,selectedFile.digest.sha256,connectionChanged=::changed) }
@@ -160,19 +188,13 @@ class MediaImportWorker(private val context:Context,private val memory:Memory,pr
                     confirm(entry.item.media,outcomes.getString(entry.item.media))
                 }
             }
+        } finally {
+            // The PC keeps each verified receipt. On retry it confirms any file committed since the last phone checkpoint.
+            if (recorded.isNotEmpty()) store.update(work) {
+                val next = it.confirmed(recorded)
+                if (warning.isEmpty()) next else next.copy(message = warning)
+            }
         }
-        check()
-        if(value().remaining.any { value().members[it]==group }) throw ImportNeedsUser("Restano file da verificare in ${ImportGroups.label(group)}. Le copie confermate restano salvate; premi Riprendi per riprovare.")
-        phase("finalizing","Il PC sta creando e verificando lo ZIP: ${ImportGroups.label(group)}. Puoi tenere spento lo schermo.")
-        var status=selected.computer.ask("POST","/phone/imports/finalize",JSONObject().put("batch_id",batch),connectionChanged=::changed)
-        while(!status.optBoolean("zip_ready")) {
-            check()
-            if(status.optString("state")=="error") throw ImportNeedsUser(status.optString("error","ZIP non verificato."))
-            Thread.sleep(2000)
-            status=selected.computer.ask("GET","/phone/imports/status?batch_id=${Uri.encode(batch)}",connectionChanged=::changed)
-        }
-        finishGroup(group)
-        return selected
     }
     private fun finishGroup(group:String) { store.update(work) { it.copy(finishedGroups=it.finishedGroups+group) } }
 }

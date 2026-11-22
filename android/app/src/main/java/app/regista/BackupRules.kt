@@ -8,6 +8,7 @@ import java.util.concurrent.CancellationException
 
 /** Pure policies shared by MediaStore/SAF sources and JVM tests. */
 object BackupRules {
+    private const val HEX = "0123456789abcdef"
     private val images = setOf("jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff", "avif", "heic", "heif", "dng", "nef", "cr2", "cr3", "arw", "raf", "rw2", "orf", "pef", "srw")
     private val audios = setOf("mp3", "m4a", "aac", "flac", "wav", "ogg", "opus", "amr", "wma", "aiff", "aif", "alac", "ac3", "mka", "mid", "midi", "ape", "oga", "spx")
     private val videos = setOf("mp4", "m4v", "mov", "mkv", "webm", "3gp", "3g2", "avi", "wmv", "mpg", "mpeg", "mts", "m2ts", "ts", "vob", "ogv", "flv", "divx")
@@ -27,6 +28,14 @@ object BackupRules {
 
     data class Digest(val sha256: String, val bytes: Long)
 
+    fun hex(bytes: ByteArray): String = buildString(bytes.size * 2) {
+        for (byte in bytes) {
+            val value = byte.toInt() and 0xff
+            append(HEX[value ushr 4])
+            append(HEX[value and 0x0f])
+        }
+    }
+
     fun hash(input: InputStream, cancelled: () -> Boolean): Digest = input.use { source ->
         val digest = MessageDigest.getInstance("SHA-256")
         val buffer = ByteArray(256 * 1024)
@@ -39,7 +48,7 @@ object BackupRules {
             digest.update(buffer, 0, count)
         }
         if (cancelled()) throw CancellationException()
-        Digest(digest.digest().joinToString("") { "%02x".format(it) }, bytes)
+        Digest(hex(digest.digest()), bytes)
     }
 
     class Sending(input: InputStream, private val cancelled: () -> Boolean, private val progress: (Long) -> Unit) : FilterInputStream(input) {

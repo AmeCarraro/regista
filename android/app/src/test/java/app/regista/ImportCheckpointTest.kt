@@ -49,4 +49,26 @@ class ImportCheckpointTest {
         val state=ImportCheckpoint().prepare(listOf("image:a:1","image:a:1"))
         assertEquals(1,state.total)
     }
+
+    @Test fun largeImportKeepsTheSameSelectionAndTotalsAfterChunkConfirmation() {
+        val normal = List(3_797) { "image:primary:${it + 1}" }
+        val whatsapp = List(47_199) { "tree:${it + 1}" }
+        val groups = mapOf("normal-media" to normal.size, "whatsapp-media" to whatsapp.size)
+        val members = normal.associateWith { "normal-media" } + whatsapp.associateWith { "whatsapp-media" }
+        val state = ImportCheckpoint(work = "original", peer = "pc", requested = true)
+            .prepare(normal + whatsapp).copy(groups = groups, members = members, batch = "existing-block")
+        val confirmed = normal.take(99).associateWith { ImportOutcome.DUPLICATE } +
+            mapOf(normal[99] to ImportOutcome.COPIED, whatsapp[0] to ImportOutcome.FAILED)
+        val next = state.confirmed(confirmed)
+        assertEquals(50_996, next.total)
+        assertEquals(100, next.processed)
+        assertEquals(50_896, next.remaining.size)
+        assertEquals(normal.drop(100) + whatsapp, next.remaining)
+        assertEquals(groups, next.groups)
+        assertEquals(next.remaining.toSet(), next.members.keys)
+        assertEquals(listOf(whatsapp[0]), next.failedMedia)
+        assertEquals("existing-block", next.batch)
+        assertEquals(next, next.confirmed(confirmed))
+        assertTrue(next.copy(requested = false, phase = "paused").canResume("pc", ""))
+    }
 }

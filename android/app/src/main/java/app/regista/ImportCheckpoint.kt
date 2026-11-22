@@ -18,13 +18,32 @@ data class ImportCheckpoint(
         val unique = ids.distinct()
         copy(prepared = true, remaining = unique, total = unique.size)
     }
-    fun confirmed(media: String, outcome: ImportOutcome): ImportCheckpoint {
-        if (media !in remaining) return this
-        if (outcome == ImportOutcome.FAILED) return if (media in failedMedia) this else copy(failed = failed+1,failedMedia=failedMedia+media)
-        return copy(remaining = remaining.filter { it != media },
-            copied = copied + if (outcome == ImportOutcome.COPIED) 1 else 0,
-            duplicates = duplicates + if (outcome == ImportOutcome.DUPLICATE) 1 else 0,
-            failed = failed - if (media in failedMedia) 1 else 0, failedMedia = failedMedia.filter { it != media })
+    fun confirmed(media: String, outcome: ImportOutcome): ImportCheckpoint = confirmed(mapOf(media to outcome))
+
+    fun confirmed(outcomes: Map<String, ImportOutcome>): ImportCheckpoint {
+        if (outcomes.isEmpty()) return this
+        val errors = failedMedia.toMutableSet()
+        val completed = mutableSetOf<String>()
+        var newCopies = 0
+        var existingCopies = 0
+        for (media in remaining) {
+            when (outcomes[media]) {
+                ImportOutcome.FAILED -> errors.add(media)
+                ImportOutcome.COPIED -> { completed.add(media); newCopies++ }
+                ImportOutcome.DUPLICATE -> { completed.add(media); existingCopies++ }
+                null -> continue
+            }
+        }
+        if (completed.isEmpty() && errors.size == failedMedia.size) return this
+        errors.removeAll(completed)
+        return copy(
+            remaining = remaining.filterNot { it in completed },
+            members = members.filterKeys { it !in completed },
+            copied = copied + newCopies,
+            duplicates = duplicates + existingCopies,
+            failed = failed + errors.size - failedMedia.size,
+            failedMedia = errors.toList(),
+        )
     }
     fun canResume(fingerprint: String, remoteRequest: String) =
         work.isNotEmpty() && peer == fingerprint && prepared && (remaining.isNotEmpty() || ((batch.isNotEmpty() || batches.isNotEmpty()) && phase != "done")) &&

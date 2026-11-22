@@ -71,8 +71,8 @@ class BackupFolders(private val context: Context) {
             if (rows.isNull(5)) 0 else rows.getInt(5))
     }
 
-    private fun item(media: String, entry: Entry, folder: String, kind: String, document: Uri, rootKey: String): BackupMedia {
-        val version = entry.stamp()
+    private fun item(media: String, entry: Entry, folder: String, kind: String, document: Uri, rootKey: String,
+                     version: String = entry.stamp()): BackupMedia {
         val modified = MediaFiles.day(entry.modified)
         return BackupMedia(media, entry.name.ifBlank { "file" }.take(500), folder.take(2000), kind,
             entry.size, entry.mime.ifBlank { "application/octet-stream" }, version,
@@ -86,7 +86,7 @@ class BackupFolders(private val context: Context) {
         return (0 until selected.length()).any { selected.optJSONObject(it)?.optString("id") == rootKey }
     }
 
-    fun scan(cancelled: () -> Boolean, onProblem: (String) -> Unit): List<BackupMedia> {
+    fun scan(cancelled: () -> Boolean, onProblem: (String) -> Unit, kinds: Set<String>? = null): List<BackupMedia> {
         val files = mutableListOf<BackupMedia>()
         val visited = HashSet<String>()
         val roots = roots()
@@ -122,6 +122,7 @@ class BackupFolders(private val context: Context) {
                                     continue
                                 }
                                 val kind = MediaFiles.kind(entry.mime, entry.name) ?: continue
+                                if (kinds != null && kind !in kinds) continue
                                 if (!visited.add("${tree.authority}\u0000${entry.id}")) continue
                                 if (entry.virtual) {
                                     onProblem("${entry.name}: documento virtuale, originale non disponibile.")
@@ -133,7 +134,7 @@ class BackupFolders(private val context: Context) {
                                 val media="tree:" + hash("${tree.authority}\u0000${entry.id}")
                                 remembered.putString(media, JSONObject().put("uri", document.toString()).put("root", rootKey)
                                     .put("stamp", version).put("kind", kind).put("folder", relative).toString())
-                                files += item(media, entry, relative, kind, document, rootKey)
+                                files += item(media, entry, relative, kind, document, rootKey, version)
                             }
                         }
                     } catch (error: Exception) {
@@ -190,8 +191,7 @@ class BackupFolders(private val context: Context) {
         private val COLUMNS = arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME,
             DocumentsContract.Document.COLUMN_MIME_TYPE, DocumentsContract.Document.COLUMN_SIZE,
             DocumentsContract.Document.COLUMN_LAST_MODIFIED, DocumentsContract.Document.COLUMN_FLAGS)
-        private fun hash(value: String) = MessageDigest.getInstance("SHA-256").digest(value.toByteArray())
-            .joinToString("") { "%02x".format(it) }
+        private fun hash(value: String) = BackupRules.hex(MessageDigest.getInstance("SHA-256").digest(value.toByteArray()))
         private fun allowed(tree: Uri, id: String) = tree.authority != "com.android.externalstorage.documents" ||
             !BackupFolderPolicy.privateAndroidPath(id)
     }
