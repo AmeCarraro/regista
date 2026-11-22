@@ -32,19 +32,32 @@ class Songs(private val context: Context) {
 
     val allowed get() = context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
 
+    fun missingForSync(): Array<String> {
+        val needed = if (Build.VERSION.SDK_INT < 29) listOf(permission, Manifest.permission.WRITE_EXTERNAL_STORAGE) else listOf(permission)
+        return needed.filter { context.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }.toTypedArray()
+    }
+
+    private val registaFolder = "${Environment.DIRECTORY_MUSIC}/Regista"
+    private val musicSelection: String
+        get() {
+            val music = "${MediaStore.Audio.AudioColumns.IS_MUSIC} != 0"
+            return if (Build.VERSION.SDK_INT >= 29) "($music OR ${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?)" else music
+        }
+    private val musicArgs get() = if (Build.VERSION.SDK_INT >= 29) arrayOf("$registaFolder/%") else emptyArray()
+
     /** All of them, by title: their number in Android's list, title, artist, album and length in milliseconds. */
     fun json(): JSONArray {
         val songs = JSONArray()
         if (!allowed) return songs
+        val hasGenre = Build.VERSION.SDK_INT >= 30
         val columns = arrayOf(
             BaseColumns._ID,
             MediaStore.MediaColumns.TITLE,
             MediaStore.Audio.AudioColumns.ARTIST,
             MediaStore.Audio.AudioColumns.ALBUM,
             MediaStore.Audio.AudioColumns.DURATION,
-        )
-        val music = "${MediaStore.Audio.AudioColumns.IS_MUSIC} != 0"
-        context.contentResolver.query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, columns, music, null, "${MediaStore.MediaColumns.TITLE} COLLATE NOCASE")?.use { rows ->
+        ) + if (hasGenre) arrayOf(MediaStore.Audio.AudioColumns.GENRE) else emptyArray()
+        context.contentResolver.query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, columns, musicSelection, musicArgs, "${MediaStore.MediaColumns.TITLE} COLLATE NOCASE")?.use { rows ->
             while (rows.moveToNext()) {
                 songs.put(
                     JSONObject()
@@ -52,7 +65,8 @@ class Songs(private val context: Context) {
                         .put("title", rows.getString(1).orEmpty())
                         .put("artist", known(rows.getString(2)))
                         .put("album", known(rows.getString(3)))
-                        .put("duration", rows.getLong(4)),
+                        .put("duration", rows.getLong(4))
+                        .put("genre", if (hasGenre) known(rows.getString(5)) else ""),
                 )
             }
         }
@@ -65,14 +79,32 @@ class Songs(private val context: Context) {
     /** A song of this phone, to send it: its file name, its size and its fingerprint (SHA-256). */
     class Described(val name: String, val size: Long, val fingerprint: String)
 
+    data class Source(val id: Long, val name: String, val size: Long)
+
+    fun sources(): List<Source> {
+        val columns = arrayOf(BaseColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.SIZE)
+        return context.contentResolver.query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, columns, musicSelection, musicArgs, null)?.use { rows ->
+            buildList {
+                while (rows.moveToNext()) {
+                    val name = rows.getString(1).orEmpty()
+                    val size = rows.getLong(2)
+                    if (size > 0 && name.substringAfterLast('.', "").lowercase() in SYNC_FORMATS) {
+                        add(Source(rows.getLong(0), name, size))
+                    }
+                }
+            }
+        } ?: throw IOException("Non riesco a leggere la musica del telefono.")
+    }
+
     fun described(id: Long): Described? {
         val columns = arrayOf(MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.SIZE)
         val (name, size) = context.contentResolver.query(uri(id), columns, null, null, null)?.use { rows ->
             if (rows.moveToFirst()) rows.getString(0).orEmpty() to rows.getLong(1) else null
         } ?: return null
-        val fingerprint = open(id).use { input -> written(input, null) }
-        return Described(name, size, fingerprint)
+        return Described(name, size, fingerprint(id))
     }
+
+    fun fingerprint(id: Long): String = open(id).use { input -> written(input, null) }
 
     /** The bytes of a song of this phone. */
     fun open(id: Long): InputStream = context.contentResolver.openInputStream(uri(id)) ?: throw IOException("the song is gone")
@@ -141,6 +173,7 @@ class Songs(private val context: Context) {
      * Android keeps it hidden until all of it is there and, from the computer, it is what the computer
      * said it is; if it is not, it is not kept. Says whether it was.
      */
+    @Synchronized
     fun keep(name: String, source: InputStream, expected: String?, kind: String? = null): Boolean {
         val safe = safeName(name)
         val type = kind ?: kindOf(safe)
@@ -148,7 +181,7 @@ class Songs(private val context: Context) {
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, safe)
             put(MediaStore.MediaColumns.MIME_TYPE, type)
-            put(MediaStore.MediaColumns.RELATIVE_PATH, "${Environment.DIRECTORY_MUSIC}/Regista")
+            put(MediaStore.MediaColumns.RELATIVE_PATH, registaFolder)
             put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
         val resolver = context.contentResolver
@@ -157,13 +190,35 @@ class Songs(private val context: Context) {
             val out = resolver.openOutputStream(made) ?: throw IOException("no place to write")
             val arrived = written(source, out)
             if (expected != null && !arrived.equals(expected, ignoreCase = true)) throw IOException("not what the computer sent")
-            resolver.update(made, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
+            if (resolver.update(made, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null) != 1) {
+                throw IOException("Il telefono non ha pubblicato il brano.")
+            }
             return true
         } catch (problem: IOException) {
             // what did not arrive whole is not a song: the app's own unfinished file does not stay
             resolver.delete(made, null, null)
             return false
         }
+    }
+
+    /** Recheck same-size candidates in case a copy arrived while the two libraries were compared. */
+    @Synchronized
+    fun keepFromSync(name: String, size: Long, source: InputStream, sha: String): Boolean {
+        val selection = "$musicSelection AND ${MediaStore.MediaColumns.SIZE} = ?"
+        val have = context.contentResolver.query(
+            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, arrayOf(BaseColumns._ID), selection, musicArgs + size.toString(), null,
+        )?.use { rows ->
+            while (rows.moveToNext()) {
+                if (runCatching { fingerprint(rows.getLong(0)) }.getOrNull() == sha) return@use true
+            }
+            false
+        } ?: false
+        if (have) {
+            source.close()
+            return false
+        }
+        if (!keep(name, source, sha)) throw IOException("Copia del brano non verificata sul telefono.")
+        return true
     }
 
     /** Before Android 10 a song is a file in the folder of music, which Android is then told to look at. */
@@ -219,6 +274,8 @@ class Songs(private val context: Context) {
     }
 
     companion object {
+        private val SYNC_FORMATS = setOf("mp3", "m4a", "aac", "flac", "ogg", "oga", "opus", "wav")
+
         /** Where Android keeps a song, to play it. */
         fun uri(id: Long): Uri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id)
     }

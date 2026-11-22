@@ -53,6 +53,10 @@ class MainActivity : Activity() {
     private lateinit var sight: Sight
     private lateinit var update: Update
     private lateinit var songs: Songs
+    internal lateinit var musicSync: MusicSync
+        private set
+    internal lateinit var musicCollections: MusicCollections
+        private set
     private lateinit var videos: Videos
     private lateinit var catalogCache: CatalogCache
     private lateinit var archiveCleanup: ArchiveCleanup
@@ -82,6 +86,7 @@ class MainActivity : Activity() {
             } else if (link == null) connect()
             if(!PhotoImportService.running) archiveCleanup.poll(reached)
             if(!PhotoImportService.running) pollDocumentRequest()
+            musicSync.poll(reached)
             importHandler.postDelayed(this, 1000)
         }
     }
@@ -111,6 +116,8 @@ class MainActivity : Activity() {
         library = Library(this, gallery, places, sight)
         update = Update(this)
         songs = Songs(this)
+        musicSync = MusicSync(songs, memory)
+        musicCollections = MusicCollections(this)
         videos = Videos(this)
         catalogCache = CatalogCache(this, memory)
         archiveCleanup = ArchiveCleanup(this,memory) { line -> runOnUiThread { say(line) } }
@@ -202,6 +209,11 @@ class MainActivity : Activity() {
 
     override fun onRequestPermissionsResult(request: Int, permissions: Array<String>, results: IntArray) {
         super.onRequestPermissionsResult(request, permissions, results)
+        if (request == SYNC_MUSIC) {
+            if (songs.missingForSync().isEmpty()) syncMusic()
+            else musicSync.problem("Consenti l'accesso alla musica per sincronizzare i brani.")
+            return
+        }
         if (request == CommandSpeech.PERMISSION) {
             speech.permissionResult(results.firstOrNull() == PackageManager.PERMISSION_GRANTED)
             return
@@ -335,6 +347,17 @@ class MainActivity : Activity() {
     /** The user wants to see the songs of this phone: Android asks once. */
     fun askForSongs() {
         if (!songs.allowed) requestPermissions(arrayOf(songs.permission), SONGS)
+    }
+
+    fun syncMusic() {
+        val computer = reached
+        if (computer == null) {
+            musicSync.problem("Apri Regista sul PC e collega il telefono.")
+            return
+        }
+        val missing = songs.missingForSync()
+        if (missing.isNotEmpty()) requestPermissions(missing, SYNC_MUSIC)
+        else musicSync.start(computer)
     }
 
     /**
@@ -822,6 +845,7 @@ class MainActivity : Activity() {
         const val SCAN_QR = 9
         const val IMPORT_NOTIFICATIONS = 42
         const val ADD_DOCUMENTS=44
+        const val SYNC_MUSIC = 45
         // the tab the app is opened on, when it is not the first one
         const val TAB = "app.regista.TAB"
 

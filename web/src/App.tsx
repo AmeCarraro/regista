@@ -370,7 +370,7 @@ export default function App() {
         <Shelf value={shelf}>
           {usingCatalog ? <Catalog visible={shownView === 'photos'} /> : <Kinds visible={shownView === 'photos'} />}
         </Shelf>
-        <Music visible={shownView === 'music'} />
+        <Music visible={shownView === 'music'} atComputer={atComputer} />
         <Documents visible={shownView === 'documents'} />
         <Composer
           models={models}

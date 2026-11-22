@@ -31,6 +31,7 @@ from embedder import ClipEmbedder
 from kinds import KINDS, MARGIN
 from music import KINDS as SONG_KINDS
 from music import Music
+from music_sync import MusicSync, routes as music_routes
 from phone import Phones, on_phone
 from photos import BATCH, PhotoIndex, newest, photo_id
 from places import Places
@@ -89,6 +90,7 @@ phones = Phones(
     places,
 )
 music = Music(MUSIC_DIR)
+music_sync = MusicSync()
 
 CATALOG_ENABLED = os.getenv("REGISTA_PHOTO_CATALOG", "1") != "0"
 photo_catalog = index_jobs = None
@@ -221,6 +223,7 @@ async def lifespan(app: FastAPI):
 
 # no page that lists what the service can do: nobody needs it, and it would load its parts from elsewhere
 app = FastAPI(title="regista", docs_url=None, openapi_url=None, redoc_url=None, lifespan=lifespan)
+app.include_router(music_routes(music_sync, lambda: music, lambda: phones, INDEX_DIR))
 if CATALOG_ENABLED:
     from catalog_routes import routes as catalog_routes
     from model_runtime import ModelRuntime, routes as model_routes
@@ -1123,14 +1126,19 @@ async def kinds_for_the_phone():
 
 
 @app.put("/phone/music/received")
-async def song_from_the_phone(request: Request, name: str = Query(min_length=1, max_length=200)):
-    """A song a phone sends, with its fingerprint: kept only whole, in "Dal telefono" inside the music folder,
-    under a name that is free. Nothing there is written over."""
+async def song_from_the_phone(
+    request: Request,
+    name: str = Query(min_length=1, max_length=500),
+    sync: str = Query(default="", pattern=r"^(?:[a-f0-9]{32})?$"),
+):
+    """Keep verified songs, with content deduplication for a library sync."""
     said = request.headers.get("x-regista-sha256", "").lower()
     if not said:
         raise HTTPException(status_code=400, detail="La canzone deve arrivare con la sua impronta.")
+    if sync:
+        music_sync.upload(request.state.device, sync, said)
     try:
-        partial = music.incoming(name)
+        partial = music.incoming(name, sync=bool(sync))
     except ValueError:
         raise HTTPException(status_code=400, detail="Questa non è una canzone.")
     size, seen = 0, hashlib.sha256()
@@ -1142,9 +1150,16 @@ async def song_from_the_phone(request: Request, name: str = Query(min_length=1, 
                     raise HTTPException(status_code=413, detail="too large")
                 seen.update(chunk)
                 file.write(chunk)
+            if sync:
+                file.flush()
+                os.fsync(file.fileno())
         if not size or said != seen.hexdigest():
             raise HTTPException(status_code=400, detail="La canzone non è arrivata intera.")
-        kept = music.land(partial, name)
+        if sync:
+            music_sync.upload(request.state.device, sync, said)
+            kept, duplicate = await asyncio.to_thread(music.land_synced, partial, name, said)
+            return {"kept": kept, "duplicate": duplicate}
+        kept = music.land(partial, name, fingerprint=said)
     except BaseException:
         # what stopped halfway is not a song
         partial.unlink(missing_ok=True)

@@ -1,0 +1,78 @@
+.music-filters,
+.music-label-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.music .library-button,
+.music select,
+.music-label-form input {
+  min-width: 0;
+  min-height: 36px;
+  max-width: 100%;
+  padding: 6px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--raised);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.84rem;
+}
+
+.music .library-button {
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.music .library-button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.music .tunes > li,
+.music .songs > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.music .tune,
+.music .song {
+  flex: 1;
+  min-width: 0;
+}
+
+.music .music-label-form {
+  flex-basis: 100%;
+  margin-bottom: 4px;
+}
+
+.music-label-form input {
+  flex: 1 1 140px;
+}
+
+.music-feedback {
+  margin: 0;
+  color: var(--muted);
+}
+
+.music-filters > .music-feedback,
+.music-label-form > .music-feedback {
+  flex-basis: 100%;
+}
+
+.music .music-actions,
+.phone.music > .music-filters + .music-filters {
+  margin-top: 12px;
+}
+
+.music-top {
+  flex-wrap: wrap;
+}
+
+.music-top > .search {
+  min-width: 190px;
+}

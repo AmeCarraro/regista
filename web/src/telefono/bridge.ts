@@ -4,6 +4,8 @@
 
 import type { Picture } from './select.ts'
 import type { Places } from './understand.ts'
+import { EMPTY_LIBRARY, IDLE_MUSIC_SYNC } from '../musicLibrary.ts'
+import type { MusicLibrary, MusicSyncJob, Playlist } from '../musicLibrary.ts'
 
 /** Whether a computer was paired, which one, whether it answers now, and how many pictures wait to go to it. */
 export type State = { paired: boolean; computer: string; reachable: boolean; waiting: number }
@@ -37,7 +39,7 @@ type Said = Heard | { type: 'answer'; answer: Answer | null }
 export type Sorted = { kinds: { kind: string; label: string; sure: string[]; maybe: string[] }[]; unsorted: number }
 
 /** A song of this phone (its number in Android's list) or of the computer (its name there, and its file's); the phone knows how long its own are. */
-export type Song = { id: string; title: string; artist: string; album: string; duration?: number; folder?: string; name?: string; kind?: string; size?: number }
+export type Song = { id: string; title: string; artist: string; album: string; genre?: string; duration?: number; folder?: string; name?: string; kind?: string; size?: number }
 
 /** A song in the line to play, and where it is; a song of the computer with its size, so that it plays while it arrives. */
 export type Queued = { where: 'phone' | 'computer'; id: string; title: string; artist: string; size?: number }
@@ -108,6 +110,11 @@ export type App = {
   addSongs(): void
   /** How the songs chosen last are being added. */
   added(): Adding
+  musicSyncState(): MusicSyncJob
+  syncMusic(): void
+  musicCollections(): MusicLibrary
+  labelSong(id: string, tags: string): MusicLibrary
+  saveMusicPlaylist(playlist: Playlist): MusicLibrary
   /** The songs of the computer while it answers; null until it listed them. */
   computerSongs(): { reachable: boolean; songs: Song[] | null }
   /** Plays a line of songs from the one at `index`: also with the screen off. */
@@ -169,6 +176,11 @@ type Native = {
   allowSongs(): void
   addSongs(): void
   added(): string
+  musicSyncState?(): string
+  syncMusic?(): void
+  musicCollections?(): string
+  labelSong?(id: string, tags: string): string
+  saveMusicPlaylist?(name: string, query: string, tag: string): string
   computerSongs(): string
   play(queue: string, index: number): void
   control(what: string): void
@@ -326,6 +338,17 @@ function open(): App {
     allowSongs: () => native.allowSongs(),
     addSongs: () => native.addSongs(),
     added: () => parse<Adding>(native.added()),
+    musicSyncState: () => native.musicSyncState ? parse(native.musicSyncState()) : IDLE_MUSIC_SYNC,
+    syncMusic: () => native.syncMusic?.(),
+    musicCollections: () => native.musicCollections ? parse(native.musicCollections()) : EMPTY_LIBRARY,
+    labelSong: (id, tags) => {
+      if (!native.labelSong) throw Error('Aggiorna Regista sul telefono.')
+      return parse(native.labelSong(id, tags))
+    },
+    saveMusicPlaylist: ({ name, query, tag }) => {
+      if (!native.saveMusicPlaylist) throw Error('Aggiorna Regista sul telefono.')
+      return parse(native.saveMusicPlaylist(name, query, tag))
+    },
     computerSongs: () => parse(native.computerSongs()),
     play: (queue, index) => native.play(JSON.stringify(queue), index),
     control: (what) => native.control(what),
@@ -404,6 +427,7 @@ const SONGS: Song[] = [
 function pretend(): App {
   const copying = { on: false, at: Date.UTC(2026, 9, 17, 13, 42), count: 3 }
   let songs = SONGS
+  let musicLibrary = EMPTY_LIBRARY
   let adding: Adding = { busy: false, total: 0, done: 0, skipped: 0, failed: 0 }
   // what the pretend player plays: the time goes on by itself
   let playing: Playing = { song: null, index: 0, count: 0, playing: false, loading: false, position: 0, duration: 0, problem: '' }
@@ -450,6 +474,17 @@ function pretend(): App {
       }, 1500)
     },
     added: () => adding,
+    musicSyncState: () => IDLE_MUSIC_SYNC,
+    syncMusic: () => {},
+    musicCollections: () => musicLibrary,
+    labelSong: (id, tags) => {
+      musicLibrary = { ...musicLibrary, tags: { ...musicLibrary.tags, [id]: tags.split(',').map((tag) => tag.trim()).filter(Boolean) } }
+      return musicLibrary
+    },
+    saveMusicPlaylist: (playlist) => {
+      musicLibrary = { ...musicLibrary, playlists: { ...musicLibrary.playlists, [playlist.name.toLowerCase()]: playlist } }
+      return musicLibrary
+    },
     computerSongs: () => ({ reachable: false, songs: null }),
     play: (queue, index) => {
       playing = { ...playing, song: queue[index] ?? null, index, count: queue.length, playing: true, position: 0, duration: 200_000 }

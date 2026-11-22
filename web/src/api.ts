@@ -1,6 +1,8 @@
 // The contract with the service (app/main.py), written as types: the compiler then
 // checks that the page handles every kind of event the service can send.
 
+import type { MusicLibrary, MusicSyncJob, Playlist } from './musicLibrary.ts'
+
 /** A job a model can be given: decide and use tools, talk, look at a picture. */
 export type Job = 'tools' | 'chat' | 'vision'
 
@@ -321,9 +323,16 @@ export const fetchKinds = () => get<{ kinds: Kind[]; total: number }>('/api/kind
 export const fetchKind = (kind: string) => get<Found>(`/api/kinds/${kind}`)
 
 /** A song of the music folder: what its file says of it, or its name and its folder when it says nothing. */
-export type Tune = { id: string; title: string; artist: string; album: string; folder: string; kind: string; size: number }
+export type Tune = { id: string; title: string; artist: string; album: string; genre?: string; folder: string; kind: string; size: number }
 
 export const fetchMusic = () => get<{ folder: string; songs: Tune[] }>('/api/music')
+
+export type MusicSyncOverview = { devices: { id: string; name: string }[]; jobs: (MusicSyncJob & { device: string })[] }
+export const fetchMusicSync = () => get<MusicSyncOverview>('/api/music-sync')
+export const syncMusic = (device: string) => post<MusicSyncJob & { device: string }>('/api/music-sync', { device })
+export const fetchMusicLibrary = () => get<MusicLibrary>('/api/music-library')
+export const labelSong = (track: string, tags: string) => post<MusicLibrary>('/api/music-library/tags', { track, tags })
+export const saveMusicPlaylist = (playlist: Playlist) => post<MusicLibrary>('/api/music-library/playlists', playlist)
 
 export const songOf = (id: string) => `/api/music/${id}`
 

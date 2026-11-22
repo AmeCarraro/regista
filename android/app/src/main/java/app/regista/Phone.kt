@@ -132,6 +132,21 @@ class Phone(
     fun added(): String = songs.adding()
 
     @JavascriptInterface
+    fun musicSyncState(): String = app.musicSync.state()
+
+    @JavascriptInterface
+    fun syncMusic() = app.runOnUiThread { app.syncMusic() }
+
+    @JavascriptInterface
+    fun musicCollections(): String = app.musicCollections.state()
+
+    @JavascriptInterface
+    fun labelSong(id: String, tags: String): String = app.musicCollections.tags(id, tags)
+
+    @JavascriptInterface
+    fun saveMusicPlaylist(name: String, query: String, tag: String): String = app.musicCollections.playlist(name, query, tag)
+
+    @JavascriptInterface
     fun videos(): String = videos.state()
 
     @JavascriptInterface

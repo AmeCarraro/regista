@@ -6,6 +6,7 @@ import pytest
 
 import main
 from music import Music, tags
+from music_sync import MusicCollections, Playlist, TrackTags
 from test_door import a_phone, client, home, let_in  # noqa: F401 - home is a fixture
 
 
@@ -132,3 +133,90 @@ def test_a_song_sent_by_a_phone_lands_whole_in_its_own_folder_and_writes_over_no
     assert "Canzone mia" in [song["title"] for song in client.get("/api/music").json()["songs"]]
     assert a_phone().put("/phone/music/received", params={"name": "x.mp3"}, content=song).status_code == 401
     assert client.put("/phone/music/received", params={"name": "x.mp3"}, content=song).status_code == 404
+
+
+def test_sync_adds_only_missing_bytes_in_both_directions_and_can_be_repeated(home, tmp_path, monkeypatch):
+    pc, mobile = tmp_path / "PC music", tmp_path / "Phone music"
+    pc.mkdir()
+    mobile.mkdir()
+    same = b"song shared by the libraries under different names"
+    desktop = id3(frame(b"TIT2", "Solo sul PC"), frame(b"TCON", "Jazz")) + b"desktop audio"
+    handset = b"phone-only audio"
+    (pc / "una.mp3").write_bytes(same)
+    (pc / "Regista").mkdir()
+    (pc / "Regista" / "Jazz.mp3").write_bytes(desktop)
+    (mobile / "stessa.mp3").write_bytes(same)
+    (mobile / "Jazz.mp3").write_bytes(handset)
+    monkeypatch.setattr(main, "music", Music(pc))
+    phone, key, _ = let_in("Redmi")
+    other, other_key, _ = let_in("Altro telefono")
+    device = next(item for item in client.get("/api/music-sync").json()["devices"] if item["name"] == "Redmi")
+
+    def sha(data):
+        return hashlib.sha256(data).hexdigest()
+
+    queued = client.post("/api/music-sync", json={"device": device["id"]}).json()
+    assert queued["state"] == "requested"
+    assert phone.get("/phone/music-sync/pending", headers=key).json() == {"request": queued["id"]}
+    assert other.get("/phone/music-sync/pending", headers=other_key).json() == {"request": ""}
+    assert phone.post("/api/music-sync", json={"device": device["id"]}, headers=key).status_code == 403
+
+    def start(request=""):
+        response = phone.post("/phone/music-sync/start", headers=key, json={"request": request})
+        assert response.status_code == 200
+        return response.json()["id"]
+
+    job = start(queued["id"])
+    inventory = {sha(path.read_bytes()): path for path in mobile.glob("*.mp3")}
+    body = {"job": job, "hashes": list(inventory)}
+    assert other.post("/phone/music-sync/plan", headers=other_key, json=body).status_code == 409
+    plan = phone.post("/phone/music-sync/plan", headers=key, json=body).json()
+    assert plan["wanted"] == [sha(handset)]
+    assert len(plan["download"]) == 1
+    track = plan["download"][0]
+    assert track["genre"] == "Jazz" and track["sha256"] == sha(desktop)
+
+    def send(data, fingerprint=sha(handset)):
+        return phone.put(
+            "/phone/music/received", params={"name": "Jazz.mp3", "sync": job},
+            headers={**key, "X-Regista-Sha256": fingerprint}, content=data,
+        )
+
+    assert send(desktop, sha(desktop)).status_code == 409
+    assert send(b"incomplete upload").status_code == 400
+    assert sorted(path.name for path in (pc / "Regista").iterdir()) == ["Jazz.mp3"]
+    assert send(handset).json() == {"kept": "Regista/Jazz (2).mp3", "duplicate": False}
+    assert send(handset).json() == {"kept": "Regista/Jazz (2).mp3", "duplicate": True}
+
+    # Retry after the upload, before the download. It only plans the second leg.
+    job = start()
+    assert phone.post("/phone/music-sync/plan", headers=key, json={"job": job, "hashes": list(inventory)}).json() == {
+        "wanted": [], "download": [track],
+    }
+    downloaded = phone.get(f"/phone/music/{track['id']}", headers=key)
+    assert downloaded.headers["x-regista-sha256"] == sha(downloaded.content) == sha(desktop)
+    (mobile / "Jazz (2).mp3").write_bytes(downloaded.content)
+    final = phone.post("/phone/music-sync/progress", headers=key, json={"job": job, "state": "ready", "received": 1})
+    assert final.json()["received"] == 1
+    assert client.get("/api/music-sync").json()["jobs"][0]["state"] == "ready"
+    job = start()
+    assert phone.post("/phone/music-sync/plan", headers=key, json={"job": job, "hashes": [*inventory, sha(desktop)]}).json() == {
+        "wanted": [], "download": [],
+    }
+    assert (pc / "Regista" / "Jazz.mp3").read_bytes() == desktop
+    assert (pc / "Regista" / "Jazz (2).mp3").read_bytes() == handset
+    assert (mobile / "Jazz.mp3").read_bytes() == handset
+    assert (mobile / "stessa.mp3").read_bytes() == same
+    assert (pc / "una.mp3").read_bytes() == same
+
+
+def test_music_tags_and_playlist_rule_survive_reopening(tmp_path):
+    database = tmp_path / "music-library.json"
+    track = "63727dbcb01cf29b"
+    labels = MusicCollections(database)
+    labels.label(TrackTags(track=track, tags="Relax, relax, Sera"))
+    labels.playlist(Playlist(name="Serata", query="Lucio", tag="Sera"))
+    assert MusicCollections(database).read() == {
+        "tags": {track: ["relax", "Sera"]},
+        "playlists": {"serata": {"name": "Serata", "query": "Lucio", "tag": "Sera"}},
+    }

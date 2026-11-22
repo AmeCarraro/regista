@@ -136,7 +136,8 @@ class Computer(val address: String, private val port: Int, private val fingerpri
             // Explicit backups can verify large local ZIPs; the user can disconnect to cancel.
             if (path == "/phone/media-backup/manifest") connection.readTimeout = 0
             else if (path.startsWith("/phone/media-backup/")) connection.readTimeout = 10000
-            else if (path == "/phone/catalog/missing") connection.readTimeout = 300000
+            else if (path == "/phone/catalog/missing" || path == "/phone/music-sync/plan") connection.readTimeout = 300000
+            else if (path == "/phone/music-sync/pending") connection.readTimeout = 8000
             if (body != null) {
                 val bytes = body.toString().toByteArray()
                 connection.doOutput = true

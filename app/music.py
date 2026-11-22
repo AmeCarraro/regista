@@ -13,6 +13,8 @@ import threading
 import uuid
 from pathlib import Path
 
+from photo_files import move_new
+
 # the kinds of song that both Android and the page of this PC play, and their names on the web
 KINDS = {
     ".mp3": "audio/mpeg",
@@ -28,9 +30,10 @@ KINDS = {
 HEAD = 64 * 1024
 # the largest part of an M4A read for its words, the cover picture included
 MOOV = 8 * 1024 * 1024
-NAMES = {"title", "artist", "album"}
+NAMES = {"title", "artist", "album", "genre"}
 # where the songs a phone sends land, inside the music folder
 FROM_THE_PHONE = "Dal telefono"
+SYNC_FOLDER = "Regista"
 
 
 def safe_name(name: str) -> str:
@@ -62,7 +65,8 @@ def _id3(head: bytes) -> dict:
     if flags & 0x40 and version >= 3:
         # an extended header comes first, and says nothing of the song
         at = _syncsafe(tag[:4]) if version == 4 else struct.unpack(">I", tag[:4])[0] + 4
-    names = {"TIT2": "title", "TPE1": "artist", "TALB": "album", "TT2": "title", "TP1": "artist", "TAL": "album"}
+    names = {"TIT2": "title", "TPE1": "artist", "TALB": "album", "TCON": "genre",
+             "TT2": "title", "TP1": "artist", "TAL": "album", "TCO": "genre"}
     width, header = (3, 6) if version == 2 else (4, 10)
     found: dict = {}
     while at + header <= len(tag):
@@ -157,7 +161,7 @@ def _ilst(moov: bytes) -> dict:
             return {}
         # meta begins with a version and flags, before its atoms
         data = data[inner[0] + (4 if wanted == b"meta" else 0):inner[1]]
-    names = {b"\xa9nam": "title", b"\xa9ART": "artist", b"\xa9alb": "album"}
+    names = {b"\xa9nam": "title", b"\xa9ART": "artist", b"\xa9alb": "album", b"\xa9gen": "genre"}
     found: dict = {}
     for name, start, end in _atoms(data, 0, len(data)):
         if name not in names:
@@ -224,6 +228,7 @@ def _song(folder: Path, path: Path, size: int) -> dict:
         "title": said.get("title") or named,
         "artist": said.get("artist", ""),
         "album": said.get("album") or (relative.parent.name if inside else ""),
+        "genre": said.get("genre", ""),
         "folder": inside,
         "kind": path.suffix.lower().lstrip("."),
         "size": size,
@@ -235,11 +240,12 @@ class Music:
 
     def __init__(self, folder: str | Path):
         self.folder = Path(folder)
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         # what was read of each file, as long as it stays the same: (size, time of the last change), song
         self._known: dict[str, tuple[tuple[int, int], dict]] = {}
         self._paths: dict[str, Path] = {}
         self._fingerprints: dict[Path, tuple[tuple[int, int], str]] = {}
+        self._by_fingerprint: dict[str, Path] = {}
 
     def songs(self) -> list[dict]:
         """All of them, by title. A file is read again only when it changed."""
@@ -261,7 +267,8 @@ class Music:
         """The file of a song of the folder; None for anything else. A song added since the last list is found too."""
         if identifier not in self._paths:
             self.songs()
-        return self._paths.get(identifier)
+        path = self._paths.get(identifier)
+        return path if path and self.inside(path) and path.is_file() else None
 
     def fingerprint(self, path: Path) -> str:
         """The SHA-256 of a song, which a phone checks the song against: worked out again only when the file changed."""
@@ -274,32 +281,69 @@ class Music:
         with open(path, "rb") as file:
             for part in iter(lambda: file.read(1024 * 1024), b""):
                 digest.update(part)
+        after = path.stat()
+        if (after.st_size, after.st_mtime_ns) != stamp:
+            raise OSError("Un brano è cambiato durante il controllo.")
         self._fingerprints[path] = (stamp, digest.hexdigest())
         return digest.hexdigest()
 
-    def incoming(self, name: str) -> Path:
+    def sync_catalog(self) -> dict[str, dict]:
+        """One representative for each identical audio file in this library."""
+        with self._lock:
+            tracks, paths = {}, {}
+            for song in self.songs():
+                path = self._paths[song["id"]]
+                digest = self.fingerprint(path)
+                tracks.setdefault(digest, {**song, "sha256": digest})
+                paths.setdefault(digest, path)
+            self._by_fingerprint = paths
+            return tracks
+
+    def inside(self, path: Path) -> bool:
+        return path.resolve().is_relative_to(self.folder.resolve())
+
+    def incoming(self, name: str, *, sync: bool = False) -> Path:
         """Where a song a phone sends is written while it arrives: a hidden file in FROM_THE_PHONE, which is no song yet."""
         if Path(safe_name(name)).suffix.lower() not in KINDS:
             raise ValueError("not a song")
-        folder = self.folder / FROM_THE_PHONE
+        folder = self.folder / (SYNC_FOLDER if sync else FROM_THE_PHONE)
+        if not self.inside(folder):
+            raise ValueError("La cartella musicale punta fuori dalla libreria.")
         folder.mkdir(parents=True, exist_ok=True)
         return folder / f".{uuid.uuid4().hex}.part"
 
-    def land(self, partial: Path, name: str) -> str:
+    def land(self, partial: Path, name: str, *, fingerprint: str = "") -> str:
         """Gives a song that arrived whole its name, one that is free: "Volare (2).mp3" when "Volare.mp3" is there.
         Nothing already in the folder is written over. Says where it is, inside the music folder."""
         safe = Path(safe_name(name))
-        target, number = partial.parent / safe.name, 2
-        while True:
-            try:
-                if target.exists():
-                    raise FileExistsError(target)
-                partial.rename(target)
-                return target.relative_to(self.folder).as_posix()
-            except FileExistsError:
-                target, number = partial.parent / f"{safe.stem} ({number}){safe.suffix}", number + 1
+        stem = safe.stem[:160].rstrip(" .") or "Brano"
+        if re.fullmatch(r"(?i)CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9]", stem.split(".")[0]):
+            stem = "_" + stem
+        if not self.inside(partial) or safe.suffix.lower() not in KINDS:
+            raise ValueError("Destinazione musicale non valida.")
+        with self._lock:
+            target, number = partial.parent / (stem + safe.suffix), 2
+            while True:
+                try:
+                    move_new(partial, target)
+                    if fingerprint:
+                        stamp = target.stat()
+                        self._fingerprints[target] = ((stamp.st_size, stamp.st_mtime_ns), fingerprint)
+                        self._by_fingerprint.setdefault(fingerprint, target)
+                    return target.relative_to(self.folder).as_posix()
+                except FileExistsError:
+                    target, number = partial.parent / f"{stem} ({number}){safe.suffix}", number + 1
+
+    def land_synced(self, partial: Path, name: str, sha: str) -> tuple[str, bool]:
+        with self._lock:
+            previous = self._by_fingerprint.get(sha)
+            if previous and self.inside(previous) and previous.is_file() and self.fingerprint(previous) == sha:
+                partial.unlink()
+                return previous.relative_to(self.folder).as_posix(), True
+            self._by_fingerprint.pop(sha, None)
+            return self.land(partial, name, fingerprint=sha), False
 
     def _files(self) -> list[Path]:
         if not self.folder.is_dir():
             return []
-        return [path for path in self.folder.rglob("*") if path.suffix.lower() in KINDS and path.is_file()]
+        return [path for path in self.folder.rglob("*") if path.suffix.lower() in KINDS and path.is_file() and self.inside(path)]

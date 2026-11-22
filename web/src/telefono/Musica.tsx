@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { clock, matching } from '../clock.ts'
 import * as icons from '../icons.tsx'
+import { MusicFilters, SongTagEditor } from '../MusicCollections.tsx'
+import { EMPTY_LIBRARY, musicMatches, musicSyncBusy, musicSyncText, musicTags, trackTags } from '../musicLibrary.ts'
 import { addedInWords } from './added.ts'
 import { connect } from './bridge.ts'
 import type { Playing, Song } from './bridge.ts'
@@ -17,6 +19,12 @@ export default function Musica({ visible }: { visible: boolean }) {
   const [theirs, setTheirs] = useState(() => app.computerSongs())
   const [playing, setPlaying] = useState<Playing>(() => app.player())
   const [written, setWritten] = useState('')
+  const [library, setLibrary] = useState(() => app.musicCollections())
+  const [tag, setTag] = useState('')
+  const [playlist, setPlaylist] = useState('')
+  const [editing, setEditing] = useState('')
+  const [sync, setSync] = useState(() => app.musicSyncState())
+  const synced = useRef('')
   // where the finger is on the bar while it moves: the song jumps there when it lets go
   const [scrub, setScrub] = useState<number | null>(null)
   const [link, setLink] = useState(() => app.state())
@@ -46,6 +54,13 @@ export default function Musica({ visible }: { visible: boolean }) {
         setTimeout(() => setMine(app.songs()), 3000)
       }
       setCopies(copied)
+      const currentSync = app.musicSyncState()
+      setSync(currentSync)
+      if (currentSync.id && currentSync.received && !musicSyncBusy(currentSync) && currentSync.id !== synced.current) {
+        synced.current = currentSync.id
+        setMine(app.songs())
+        setTimeout(() => setMine(app.songs()), 3000)
+      }
       const now = app.added()
       const said = JSON.stringify(now)
       if (said !== told.current) {
@@ -61,8 +76,15 @@ export default function Musica({ visible }: { visible: boolean }) {
     }
   }, [visible, where, app])
 
-  const shown = useMemo(() => matching(where === 'phone' ? mine.songs : (theirs.songs ?? []), written), [where, mine, theirs, written])
+  const choices = useMemo(() => musicTags(mine.songs, library), [mine.songs, library])
+  const labels = where === 'phone' ? library : EMPTY_LIBRARY
+  const shown = useMemo(() => where === 'phone'
+    ? musicMatches(mine.songs, library, written, tag)
+    : matching(theirs.songs ?? [], written), [where, mine, theirs, written, library, tag])
   const list = where === 'phone' ? mine.songs : (theirs.songs ?? [])
+  const synchronizing = musicSyncBusy(sync)
+  const syncMessage = musicSyncText(sync)
+  const addingMessage = adding.total > 0 ? addedInWords(adding) : ''
   const now = playing.song
 
   function play(index: number) {
@@ -85,6 +107,13 @@ export default function Musica({ visible }: { visible: boolean }) {
     if (where === 'computer') app.copyHere(song.id, song.name || `${song.title}.${song.kind || 'mp3'}`)
     else app.copyThere(song.id)
     setCopies(app.copies())
+  }
+
+  function choosePlaylist(key: string) {
+    const choice = library.playlists[key]
+    setPlaylist(key)
+    setTag(choice?.tag ?? '')
+    setWritten(choice?.query ?? '')
   }
 
   return (
@@ -110,7 +139,8 @@ export default function Musica({ visible }: { visible: boolean }) {
         <icons.Search />
         <input
           value={written}
-          onChange={(event) => setWritten(event.target.value)}
+          maxLength={200}
+          onChange={(event) => { setWritten(event.target.value); setPlaylist('') }}
           placeholder="Cerca una canzone, un artista, un album"
           aria-label="Cerca una canzone"
           enterKeyHint="search"
@@ -118,14 +148,22 @@ export default function Musica({ visible }: { visible: boolean }) {
         />
       </form>
 
+      <div className="music-filters music-actions">
+        {where === 'phone' && mine.allowed && (
+          <button type="button" className="library-button" disabled={adding.busy || synchronizing} onClick={() => app.addSongs()}>Aggiungi canzoni</button>
+        )}
+        <button type="button" className="library-button" disabled={synchronizing || adding.busy || !link.reachable}
+          title={link.reachable ? undefined : 'Collega Regista al computer'} onClick={() => app.syncMusic()}>
+          Sincronizza
+        </button>
+        {where === 'phone' && addingMessage && <small className="music-feedback" role="status">{addingMessage}</small>}
+        {syncMessage && <small className="music-feedback" role="status">{syncMessage}</small>}
+      </div>
+
       {where === 'phone' && mine.allowed && (
-        <div className="adding">
-          <button type="button" className="add" disabled={adding.busy} onClick={() => app.addSongs()}>
-            <icons.Plus />
-            Aggiungi canzoni
-          </button>
-          <small>{addedInWords(adding)}</small>
-        </div>
+        <MusicFilters library={library} tags={choices} query={written} tag={tag} selected={playlist}
+          onTag={(value) => { setTag(value); setPlaylist('') }} onPlaylist={choosePlaylist}
+          onSave={async (selection) => { setLibrary(app.saveMusicPlaylist(selection)) }} />
       )}
 
       {where === 'phone' && !mine.allowed && (
@@ -145,7 +183,7 @@ export default function Musica({ visible }: { visible: boolean }) {
       )}
       {where === 'computer' && theirs.reachable && theirs.songs === null && <p className="fine">Chiedo al computer le sue canzoni…</p>}
       {where === 'computer' && theirs.songs?.length === 0 && <p className="fine">Sul computer non ci sono canzoni: mettile nella sua cartella Musica.</p>}
-      {list.length > 0 && written && shown.length === 0 && <p className="fine">Nessuna canzone con queste parole.</p>}
+      {list.length > 0 && shown.length === 0 && <p className="fine">Nessun brano corrispondente.</p>}
 
       {canCopy && shown.length > 0 && (
         <p className="fine">
@@ -162,15 +200,19 @@ export default function Musica({ visible }: { visible: boolean }) {
                 <icons.Note />
                 <span>
                   <b>{song.title}</b>
-                  <small>{[song.artist, song.album].filter(Boolean).join(' · ') || song.folder}</small>
+                  <small>{[song.artist, song.album, ...trackTags(song, labels)].filter(Boolean).join(' · ') || song.folder}</small>
                 </span>
                 {song.duration ? <i>{clock(song.duration)}</i> : null}
               </button>
+              {where === 'phone' && (
+                <button type="button" className="library-button" aria-label={`Tag di ${song.title}`} aria-expanded={editing === song.id}
+                  onClick={() => setEditing(editing === song.id ? '' : song.id)}>Tag</button>
+              )}
               {canCopy && (
                 <button
                   type="button"
                   className={copying === 'failed' ? 'copy bad' : 'copy'}
-                  disabled={copying === 'copying' || copying === 'done'}
+                  disabled={synchronizing || copying === 'copying' || copying === 'done'}
                   aria-label={
                     copying === 'copying' ? 'La sto copiando' : copying === 'done' ? 'Copiata' : copying === 'failed' ? 'Copia non riuscita: riprova' : where === 'computer' ? 'Copia sul telefono' : 'Manda al computer'
                   }
@@ -178,6 +220,10 @@ export default function Musica({ visible }: { visible: boolean }) {
                 >
                   {copying === 'copying' ? <span className="spinning" /> : copying === 'done' ? <icons.Check /> : copying === 'failed' ? <icons.Refresh /> : where === 'computer' ? <icons.Down /> : <icons.Send />}
                 </button>
+              )}
+              {where === 'phone' && editing === song.id && (
+                <SongTagEditor tags={library.tags[song.id] ?? []} onClose={() => setEditing('')}
+                  onSave={async (tags) => { setLibrary(app.labelSong(song.id, tags)) }} />
               )}
             </li>
           )
