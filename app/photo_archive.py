@@ -24,16 +24,24 @@ class OriginalArchive:
     def path(self, sha):
         if not re.fullmatch('[a-f0-9]{64}', sha):
             raise ValueError('Identità originale non valida.')
-        target = self.root / sha[:2] / (sha + '.zip')
+        with self.catalog.connect() as db:
+            known = db.execute('SELECT relative FROM original_backups WHERE asset_id=?', (sha,)).fetchone()
+        target = self.root / known['relative'] if known else self.root / sha[:2] / (sha + '.zip')
         if self.root.resolve() != self.root.absolute() or not target.resolve().is_relative_to(self.root.resolve()):
             raise ValueError('Archivio fuori dalla cartella di backup.')
         return target
 
     def inspect(self, path, sha):
         with zipfile.ZipFile(path) as archive:
-            if archive.getinfo('manifest.json').file_size > 65536:
+            if archive.getinfo('manifest.json').file_size > 64 * 1024 * 1024:
                 raise ValueError('Manifest del backup non valido.')
             manifest = json.loads(archive.read('manifest.json'))
+            if manifest.get('version') != 2 and archive.getinfo('manifest.json').file_size > 65536:
+                raise ValueError('Manifest del backup non valido.')
+            if manifest.get('version') == 2:
+                manifest = next((entry for entry in manifest['originals'] if entry['sha256'] == sha), None)
+                if manifest is None:
+                    raise ValueError('Originale assente dal blocco ZIP.')
             member = manifest['original']
             if manifest['sha256'] != sha or not member.startswith('original/') or '..' in Path(member).parts:
                 raise ValueError('Identità del backup non corrispondente.')
@@ -81,10 +89,14 @@ class OriginalArchive:
             try:
                 manifest = self.inspect(destination, sha)
             except (OSError, ValueError, KeyError, zipfile.BadZipFile, EOFError, zlib.error):
+                if destination.parent.name == 'blocchi':
+                    raise ValueError('ZIP del blocco non verificabile: archivio immutabile conservato, nessuna sovrascrittura.')
                 pass  # Replace only after a new archive has been fully verified; retain the damaged archive.
             else:
                 self._remember(sha, destination, manifest)
                 return destination
+        if destination.parent.name == 'blocchi':
+            raise ValueError('ZIP del blocco non disponibile: non viene ricreato o sovrascritto automaticamente.')
         destination.parent.mkdir(parents=True, exist_ok=True)
         descriptor, temporary = tempfile.mkstemp(prefix=sha + '-', suffix='.part', dir=destination.parent)
         os.close(descriptor)

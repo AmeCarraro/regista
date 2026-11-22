@@ -4,6 +4,8 @@ import type { CatalogRequest } from '../catalogApi.ts'
 import { connect } from './bridge.ts'
 import OfflineCatalog from './OfflineCatalog.tsx'
 import BackupSettings from './BackupSettings.tsx'
+import ImportStatus from './ImportStatus.tsx'
+import ModelControl from '../ModelControl.tsx'
 import PhoneHeader from './PhoneHeader.tsx'
 import { Arrow, Back, Menu, Refresh } from '../icons.tsx'
 
@@ -29,14 +31,13 @@ const mediaUrl = async (id: string, full: boolean) => `/catalog-media/${id}/${fu
 
 export default function Telefono({ visible = true }: { visible?: boolean }) {
   const [state, setState] = useState(() => connect().state())
-  const [copying, setCopying] = useState(() => connect().autoCopy())
   const [note, setNote] = useState('')
   const [update, setUpdate] = useState(() => connect().update())
   const [remote, setRemote] = useState(false)
   const [settings, setSettings] = useState(false)
   useEffect(() => {
     if (!visible) return
-    const timer = setInterval(() => { setState(connect().state()); setCopying(connect().autoCopy()); setUpdate(connect().update()) }, 2000)
+    const timer = setInterval(() => { setState(connect().state()); setUpdate(connect().update()) }, 2000)
     return () => clearInterval(timer)
   }, [visible])
   return <main className="phone phone-catalog">
@@ -53,25 +54,28 @@ export default function Telefono({ visible = true }: { visible?: boolean }) {
       <p>{settings ? 'Scegli cosa portare sul computer.' : 'Ritrova un ricordo, con poche parole.'}</p>
     </div>
     {update.newer && <button className="phone-action" onClick={() => connect().takeUpdate()}><Refresh />Aggiorna Regista</button>}
+    {visible && <ImportStatus />}
+    {state.reachable && <ModelControl request={request} visible={visible} />}
     {settings && visible && <div id="phone-settings" className="phone-settings-content">
       <section className="phone-panel" aria-label="Copia delle foto">
-        <h2>Le foto sul computer</h2>
-        <p>Copia le foto da catalogare. Le immagini identiche vengono trasferite una sola volta; i tag si creano dal PC.</p>
+        <h2>Foto e video sul computer</h2>
+        <p>Copia foto e video da catalogare. I contenuti identici passano una sola volta. Alla fine del blocco il PC crea uno ZIP verificato, oltre alle copie normali.</p>
         <button className="phone-action" disabled={!state.reachable} onClick={() => {
         const answer = window.Regista?.importAll?.()
         if (!answer) { setNote('Aggiorna Regista sul telefono.'); return }
         const result = JSON.parse(answer)
-        setNote(result.error || `${result.queued} foto in coda per il PC. Lascia aperta l’app durante l’importazione.`)
-        }}>Importa tutte le foto sul PC<Arrow /></button>
+        setNote(result.error || result.message || 'Importazione richiesta. Puoi seguirla nella notifica e spegnere lo schermo.')
+        }}>Importa foto e video sul PC<Arrow /></button>
         {!state.reachable && <p className="phone-caption">Collega il computer dalla scheda Computer per importare.</p>}
-        <label className="phone-toggle"><span><b>Copia automatica</b><small>Invia le nuove foto quando il PC è disponibile.</small></span><input type="checkbox" checked={copying.on} onChange={event => {
-        connect().setAutoCopy(event.target.checked); setCopying(connect().autoCopy())
-        }} /></label>
         {note && <p className="phone-feedback" role="status">{note}</p>}
         {state.waiting > 0 && <p className="phone-caption">{state.waiting} foto attendono la copia.</p>}
-        {copying.count > 0 && <p className="phone-caption">Ultima copia: {copying.count} foto.</p>}
       </section>
       <BackupSettings />
+      <section className="phone-panel"><h2>I documenti sul PC</h2><p>Importa PDF, Excel, Word, CSV e TXT dalle cartelle autorizzate o scegli i singoli file. Ogni tipo ha il proprio ZIP per blocco. WhatsApp e Telegram mantengono archivi, provenienza e tag separati.</p>
+        <button className="phone-action" disabled={!state.reachable} onClick={() => window.Regista?.importDocuments?.()}>Importa e indicizza documenti<Arrow /></button>
+        <p className="phone-caption">Poi cercali nella chat del Computer: “Mandami il PDF della bolletta di ottobre”. Anche i documenti senza testo restano archiviati e cercabili per nome.</p>
+      </section>
+      <details className="phone-panel"><summary>Collegarsi da un’altra rete</summary><p>Configura una VPN privata, per esempio Tailscale, sul PC e sul telefono. Collega Regista all’indirizzo privato del PC nella VPN. Il PC deve essere acceso con Regista aperto.</p><p className="phone-caption">La VPN va configurata sui due dispositivi. Il collegamento conserva l’abbinamento e la verifica del certificato del PC.</p></details>
     </div>}
     <div hidden={settings}>
     <OfflineCatalog visible={visible && !settings} />

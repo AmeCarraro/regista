@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+import subprocess
 import threading
 import time
 import unicodedata
@@ -14,8 +15,10 @@ import uuid
 
 from PIL import Image
 
-FORMATS = {'.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tif', '.tiff', '.gif', '.avif', '.heic', '.heif', '.dng', '.nef', '.arw', '.cr2'}
-ARCHIVE_FORMATS = {'.heic', '.heif', '.avif', '.dng', '.nef', '.arw', '.cr2'}
+VIDEO_FORMATS = {'.mp4', '.m4v', '.mov', '.3gp', '.3g2', '.webm', '.mkv', '.avi', '.mts', '.m2ts', '.mpeg', '.mpg', '.wmv', '.ts', '.vob', '.ogv', '.flv', '.divx'}
+FORMATS = {'.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tif', '.tiff', '.gif', '.avif', '.heic', '.heif', '.dng', '.nef', '.arw', '.cr2'} | VIDEO_FORMATS
+ARCHIVE_FORMATS = {'.heic', '.heif', '.avif', '.dng', '.nef', '.arw', '.cr2', '.cr3', '.raf', '.rw2', '.orf', '.pef', '.srw'}
+FORMATS |= ARCHIVE_FORMATS
 EXCLUDED = {'.regista', '.git', '.cache', '__pycache__', '$recycle.bin', 'system volume information', 'raccolte', 'output'}
 
 CLASSIFICATION_SQL = '''CASE WHEN a.excluded_reason!='' OR EXISTS(SELECT 1 FROM archive_errors e WHERE e.asset_id=a.id)
@@ -129,6 +132,13 @@ class PhotoCatalog:
                     PRAGMA user_version=3; COMMIT;''')
         from photo_archive import OriginalArchive
         self.archive = OriginalArchive(self)
+        with self.connect() as db:
+            db.executescript('''CREATE TABLE IF NOT EXISTS collections(
+                id TEXT PRIMARY KEY,name TEXT NOT NULL,name_key TEXT NOT NULL UNIQUE,hidden INTEGER NOT NULL DEFAULT 0,created REAL NOT NULL);
+                CREATE TABLE IF NOT EXISTS collection_items(collection_id TEXT NOT NULL REFERENCES collections(id),
+                asset_id TEXT NOT NULL REFERENCES assets(id),PRIMARY KEY(collection_id,asset_id));
+                CREATE TABLE IF NOT EXISTS hidden_media(asset_id TEXT PRIMARY KEY REFERENCES assets(id));
+                CREATE TABLE IF NOT EXISTS bulk_previews(id TEXT PRIMARY KEY,created REAL NOT NULL,payload TEXT NOT NULL);''')
 
     @contextmanager
     def connect(self):
@@ -208,6 +218,16 @@ class PhotoCatalog:
     def metadata(self, path: Path, relative: str) -> tuple[int, int, dict]:
         notes = {'path_hint': relative, 'file_mtime': path.stat().st_mtime,
                  'date': '', 'date_source': '', 'precision': '', 'place': '', 'place_source': '', 'conflicts': []}
+        notes['media_kind'] = 'video' if path.suffix.lower() in VIDEO_FORMATS else 'image'
+        if notes['media_kind'] == 'video':
+            try:
+                from video_tools import probe
+                width, height, details = probe(path)
+                notes.update(details)
+            except (OSError, ValueError, subprocess.SubprocessError) as error:
+                width = height = 0
+                notes['read_error'] = str(error)[:500]
+            return width, height, notes
         width = height = 0
         try:
             with Image.open(path) as image:
@@ -388,6 +408,8 @@ class PhotoCatalog:
             classified = db.execute(f'''SELECT count(*) FROM assets a WHERE EXISTS(SELECT 1 FROM file_locations l WHERE l.asset_id=a.id AND present=1)
                 AND ({CLASSIFICATION_SQL})='classified' ''').fetchone()[0]
             backup = dict(db.execute('SELECT count(*) count,coalesce(sum(archive_size),0) bytes FROM original_backups').fetchone())
+            backup['bytes'] = db.execute('SELECT coalesce(sum(size),0) FROM (SELECT relative,max(archive_size) size FROM original_backups GROUP BY relative)').fetchone()[0]
+            backup['archives'] = db.execute('SELECT count(DISTINCT relative) FROM original_backups').fetchone()[0]
             backup['errors'] = db.execute('SELECT count(*) FROM archive_errors').fetchone()[0]
             incoming = db.execute("SELECT count(DISTINCT sha256) FROM phone_import_items WHERE state!='received'").fetchone()[0]
         return {'discovered': total, 'analyzed': annotated, 'pending': counts.get('pending', 0),

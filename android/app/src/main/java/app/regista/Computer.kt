@@ -109,7 +109,7 @@ class Computer(val address: String, private val port: Int, private val fingerpri
         connection.hostnameVerifier = anyName
         connection.requestMethod = method
         connection.connectTimeout = 4000
-        connection.readTimeout = 60000
+        connection.readTimeout = if(path.startsWith("/phone/import-cleanup/authorize")) 300000 else 60000
         if (key.isNotEmpty()) connection.setRequestProperty("Authorization", "Bearer $key")
         // which Android this is: what the computer offers depends on it (a trash, from Android 11)
         connection.setRequestProperty("X-Regista-Android", Build.VERSION.SDK_INT.toString())
@@ -236,7 +236,7 @@ class Memory(context: Context) {
     val fingerprint get() = kept.getString("fingerprint", "") ?: ""
 
     /** The ways to reach the computer, the one that worked last time first. */
-    private val addresses get() = (kept.getString("addresses", "") ?: "").split(",").filter { it.isNotBlank() }
+    val addresses get() = (kept.getString("addresses", "") ?: "").split(",").filter { it.isNotBlank() }
 
     fun remember(invite: Invite, address: String, key: String, computer: String) {
         val ordered = listOf(address) + invite.addresses.filter { it != address }

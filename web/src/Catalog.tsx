@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import './catalog.css'
 import { catalogRequest } from './catalogApi.ts'
 import type { CatalogRequest } from './catalogApi.ts'
+import CatalogBulk from './CatalogBulk.tsx'
+import ImportArchives from './ImportArchives.tsx'
 type Status = {
   discovered: number; analyzed: number; pending: number; failed: number; missing: number; coverage: number; excluded: number
   scanning: boolean; scan_error: string; mode: string; current: string; problem: string; waiting_reason: string; version: string
@@ -14,7 +16,7 @@ type Status = {
   incoming?: { sha256: string; name: string; copies: number; state: string; error: string }[]
 }
 type Photo = {
-  id: string; name: string; folder: string; description: string; day: string; excluded_reason: string
+  id: string; name: string; folder: string; description: string; day: string; excluded_reason: string; kind?: string
   metadata: { date: string; precision: string; date_source: string; place: string; place_source: string; path_hint: string; conflicts: string[] }
   tags: { tag: string; source: string }[]; reasons: string[]
   annotation: { model: string; digest: string; prompt_version: string; schema_version: string } | null
@@ -35,6 +37,10 @@ export default function Catalog({ visible = true, request = catalogRequest, medi
   const [folder, setFolder] = useState('')
   const [tag, setTag] = useState('')
   const [stage, setStage] = useState('all')
+  const [kind, setKind] = useState('all')
+  const [album, setAlbum] = useState('')
+  const [albums, setAlbums] = useState<{ id: string; name: string; hidden: boolean; count: number }[]>([])
+  const [includeHidden, setIncludeHidden] = useState(false)
   const [operator, setOperator] = useState('and')
   const [exclude, setExclude] = useState('')
   const [root, setRoot] = useState('')
@@ -43,7 +49,8 @@ export default function Catalog({ visible = true, request = catalogRequest, medi
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
   const [selected, setSelected] = useState<string[]>([])
-  const [original, setOriginal] = useState<string | null>(null)
+  const [original, setOriginal] = useState<{ url: string; video: boolean } | null>(null)
+  const anchor = useRef('')
 
   const refresh = useCallback(async () => setStatus(await request<Status>('/api/catalog/status')), [request])
   useEffect(() => {
@@ -68,9 +75,17 @@ export default function Catalog({ visible = true, request = catalogRequest, medi
       ? await request<Record<string, unknown>>('/api/catalog/plan', { query })
       : { terms: query.trim() ? query.trim().split(/\s+/) : [], operator, exclude: exclude.split(',').map(x => x.trim()).filter(Boolean) })
     const found = await request<Result>('/api/catalog/search', { ...plan, ...(natural && query.trim() ? { exclude: [...new Set([...(Array.isArray(plan.exclude) ? plan.exclude : []), ...exclude.split(',').map(x => x.trim()).filter(Boolean)])] } : {}), ...(since ? { since } : {}), ...(until ? { until } : {}),
-      ...(place ? { place } : {}), ...(folder ? { folder } : {}), ...(tag ? { tag } : {}), stage, root_id: root, limit: 60, offset })
+      ...(place ? { place } : {}), ...(folder ? { folder } : {}), ...(tag ? { tag } : {}), stage, kind, album, include_hidden: includeHidden, root_id: root, limit: 60, offset })
     setResult(found); setSelected([])
-  }, [request, natural, query, operator, exclude, since, until, place, folder, tag, stage, root])
+  }, [request, natural, query, operator, exclude, since, until, place, folder, tag, stage, kind, album, includeHidden, root])
+
+  const refreshAlbums = useCallback(async () => setAlbums((await request<{ albums: typeof albums }>('/api/catalog/albums')).albums), [request])
+  useEffect(() => {
+    if (!visible) return
+    let active = true
+    void request<{ albums: typeof albums }>('/api/catalog/albums').then(value => { if (active) setAlbums(value.albums) }, () => {})
+    return () => { active = false }
+  }, [visible, request])
 
   useEffect(() => {
     if (!visible) return
@@ -84,18 +99,18 @@ export default function Catalog({ visible = true, request = catalogRequest, medi
   const submit = (event: FormEvent) => { event.preventDefault(); void perform(() => find()) }
 
   if (!visible) return null
-  return <section className="catalog-page" aria-label="Catalogo foto">
-    <header className="catalog-header"><div><h1>Catalogo foto</h1><p>Importa e scopri le foto. Avvia l’analisi quando vuoi tu.</p></div></header>
+  return <section className="catalog-page" aria-label="Catalogo foto e video">
+    <header className="catalog-header"><div><h1>Foto e video</h1><p>Raccogli i ricordi, organizza i viaggi. Avvia l’analisi quando vuoi tu.</p></div></header>
     {problem && <p role="alert" className="catalog-alert">{problem}</p>}
     {note && <p role="status">{note}</p>}
     {!status && <p>Catalogo del PC non disponibile. Il computer deve essere acceso e collegato.</p>}
     {status && <>
       <div className="catalog-counts" aria-live="polite">
-        <span><b>{status.discovered}</b> foto diverse</span><span><b>{status.classified ?? status.analyzed}</b> classificate</span>
+        <span><b>{status.discovered}</b> foto e video diversi</span><span><b>{status.classified ?? status.analyzed}</b> classificati</span>
         <span><b>{status.to_catalog ?? status.discovered - status.analyzed}</b> da catalogare</span>
-        <span><b>{status.pending}</b> in attesa</span><span><b>{status.failed}</b> errori</span><span><b>{status.excluded}</b> escluse dall’analisi</span><span><b>{status.missing}</b> file mancanti</span>
+        <span><b>{status.pending}</b> in attesa</span><span><b>{status.failed}</b> errori</span><span><b>{status.excluded}</b> esclusi dall’analisi</span><span><b>{status.missing}</b> file mancanti</span>
       </div>
-      <progress max={100} value={status.coverage} aria-label="Copertura del catalogo" /><p className="catalog-muted">Copertura {status.coverage}% · {status.mode === 'paused' ? 'In pausa' : status.mode === 'idle' ? 'Solo quando inattivo' : 'Analisi avviata'}{status.scanning && ' · Scansione in corso'}{status.current && ' · Una foto in analisi'}</p>
+      <progress max={100} value={status.coverage} aria-label="Copertura del catalogo" /><p className="catalog-muted">Copertura {status.coverage}% · {status.mode === 'paused' ? 'Analisi AI in pausa' : status.mode === 'idle' ? 'Solo quando inattivo' : 'Analisi avviata'}{status.scanning && ' · Scansione in corso'}{status.current && ' · Un file in analisi'}</p>
       {status.current && <img className="catalog-current" src={`/api/catalog/photos/${status.current}/thumb`} alt="Foto attualmente in analisi" />}
       {status.computer && <>
         <div className="catalog-toolbar">
@@ -111,7 +126,7 @@ export default function Catalog({ visible = true, request = catalogRequest, medi
           <button disabled={busy} onClick={() => void perform(async () => {
             const imported = await request<{ devices: number }>('/api/catalog/phone-import', {})
             setNote(`Importazione richiesta a ${imported.devices} telefoni. Apri Regista sul telefono; i tag restano in pausa.`); await refresh()
-          })}>Importa tutte le foto dal telefono</button>
+          })}>Importa foto e video dal telefono</button>
         </div>
         <details><summary>Cartelle autorizzate e modello</summary><ul>{status.roots.map(r => <li key={r.id}>{r.label}: {r.path}</li>)}</ul>
           <form onSubmit={event => { event.preventDefault(); void perform(async () => {
@@ -120,6 +135,7 @@ export default function Catalog({ visible = true, request = catalogRequest, medi
           <p className="catalog-muted">Modello e versione: {status.version}. Nessun modello viene scaricato automaticamente.</p>
         </details>
       </>}
+      {status.computer && <ImportArchives request={request} />}
       {(status.problem || status.scan_error || status.waiting_reason) && <p role="status">{status.problem || status.scan_error || status.waiting_reason}</p>}
       {status.imports?.map((item, at) => <p key={at} role="status">Telefono: {item.state === 'requested' ? 'in attesa del telefono' : item.state === 'done' ? 'importazione completata' : 'copia in corso'} · {item.copied} copiate · {item.duplicates} già presenti · {item.total} totali {item.error}</p>)}
       {status.failed > 0 && status.computer && <details><summary>Errori di analisi</summary>{status.errors.map(error => <p key={error.asset_id}>{error.asset_id.slice(0, 8)}: {error.error} ({error.attempts} tentativi)</p>)}</details>}
@@ -139,6 +155,8 @@ export default function Catalog({ visible = true, request = catalogRequest, medi
         <label className="catalog-check"><input type="checkbox" checked={natural} onChange={e => setNatural(e.target.checked)} />Interpreta la richiesta con Qwen (solo testo)</label>
         <div className="catalog-filters">
           <label>Stato<select value={stage} onChange={e => setStage(e.target.value)}><option value="all">Tutte le foto</option><option value="classified">Classificate</option><option value="to_catalog">Da catalogare</option><option value="needs_review">Da catalogare con errore</option></select></label>
+          <label>Tipo<select value={kind} onChange={e => setKind(e.target.value)}><option value="all">Foto e video</option><option value="image">Foto</option><option value="video">Video</option></select></label>
+          <label>Album<select value={album} onChange={e => setAlbum(e.target.value)}><option value="">Tutti gli album</option>{albums.map(item => <option key={item.id} value={item.id}>{item.name} ({item.count}){item.hidden ? ' · nascosto' : ''}</option>)}</select></label>
           <label>Dal<input type="date" value={since} onChange={e => setSince(e.target.value)} /></label>
           <label>Al<input type="date" value={until} onChange={e => setUntil(e.target.value)} /></label>
           <label>Luogo da GPS<input value={place} onChange={e => setPlace(e.target.value)} placeholder="Giappone" /></label>
@@ -147,16 +165,26 @@ export default function Catalog({ visible = true, request = catalogRequest, medi
           <label>Termini<select disabled={natural} value={operator} onChange={e => setOperator(e.target.value)}><option value="and">Tutti (AND)</option><option value="or">Almeno uno (OR)</option></select></label>
           <label>Escludi (separati da virgole)<input value={exclude} onChange={e => setExclude(e.target.value)} /></label>
           <label>Radice<select value={root} onChange={e => setRoot(e.target.value)}><option value="">Tutte le cartelle</option>{status.roots.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}</select></label>
-        </div><button disabled={busy}>{busy ? 'Attendi…' : 'Cerca'}</button>
+        </div><label className="catalog-check"><input type="checkbox" checked={includeHidden} onChange={e => setIncludeHidden(e.target.checked)} />Mostra anche gli elementi nascosti</label><button disabled={busy}>{busy ? 'Attendi…' : 'Cerca'}</button>
       </form>
+      {album && status.computer && <div className="catalog-toolbar"><button disabled={busy} onClick={() => void perform(async () => {
+        await request(`/api/catalog/albums/${album}/visibility`, { hidden: !albums.find(item => item.id === album)?.hidden }); await refreshAlbums(); await find()
+      })}>{albums.find(item => item.id === album)?.hidden ? 'Mostra questo album nella vista generale' : 'Nascondi questo album dalla vista generale'}</button><p className="catalog-muted">L’album rimane consultabile qui, con foto e video insieme.</p></div>}
     </>}
     {result && <><p aria-live="polite">{result.total} risultati · {result.coverage.coverage}% del catalogo analizzato</p>
+      {status?.computer && <CatalogBulk selected={selected} plan={result.plan} total={result.total} request={request} onChanged={async () => { await find(0, result.plan); await refreshAlbums() }} />}
       {result.total === 0 && <p>Nessuna corrispondenza nei dati disponibili. Le foto in attesa potrebbero non avere ancora tag.</p>}
       <div className="catalog-grid">{result.photos.map(photo => <article key={photo.id}>
-        <CatalogThumb photo={photo} mediaUrl={mediaUrl} onOpen={() => void perform(async () => setOriginal(mediaUrl ? await mediaUrl(photo.id, true) : `/api/catalog/photos/${photo.id}/full`))} />
+        <CatalogThumb photo={photo} mediaUrl={mediaUrl} onOpen={() => void perform(async () => setOriginal({ url: mediaUrl ? await mediaUrl(photo.id, true) : `/api/catalog/photos/${photo.id}/full`, video: photo.kind === 'video' }))} />
         <div className="catalog-card-body">
-          {status?.computer && <label className="catalog-check"><input type="checkbox" checked={selected.includes(photo.id)} onChange={e => setSelected(before => e.target.checked ? [...before, photo.id] : before.filter(id => id !== photo.id))} />Seleziona</label>}
-          <b>{photo.name}</b><p>{photo.excluded_reason || photo.description || 'In attesa di analisi'}</p>
+          {status?.computer && <label className="catalog-check"><input type="checkbox" checked={selected.includes(photo.id)} onChange={() => {}} onClick={event => {
+            const checked = event.currentTarget.checked
+            const first = result.photos.findIndex(item => item.id === anchor.current), last = result.photos.findIndex(item => item.id === photo.id)
+            const ids = event.shiftKey && first >= 0 ? result.photos.slice(Math.min(first, last), Math.max(first, last) + 1).map(item => item.id) : [photo.id]
+            setSelected(before => checked ? [...new Set([...before, ...ids])] : before.filter(id => !ids.includes(id)))
+            anchor.current = photo.id
+          }} />Seleziona</label>}
+          <b>{photo.kind === 'video' && '▶ '}{photo.name}</b><p>{photo.excluded_reason || photo.description || 'In attesa di analisi'}</p>
           <p className="catalog-muted">{photo.catalog_state === 'classified' ? 'Classificata' : photo.catalog_state === 'needs_review' ? 'Da catalogare · da rivedere' : 'Da catalogare'}</p>
           {photo.processing?.error && <p role="status" className="catalog-alert">{photo.processing.error}</p>}
           {status?.computer && photo.backup_available && <p><a href={`/api/catalog/photos/${photo.id}/backup`} download>Scarica originale in ZIP</a></p>}
@@ -177,7 +205,7 @@ export default function Catalog({ visible = true, request = catalogRequest, medi
       <div className="catalog-toolbar"><button disabled={busy || Number(result.plan.offset) === 0} onClick={() => void perform(() => find(Math.max(0, Number(result.plan.offset) - 60), result.plan))}>Precedenti</button>
         <button disabled={busy || Number(result.plan.offset) + result.photos.length >= result.total} onClick={() => void perform(() => find(Number(result.plan.offset) + 60, result.plan))}>Successive</button></div><p className="catalog-muted">{result.notice}</p>
     </>}
-    {original && <div className="catalog-lightbox" role="dialog" aria-label="Foto originale"><button onClick={() => { if (original.startsWith('blob:')) URL.revokeObjectURL(original); setOriginal(null) }}>Chiudi</button><img src={original} alt="Foto originale richiesta" /></div>}
+    {original && <div className="catalog-lightbox" role="dialog" aria-modal="true" aria-label="Originale"><button onClick={() => { if (original.url.startsWith('blob:')) URL.revokeObjectURL(original.url); setOriginal(null) }}>Chiudi</button>{original.video ? <video src={original.url} controls autoPlay playsInline /> : <img src={original.url} alt="Foto originale richiesta" />}</div>}
   </section>
 }
 

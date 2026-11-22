@@ -300,6 +300,7 @@ def show(url: str) -> None:
     the page opens in the browser, and a small window of Windows stays until the user says to stop."""
     try:
         import webview
+        webview.settings['ALLOW_DOWNLOADS'] = True
 
         # a button of its own in the taskbar, with its own icon, not one shared with every Python program
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Regista")

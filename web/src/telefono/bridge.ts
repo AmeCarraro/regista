@@ -130,11 +130,14 @@ type Native = {
   startMediaBackup?(): void
   cancelMediaBackup?(): void
   chooseBackupFolder?(): void
+  importDocuments?(): void
   removeBackupFolder?(id: string): void
   openBackupNetworkSettings?(): void
   cachedCatalog?(): string
   syncCatalog?(): void
   searchCachedCatalog?(query: string, offset: number, token: string): void
+  searchCachedCatalogWithFilters?(query: string, offset: number, filters: string, token: string): void
+  openCachedMedia?(id: string): string
   videos?(): string
   addVideos?(): void
   playVideo?(id: string): void
@@ -143,6 +146,9 @@ type Native = {
   catalogResponse?(token: string): string
   cancelCatalog?(token: string): void
   importAll?(): string
+  photoImportState?(): string
+  cancelPhotoImport?(): void
+  newImportBlock?(): void
   pictures(): string
   reading(): string
   state(): string

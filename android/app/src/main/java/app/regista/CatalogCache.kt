@@ -23,8 +23,7 @@ class CatalogCache(private val context: Context, private val memory: Memory) {
     @Volatile private var problem = ""
     private var epoch = 0L
 
-    private fun active() = memory.paired && memory.fingerprint.isNotBlank() &&
-        settings.getString("source", "") == memory.fingerprint && file.isFile
+    private fun active() = file.isFile
 
     private fun <T> read(block: (SQLiteDatabase) -> T): T = synchronized(lock) {
         if (!active()) throw IOException("Sincronizza il catalogo dal PC quando è collegato.")
@@ -33,13 +32,21 @@ class CatalogCache(private val context: Context, private val memory: Memory) {
 
     private fun meta(db: SQLiteDatabase, key: String): String = db.rawQuery(
         "SELECT value FROM meta WHERE key=?", arrayOf(key)).use { if (it.moveToFirst()) it.getString(0) else "null" }
+    private fun table(db:SQLiteDatabase,name:String)=db.rawQuery("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",arrayOf(name)).use { it.moveToFirst() }
+    private fun hasKind(db:SQLiteDatabase)=db.rawQuery("PRAGMA table_info(photos)",null).use { rows -> var found=false
+        while(rows.moveToNext()) if(rows.getString(1)=="kind") found=true; found }
 
     fun state(): JSONObject {
         val state = JSONObject().put("ready", false).put("syncing", syncing.get()).put("count", 0)
             .put("at", 0L).put("error", problem)
         try {
             read { db -> state.put("ready", true).put("count", meta(db, "count").toLong())
-                .put("at", meta(db, "created_ms").toLong()) }
+                .put("at", meta(db, "created_ms").toLong())
+                val albums=JSONArray()
+                if(table(db,"albums")) db.rawQuery("SELECT id,name,hidden FROM albums ORDER BY name",null).use { rows ->
+                    while(rows.moveToNext()) albums.put(JSONObject().put("id",rows.getString(0)).put("name",rows.getString(1)).put("hidden",rows.getInt(2)==1)) }
+                state.put("albums",albums)
+            }
         } catch (_: Exception) { /* No partial or foreign catalog is shown. */ }
         return state
     }
@@ -89,6 +96,12 @@ class CatalogCache(private val context: Context, private val memory: Memory) {
                 }
                 synchronized(lock) {
                     if (epoch != generation || !memory.paired || memory.fingerprint != source) return@synchronized
+                    // Keep the previous verified catalog when changing PCs or when an export has fewer entries.
+                    if(file.isFile) {
+                        val oldCount=SQLiteDatabase.openDatabase(file.path,null,SQLiteDatabase.OPEN_READONLY).use { meta(it,"count").toLong() }
+                        val newCount=SQLiteDatabase.openDatabase(temporary.path,null,SQLiteDatabase.OPEN_READONLY).use { meta(it,"count").toLong() }
+                        if(settings.getString("source","")!=source || newCount<oldCount) archive()
+                    }
                     Os.rename(temporary.path, file.path)
                     settings.edit().putString("source", source).commit()
                     problem = ""
@@ -102,16 +115,24 @@ class CatalogCache(private val context: Context, private val memory: Memory) {
         }
     }
 
-    /** Only this app's downloaded metadata is removed; originals and old experiment weights stay intact. */
-    fun clear() = synchronized(lock) {
+    private fun archive() {
+        if(!file.isFile) return
+        val digest=file.inputStream().use { stream -> val md=MessageDigest.getInstance("SHA-256"); val buffer=ByteArray(65536)
+            while(true) { val size=stream.read(buffer); if(size<0) break; md.update(buffer,0,size) }; md.digest().joinToString(""){"%02x".format(it)} }
+        val directory=File(context.filesDir,"saved-catalogs").apply { mkdirs() }
+        val destination=File(directory,"$digest.sqlite")
+        if(!destination.exists()) file.copyTo(destination)
+    }
+
+    /** Disconnect only revokes network access. The last metadata remains searchable offline. */
+    fun disconnected() = synchronized(lock) {
         epoch++
-        settings.edit().clear().commit()
-        file.delete()
+        archive()
         attempted = 0L
         problem = ""
     }
 
-    fun search(query: String, offset: Int): JSONObject = read { db ->
+    fun search(query: String, offset: Int,filters:JSONObject=JSONObject()): JSONObject = read { db ->
         if (query.length > 1000 || offset !in 0..1_000_000) throw IOException("Ricerca troppo lunga o pagina non valida.")
         val counts = JSONObject(meta(db, "counts"))
         val groups = JSONArray(meta(db, "synonyms"))
@@ -119,17 +140,30 @@ class CatalogCache(private val context: Context, private val memory: Memory) {
         val synonyms = (0 until groups.length()).map { index -> groups.getJSONArray(index).let { group ->
             (0 until group.length()).map { group.getString(it) } } }
         val expressions = CatalogQuery.expressions(query, countMap, synonyms)
-        val where = if (expressions.isEmpty()) "" else " WHERE " + expressions.joinToString(" AND ") {
+        val conditions=expressions.map {
             "rowid IN (SELECT docid FROM search_text WHERE search_text MATCH ?)"
+        }.toMutableList()
+        val values=expressions.toMutableList()
+        val kind=filters.optString("kind","all")
+        if(hasKind(db) && kind in setOf("image","video")) { conditions+="kind=?"; values+=kind }
+        for(key in listOf("since","until")) if(filters.optString(key).matches(Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}"))) {
+            conditions+="day${if(key=="since") ">=" else "<="}?"; values+=filters.getString(key) }
+        val album=filters.optString("album")
+        if(album.isNotEmpty() && table(db,"album_items")) { conditions+="id IN (SELECT asset_id FROM album_items WHERE album_id=?)"; values+=album }
+        if(!filters.optBoolean("include_hidden") && album.isEmpty() && table(db,"albums")) {
+            conditions+="id NOT IN (SELECT asset_id FROM hidden_media)"
+            conditions+="id NOT IN (SELECT i.asset_id FROM album_items i JOIN albums a ON a.id=i.album_id WHERE a.hidden=1)"
         }
-        val args = expressions.toTypedArray()
+        val where=if(conditions.isEmpty()) "" else " WHERE "+conditions.joinToString(" AND ")
+        val args = values.toTypedArray()
         val total = db.rawQuery("SELECT count(*) FROM photos$where", args).use { it.moveToFirst(); it.getLong(0) }
         val photos = JSONArray()
-        db.rawQuery("SELECT id,name,description,metadata,tags,day,stage FROM photos$where ORDER BY day DESC,id LIMIT 60 OFFSET ?",
-            (expressions + offset.toString()).toTypedArray()).use { rows ->
+        val kindColumn=if(hasKind(db)) "kind" else "'image'"
+        db.rawQuery("SELECT id,name,description,metadata,tags,day,stage,$kindColumn FROM photos$where ORDER BY day DESC,id LIMIT 60 OFFSET ?",
+            (values + offset.toString()).toTypedArray()).use { rows ->
             while (rows.moveToNext()) photos.put(JSONObject().put("id", rows.getString(0)).put("name", rows.getString(1))
                 .put("description", rows.getString(2)).put("metadata", JSONObject(rows.getString(3)))
-                .put("tags", JSONArray(rows.getString(4))).put("stage", rows.getString(6)))
+                .put("tags", JSONArray(rows.getString(4))).put("stage", rows.getString(6)).put("kind",rows.getString(7)))
         }
         JSONObject().put("photos", photos).put("total", total).put("offset", offset).put("limit", 60)
     }
@@ -142,6 +176,22 @@ class CatalogCache(private val context: Context, private val memory: Memory) {
                 try {
                     if (gallery.identities(listOf(media))[media] == rows.getString(1)) return@read media
                 } catch (_: Exception) { /* Removed file or revoked permission: use the PC copy. */ }
+            }
+        }
+        null
+    }
+
+    fun localMedia(id:String,gallery:Gallery):Pair<android.net.Uri,String>? = read { db ->
+        val scanner=MediaFiles(context,setOf("image","video"))
+        db.rawQuery("SELECT media,stamp FROM phone_media WHERE asset_id=?",arrayOf(id)).use { rows ->
+            while(rows.moveToNext()) {
+                val media=rows.getString(0)
+                try {
+                    if(media.startsWith("tree:")) BackupFolders(context).resolve(media,rows.getString(1))?.let { return@read it }
+                    scanner.resolve(media,rows.getString(1))?.let { return@read it }
+                    val legacy=media.toLongOrNull()
+                    if(legacy!=null && gallery.identities(listOf(legacy))[legacy]==rows.getString(1)) return@read Pair(gallery.named(legacy),"image")
+                } catch(_:Exception) { }
             }
         }
         null

@@ -31,6 +31,9 @@ class SearchPlan(BaseModel):
     limit: int = Field(default=60, ge=1, le=120)
     offset: int = Field(default=0, ge=0, le=1000000)
     stage: Literal['all', 'classified', 'to_catalog', 'needs_review'] = 'all'
+    kind: Literal['all','image','video'] = 'all'
+    album: str = Field(default='',max_length=64)
+    include_hidden: bool = False
 
     @field_validator('terms', 'exclude')
     @classmethod
@@ -89,6 +92,15 @@ async def natural_plan(query: str) -> SearchPlan:
 
 def search(catalog, plan: SearchPlan) -> dict:
     where, values = ['l.present=1'], []
+    if plan.kind!='all':
+        where.append("coalesce(json_extract(l.metadata,'$.media_kind'),'image')=?")
+        values.append(plan.kind)
+    if plan.album:
+        where.append('EXISTS(SELECT 1 FROM collection_items ci WHERE ci.asset_id=a.id AND ci.collection_id=?)')
+        values.append(plan.album)
+    elif not plan.include_hidden:
+        where.append('NOT EXISTS(SELECT 1 FROM hidden_media h WHERE h.asset_id=a.id)')
+        where.append('NOT EXISTS(SELECT 1 FROM collection_items ci JOIN collections c ON c.id=ci.collection_id WHERE ci.asset_id=a.id AND c.hidden=1)')
     if plan.stage != 'all':
         where.append(f"({CLASSIFICATION_SQL}){'!=' if plan.stage == 'to_catalog' else '='}?")
         values.append('classified' if plan.stage == 'to_catalog' else plan.stage)
@@ -119,8 +131,8 @@ def search(catalog, plan: SearchPlan) -> dict:
             (lower(json_extract(l.metadata,'$.place'))=lower(?) OR lower(json_extract(l.metadata,'$.city'))=lower(?))""")
         values.extend([place, place])
     if plan.folder:
-        where.append('instr(lower(l.relative),lower(?))>0')
-        values.append(plan.folder)
+        where.append("(instr(lower(l.relative),lower(?))>0 OR instr(lower(coalesce(json_extract(l.metadata,'$.source_folders'),json_extract(l.metadata,'$.source_folder'),'')),lower(?))>0)")
+        values.extend([plan.folder,plan.folder])
     if plan.root_id:
         where.append('l.root_id=?')
         values.append(plan.root_id)
@@ -168,7 +180,7 @@ def search(catalog, plan: SearchPlan) -> dict:
             if issue:
                 processing.update(state='error', error=issue[0])
             stage = 'needs_review' if excluded or processing['state'] == 'error' else 'classified' if annotation else 'pending'
-            results.append({'id': row['id'], 'excluded_reason': excluded, 'name': row['name'].split('/')[-1], 'folder': str(row['name']).rsplit('/', 1)[0] if '/' in row['name'] else '',
+            results.append({'id': row['id'], 'kind':notes.get('media_kind','image'), 'excluded_reason': excluded, 'name': notes.get('original_filename') or row['name'].split('/')[-1], 'folder': notes.get('source_folder') or (str(row['name']).rsplit('/', 1)[0] if '/' in row['name'] else ''),
                             'root_id': row['root_id'], 'metadata': notes, 'tags': tags, 'description': annotation['description'] if annotation else '',
                             'annotation': {key: annotation[key] for key in ('model', 'digest', 'quantization', 'prompt_version', 'schema_version', 'seconds')} if annotation else None,
                             'reasons': reasons, 'day': row['day'], 'catalog_state': stage, 'processing': processing,

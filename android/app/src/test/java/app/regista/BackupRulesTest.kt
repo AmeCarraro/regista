@@ -14,7 +14,8 @@ class BackupRulesTest {
         assertEquals("image", BackupRules.kind("application/octet-stream", "raw.NEF"))
         assertEquals("video", BackupRules.kind("video/mp4; codecs=hvc1", "recording"))
         assertEquals("video", BackupRules.kind("", "film.mkv"))
-        assertNull(BackupRules.kind("application/pdf", "document.pdf"))
+        assertEquals("document",BackupRules.kind("application/pdf", "document.pdf"))
+        assertNull(BackupRules.kind("application/octet-stream", ".nomedia"))
     }
 
     @Test fun hashingMeasuresUnknownSizesAndFindsContentDuplicates() {

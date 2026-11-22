@@ -197,11 +197,22 @@ class PhotoAnnotator:
         identity = self.identity or await self.verify()
         if await llm.model_digest(MODEL) != identity['digest']:
             raise ModelChangedError('Il digest del modello è cambiato. Analisi in pausa: verifica il modello e premi Riprendi.')
-        image = await __import__('asyncio').to_thread(prepare, path)
+        from photo_catalog import VIDEO_FORMATS
+        moments = []
+        if path.suffix.lower() in VIDEO_FORMATS:
+            from video_tools import storyboard
+            image, moments = await __import__('asyncio').to_thread(storyboard, path, SIDE)
+        else:
+            image = await __import__('asyncio').to_thread(prepare, path)
         started = time.perf_counter()
         schema = Annotation.model_json_schema()
         # The model needs the schema in its text context, as well as in Ollama's decoder.
         request = PROMPT + '\n\nSchema JSON:\n' + json.dumps(schema, ensure_ascii=False)
+        if moments:
+            request += ('\nQuesta immagine contiene fotogrammi campionati in ordine temporale da UN SOLO VIDEO. '
+                        'Descrivi solo ciò che è visibile in questi campioni; non affermare di avere visto l’intero video. '
+                        'Lo stesso soggetto può comparire in più riquadri: non sommare le sue apparizioni. '
+                        'Ignora i numeri dei tempi come oggetti e tag. Non trascrivere l’audio.')
         result = await llm.structured(MODEL, [
             {'role': 'user', 'content': request, 'images': [base64.b64encode(image).decode()]}],
             schema, background=True, max_tokens=MAX_TOKENS, options=GENERATION_OPTIONS)
@@ -216,9 +227,9 @@ class PhotoAnnotator:
         tags, rejected, derived = supported_tags(parsed)
         return {'description': parsed.description, 'tags': tags,
                 'model': MODEL, 'digest': identity['digest'], 'quantization': identity.get('quantization', ''),
-                'prompt_version': PROMPT_VERSION, 'schema_version': SCHEMA_VERSION,
+                'prompt_version': PROMPT_VERSION + ('/video-1' if moments else ''), 'schema_version': SCHEMA_VERSION,
                 'seconds': time.perf_counter() - started, 'raw': {**json.loads(parsed.model_dump_json()),
-                    '_prompt': PROMPT, '_schema': schema, '_image_side': SIDE, '_context': llm.NUM_CTX,
+                    '_prompt': request, '_video_sample_seconds': moments, '_schema': schema, '_image_side': SIDE, '_context': llm.NUM_CTX,
                     '_generation': {**GENERATION_OPTIONS, 'num_predict': MAX_TOKENS},
                     '_ollama': inference_metrics(result),
                     '_response_content': result['message']['content'], '_rejected_tags': rejected,

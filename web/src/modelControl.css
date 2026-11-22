@@ -1,0 +1,8 @@
+.model-control { border: 1px solid var(--line, #ffffff20); border-radius: 20px; background: var(--raised, #ffffff05); padding: 16px; margin-block: 14px; }
+.model-control-name { font-size: 12px; overflow-wrap: anywhere; opacity: .8; margin: 0 0 10px; }
+.model-control-status { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.model-control-status i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; opacity: .35; flex-shrink: 0; }
+.model-control-status i.on { background: var(--accent, #b5a1ff); opacity: 1; }
+.model-control button { border: 1px solid var(--line, #ffffff20); border-radius: 999px; padding: 10px 15px; background: var(--card, transparent); color: inherit; font: inherit; font-size: 13px; cursor: pointer; }
+.model-control button:disabled { opacity: .5; cursor: default; }
+.model-control-note { font-size: 11px; line-height: 1.6; opacity: .65; margin: 10px 0 0; }

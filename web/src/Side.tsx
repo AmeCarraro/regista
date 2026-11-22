@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { Changes, Library, ModelInfo, Models, PhoneState, Suggested } from './api.ts'
+import ModelControl from './ModelControl.tsx'
 import { placement, purposes, shortGpu } from './chat.ts'
 import * as icons from './icons.tsx'
 import PhoneCard from './Phone.tsx'
@@ -72,14 +73,14 @@ type Props = {
   onView: (view: View) => void
 }
 
-export type View = 'chat' | 'photos' | 'music' | 'demo'
+export type View = 'chat' | 'photos' | 'documents' | 'music' | 'demo'
 
-function ModelRow({ model, director }: { model: ModelInfo; director: boolean }) {
+function ModelRow({ model, director, managed = false }: { model: ModelInfo; director: boolean; managed?: boolean }) {
   const place = placement(model)
   return (
     <li className={model.can.length ? 'model' : 'model quiet'}>
       <p className="model-name">
-        <span className={model.loaded ? 'dot live' : 'dot'} title={model.loaded ? 'In memoria adesso' : 'Non in memoria'} />
+        {!managed && <span className={model.loaded ? 'dot live' : 'dot'} title={model.loaded ? 'In memoria adesso' : 'Non in memoria'} />}
         <b className="mono">{model.name}</b>
         <span className="size mono">{model.gigabytes.toLocaleString('it-IT')} GB</span>
       </p>
@@ -92,7 +93,7 @@ function ModelRow({ model, director }: { model: ModelInfo; director: boolean }) 
         ))}
         {model.can.length === 0 && <span className="tag">solo per la ricerca nei testi</span>}
       </p>
-      {model.can.length > 0 && (
+      {model.can.length > 0 && !managed && (
         <p className={place.good ? 'fine' : 'fine warn'}>
           {place.label}
           {model.tested && ` · provato: ${model.tested.right} giuste su ${model.tested.cases}, ${Math.round(model.tested.tokens_per_second)} token/s`}
@@ -126,11 +127,12 @@ export default function Side({ models, library, changes, phone, onPhoneChange, t
           <icons.Talk /> Assistente
         </button>
         <button type="button" aria-pressed={view === 'photos'} onClick={() => onView('photos')}>
-          <icons.Picture /> Catalogo foto
+          <icons.Picture /> Foto e video
         </button>
         <button type="button" aria-pressed={view === 'music'} onClick={() => onView('music')}>
           <icons.Note /> Musica
         </button>
+        <button type="button" aria-pressed={view === 'documents'} onClick={() => onView('documents')}><icons.Folder /> Documenti</button>
       </nav>
       {demoAvailable && (
         <button type="button" className="quiet-button demo-nav" aria-pressed={view === 'demo'} onClick={() => onView('demo')}>
@@ -171,10 +173,11 @@ export default function Side({ models, library, changes, phone, onPhoneChange, t
         </h2>
         {models?.problem && <p className="fine warn">{models.problem}</p>}
         {models?.catalog_enabled && <p className="fine mono">{models.configured_model}</p>}
+        {models?.catalog_enabled && <ModelControl />}
         {models && !models.problem && models.models.length === 0 && <p className="fine">Nessun modello installato in Ollama.</p>}
         <ul className="models">
           {models?.models.filter(model => !models.catalog_enabled || model.name === models.configured_model).map((model) => (
-            <ModelRow key={model.name} model={model} director={model.name === director} />
+            <ModelRow key={model.name} model={model} director={model.name === director} managed={!!models.catalog_enabled} />
           ))}
         </ul>
         {models?.suggested && !models.problem && <Advice suggested={models.suggested} />}

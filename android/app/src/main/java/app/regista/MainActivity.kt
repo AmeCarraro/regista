@@ -14,6 +14,8 @@ import android.net.http.SslError
 import android.os.Build
 import android.os.Bundle
 import android.os.CancellationSignal
+import android.os.Handler
+import android.os.Looper
 import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.view.View
@@ -53,6 +55,8 @@ class MainActivity : Activity() {
     private lateinit var songs: Songs
     private lateinit var videos: Videos
     private lateinit var catalogCache: CatalogCache
+    private lateinit var archiveCleanup: ArchiveCleanup
+    private lateinit var remoteDocuments:RemoteDocuments
     private lateinit var mediaBackup: MediaBackup
     private lateinit var backupFolders: BackupFolders
     private lateinit var kinds: Kinds
@@ -61,6 +65,26 @@ class MainActivity : Activity() {
     private lateinit var tags: ManualTags
     private var link: Link? = null
     private var foreground = false
+    private var documentFolder=false
+    @Volatile private var documentRequestChecking=false
+    private var lastDocumentRequest=0L
+    private data class PendingImport(val request:String,val ids:List<String>?,val scope:String)
+    private var waitingImport:PendingImport?=null
+    private val importHandler = Handler(Looper.getMainLooper())
+    private val importUi = object : Runnable {
+        override fun run() {
+            if (!foreground) return
+            val state = PhotoImportStore(this@MainActivity).read()
+            if (PhotoImportService.running || state.requested) {
+                reached = PhotoImportService.reached
+                reached?.let(::open)
+                say(if (state.prepared) "Importazione: ${state.processed} / ${state.total} · ${state.copied} copiate · ${state.duplicates} già presenti · ${state.failed} errori. ${if (state.phase == "waiting") state.message else "Puoi spegnere lo schermo."}" else state.message)
+            } else if (link == null) connect()
+            if(!PhotoImportService.running) archiveCleanup.poll(reached)
+            if(!PhotoImportService.running) pollDocumentRequest()
+            importHandler.postDelayed(this, 1000)
+        }
+    }
 
     /** The computer, when it answered last; null while it cannot be reached. */
     @Volatile var reached: Computer? = null
@@ -89,6 +113,9 @@ class MainActivity : Activity() {
         songs = Songs(this)
         videos = Videos(this)
         catalogCache = CatalogCache(this, memory)
+        archiveCleanup = ArchiveCleanup(this,memory) { line -> runOnUiThread { say(line) } }
+        remoteDocuments=RemoteDocuments(this) { line -> runOnUiThread { say(line) } }
+        if(saved==null) archiveCleanup.recover()
         backupFolders = BackupFolders(this)
         mediaBackup = MediaBackup(this, memory, { reached }, onStarting = {
             runOnUiThread { window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
@@ -129,7 +156,8 @@ class MainActivity : Activity() {
         gallery.missing().takeIf { it.isNotEmpty() }?.let { requestPermissions(it, 1) }
         intent?.dataString?.let(::readInvite)?.let(::offer)
         // after an update the copying by themselves goes on as the user left it
-        if (memory.paired && memory.autoCopy) CopyJob.plan(this, true)
+        memory.autoCopy=false
+        CopyJob.plan(this, false)
     }
 
     /** The camera read the code while the app was already open. */
@@ -142,15 +170,21 @@ class MainActivity : Activity() {
     override fun onStart() {
         super.onStart()
         foreground = true
+        archiveCleanup.start()
+        val pendingImport=PhotoImportStore(this).read()
+        if (pendingImport.requested && !PhotoImportService.running) startPhotoImport(scope=pendingImport.scope)
         // The PC owns the photo catalog; Android only lists files when importing.
         connect()
         if (commands.available) speech.onStart()
+        importHandler.post(importUi)
     }
 
-    /** The phone works for the computer only while the app is in front. */
+    /** Closing this screen stops interactive work; the explicit photo-import service keeps its own lifetime. */
     override fun onStop() {
         super.onStop()
         foreground = false
+        archiveCleanup.stop()
+        importHandler.removeCallbacks(importUi)
         mediaBackup.cancel()
         speech.onStop()
         link?.close()
@@ -160,6 +194,7 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         mediaBackup.close()
+        importHandler.removeCallbacks(importUi)
         commands.close()
         tags.close()
         super.onDestroy()
@@ -170,6 +205,19 @@ class MainActivity : Activity() {
         if (request == CommandSpeech.PERMISSION) {
             speech.permissionResult(results.firstOrNull() == PackageManager.PERMISSION_GRANTED)
             return
+        }
+        if(request==BACKUP_PERMISSIONS) {
+            waitingImport?.let { waiting ->
+                waitingImport=null
+                val kinds=if(waiting.scope=="all-media") setOf("image","video","audio") else setOf("image","video")
+                if(MediaFiles(this,kinds).missingPermissions().isEmpty()) {
+                    if(foreground) startPhotoImport(waiting.request,waiting.ids,waiting.scope)
+                    else PhotoImportStore(this).begin(memory.fingerprint,waiting.request,waiting.ids,waiting.scope)
+                } else {
+                    PhotoImportStore(this).pause("Permessi incompleti. Concedi l’accesso ai file, poi premi Riprendi.")
+                    say("Accesso incompleto: l’importazione resta in pausa.")
+                }
+            }
         }
         // The PC owns the photo catalog; Android only lists files when importing.
         link?.refresh()
@@ -258,7 +306,7 @@ class MainActivity : Activity() {
     /** Shows a picture in the phone's own viewer. */
     fun view(picture: Uri) {
         try {
-            startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(picture, "image/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+            startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(picture, contentResolver.getType(picture) ?: "image/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
         } catch (missing: ActivityNotFoundException) {
             say("Su questo telefono non c'è un'app per guardare le foto.")
         }
@@ -321,19 +369,16 @@ class MainActivity : Activity() {
 
     fun requestMediaBackup() {
         if (mediaBackup.busy) return
-        val missing = mediaBackup.missingPermissions()
-        if (missing.isNotEmpty()) { requestPermissions(mediaBackup.permissionRequest(), BACKUP_PERMISSIONS); return }
         if (reached == null) { say("Collega il PC prima di avviare il backup completo."); return }
         AlertDialog.Builder(this).setTitle("Avviare il backup completo?")
-            .setMessage("Verranno cercate foto, immagini, audio e video accessibili ad Android e nelle cartelle supplementari. Sul PC saranno copiati e archiviati in ZIP solo i contenuti mancanti. Gli originali sul telefono restano intatti. Lascia l’app aperta durante il backup.")
+            .setMessage("Verranno cercati foto, audio, video e documenti nelle raccolte e nelle cartelle autorizzate. WhatsApp e Telegram sono separati; ogni blocco completo ha copie normali e uno ZIP verificato. Gli originali sul telefono restano intatti. La copia continua anche a schermo spento.")
             .setPositiveButton("Avvia backup") { _, _ ->
-                val result = JSONObject(mediaBackup.start())
-                if (result.has("error")) say(result.getString("error"))
+                startPhotoImport(scope="all-media")
             }.setNegativeButton("Annulla", null).show()
     }
 
     fun chooseBackupFolder() {
-        if (mediaBackup.busy) return
+        if (mediaBackup.busy || PhotoImportService.running) return
         try {
             startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
                 .putExtra(Intent.EXTRA_LOCAL_ONLY, true)
@@ -341,10 +386,73 @@ class MainActivity : Activity() {
         } catch (_: ActivityNotFoundException) { say("La selezione delle cartelle non è disponibile su questo telefono.") }
     }
 
+    fun requestDocumentImport() {
+        if(!foreground) return
+        if(PhotoImportService.running) { say("Attendi la fine dell’importazione in corso."); return }
+        if(reached==null) { say("Collega il PC prima di importare i documenti."); return }
+        AlertDialog.Builder(this).setTitle("Importa e indicizza documenti")
+            .setItems(arrayOf("Importa dalle cartelle autorizzate","Scegli file…","Aggiungi una cartella, poi importa…")) { _,which ->
+                when(which) {
+                    0 -> startPhotoImport(scope="documents")
+                    1 -> try {
+                        startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
+                            .putExtra(Intent.EXTRA_ALLOW_MULTIPLE,true).putExtra(Intent.EXTRA_LOCAL_ONLY,true)
+                            .putExtra(Intent.EXTRA_MIME_TYPES,arrayOf("application/pdf","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet","application/vnd.ms-excel",
+                                "application/vnd.openxmlformats-officedocument.wordprocessingml.document","application/msword","text/csv","text/plain"))
+                            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION),ADD_DOCUMENTS)
+                    } catch(_:ActivityNotFoundException) { say("Il selettore documenti non è disponibile.") }
+                    2 -> { documentFolder=true; chooseBackupFolder() }
+                }
+            }.setNegativeButton("Annulla",null).show()
+    }
+
+    private fun pollDocumentRequest() {
+        val computer=reached ?: return
+        if(documentRequestChecking || System.currentTimeMillis()-lastDocumentRequest<10000) return
+        documentRequestChecking=true; lastDocumentRequest=System.currentTimeMillis()
+        thread(name="document import request") {
+            try {
+                val request=computer.ask("GET","/phone/documents/import-request").optString("request_id")
+                val preferences=getSharedPreferences("document-requests",MODE_PRIVATE)
+                if(request.isNotEmpty() && preferences.getString("offered","")!=request) runOnUiThread {
+                    if(foreground && !PhotoImportService.running) {
+                        preferences.edit().putString("offered",request).apply()
+                        requestDocumentImport()
+                        thread { runCatching { computer.ask("POST","/phone/documents/import-request/seen",JSONObject()) } }
+                    }
+                }
+            } catch(_:Exception) { } finally { documentRequestChecking=false }
+        }
+    }
+
     /** Pictures were put in line for the computer on the phone's page: they go as soon as it answers. */
     fun offered(count: Int) {
         say(if (reached != null) "Mando $count foto al computer…" else "$count foto in fila per il computer: le mando appena lo raggiungo.")
         link?.refresh()
+    }
+
+    fun startPhotoImport(request: String = "", ids: List<String>? = null,scope:String="photos-videos") {
+        if (!foreground) return
+        val sources=MediaFiles(this,when(scope) { "documents" -> setOf("document"); "all-media" -> setOf("image","video","audio"); else -> setOf("image","video") })
+        if(sources.missingPermissions().isNotEmpty()) {
+            waitingImport=PendingImport(request,ids,scope)
+            requestPermissions(sources.permissionRequest(),BACKUP_PERMISSIONS)
+            say("Concedi l’accesso ai file: poi inizierà l’importazione richiesta.")
+            return
+        }
+        try {
+            PhotoImportService.start(this, request, ids,scope)
+            link?.close()
+            link = null
+            say("Importazione avviata. Puoi spegnere lo schermo; l’avanzamento è nella notifica.")
+            if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                val preferences = getSharedPreferences("photo-import", MODE_PRIVATE)
+                if (!preferences.getBoolean("notification-asked", false)) {
+                    preferences.edit().putBoolean("notification-asked", true).apply()
+                    requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), IMPORT_NOTIFICATIONS)
+                }
+            }
+        } catch (problem: Exception) { say(problem.message ?: "Non riesco ad avviare l’importazione.") }
     }
 
     private fun setUpPhone() {
@@ -374,6 +482,11 @@ class MainActivity : Activity() {
         // the page is the computer's and needs nothing of this phone's: not its files, not what other apps offer
         page.settings.allowFileAccess = false
         page.settings.allowContentAccess = false
+        page.addJavascriptInterface(object {
+            @android.webkit.JavascriptInterface fun openDocument(sha:String,download:Boolean) {
+                if(sha.matches(Regex("[a-f0-9]{64}"))) reached?.let { remoteDocuments.take(it,sha,download) }
+            }
+        },"RegistaPc")
         page.webViewClient = object : WebViewClient() {
             // the computer's certificate is its own, so Android does not know it: it is let through
             // only if it is the one whose fingerprint was in the code this phone was paired with
@@ -386,6 +499,10 @@ class MainActivity : Activity() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val here = Uri.parse(view.url.orEmpty())
                 val there = request.url
+                if(there.scheme=="https" && there.host==here.host && there.port==here.port && Regex("/api/documents/[a-f0-9]{64}/file").matches(there.path.orEmpty())) {
+                    reached?.let { remoteDocuments.take(it,there.pathSegments[2],there.getQueryParameter("download")=="true") }
+                    return true
+                }
                 return !(there.scheme == "https" && here.scheme == "https" && there.host == here.host && there.port == here.port)
             }
         }
@@ -411,7 +528,7 @@ class MainActivity : Activity() {
     }
 
     private fun connect() {
-        if (link != null || !memory.paired || mediaBackup.busy) return
+        if (link != null || !memory.paired || mediaBackup.busy || PhotoImportService.running || PhotoImportStore(this).read().requested) return
         link = Link(
             memory,
             gallery,
@@ -429,6 +546,13 @@ class MainActivity : Activity() {
             changed = { library.refresh() },
             update = update,
             kinds = kinds,
+            requestImport = { request -> runOnUiThread {
+                if (foreground) {
+                    val store = PhotoImportStore(this)
+                    val allowed = if (request.isEmpty()) store.read().work.isEmpty() else store.remoteAllowed(request, memory.fingerprint)
+                    if (allowed && request.isNotEmpty()) startPhotoImport(request)
+                }
+            } },
         ).also { it.start() }
     }
 
@@ -542,10 +666,11 @@ class MainActivity : Activity() {
         }
     }
 
-    /** A new computer: what the app kept of the one before goes, and the new one is looked for. */
+    /** A new connection; downloaded catalogs and originals stay available. */
     private fun paired() {
+        if (PhotoImportService.running || PhotoImportStore(this).read().requested) PhotoImportService.cancel(this)
         mediaBackup.cancel()
-        catalogCache.clear()
+        catalogCache.disconnected()
         link?.close()
         link = null
         reached = null
@@ -562,7 +687,7 @@ class MainActivity : Activity() {
 
     private fun unpair() {
         AlertDialog.Builder(this)
-            .setMessage("Scollego questo telefono dal computer? Per ricollegarlo servirà un nuovo codice.")
+            .setMessage("Scollego questo telefono dal computer? Foto, video, tag e backup restano conservati. Per ricollegarlo servirà un nuovo codice.")
             .setPositiveButton("Scollega") { _, _ -> forgotten("Scollegato. Sul computer puoi toglierlo dall'elenco alla voce «Telefono».") }
             .setNegativeButton("No", null)
             .show()
@@ -570,8 +695,9 @@ class MainActivity : Activity() {
 
     /** This phone is no longer paired: by the user's choice, or because the computer forgot it. */
     private fun forgotten(why: String) {
+        PhotoImportService.cancel(this)
         mediaBackup.cancel()
-        catalogCache.clear()
+        catalogCache.disconnected()
         memory.forget()
         CopyJob.plan(this, false)
         link?.close()
@@ -607,6 +733,8 @@ class MainActivity : Activity() {
     /** The user answered Android's question. The computer is told which pictures left, or that none did. */
     override fun onActivityResult(request: Int, result: Int, data: Intent?) {
         super.onActivityResult(request, result, data)
+        if(request==RemoteDocuments.SAVE) { remoteDocuments.saved(result,data?.data); return }
+        if(request==ArchiveCleanup.REQUEST) { archiveCleanup.answered(result); return }
         if (request == SCAN_QR) {
             if (result == RESULT_OK) {
                 val invite = data?.getStringExtra(PairingScanner.INVITE)?.let(::readInvite)
@@ -616,8 +744,23 @@ class MainActivity : Activity() {
         }
         if (request == BACKUP_FOLDER) {
             if (result == RESULT_OK && data?.data != null) {
-                try { backupFolders.add(data.data!!) }
+                try { backupFolders.add(data.data!!); if(documentFolder) {
+                    if(foreground) startPhotoImport(scope="documents") else PhotoImportStore(this).begin(memory.fingerprint,scope="documents")
+                } }
                 catch (_: Exception) { say("Non riesco ad accedere a questa cartella. Scegli una cartella consentita da Android.") }
+            }
+            documentFolder=false
+            return
+        }
+        if(request==ADD_DOCUMENTS) {
+            if(result==RESULT_OK && data!=null) {
+                val uris=data.clipData?.let { clip -> (0 until clip.itemCount).map { clip.getItemAt(it).uri } } ?: listOfNotNull(data.data)
+                try {
+                    val ids=SelectedDocuments(this).add(uris)
+                    if(ids.isNotEmpty()) {
+                        if(foreground) startPhotoImport(ids=ids,scope="documents") else PhotoImportStore(this).begin(memory.fingerprint,ids=ids,scope="documents")
+                    } else say("Seleziona PDF, Excel, Word, CSV o TXT.")
+                } catch(error:Exception) { say(error.message ?: "Non riesco a leggere i documenti scelti.") }
             }
             return
         }
@@ -676,6 +819,8 @@ class MainActivity : Activity() {
         const val BACKUP_PERMISSIONS = 7
         const val BACKUP_FOLDER = 8
         const val SCAN_QR = 9
+        const val IMPORT_NOTIFICATIONS = 42
+        const val ADD_DOCUMENTS=44
         // the tab the app is opened on, when it is not the first one
         const val TAB = "app.regista.TAB"
 

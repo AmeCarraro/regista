@@ -1,8 +1,8 @@
 import './bridge.ts'
 
-export type CacheState = { ready: boolean; syncing: boolean; count: number; at: number; error: string }
+export type CacheState = { ready: boolean; syncing: boolean; count: number; at: number; error: string; albums?: { id: string; name: string; hidden: boolean }[] }
 export type CachedPhoto = { id: string; name: string; description: string; stage: string;
-  metadata: { date?: string; place?: string }; tags: { tag: string; source: string }[] }
+  kind?: string; metadata: { date?: string; place?: string; source_folder?: string; source_folders?: string[] }; tags: { tag: string; source: string }[] }
 export type CachedResult = { photos: CachedPhoto[]; total: number; offset: number; limit: number }
 
 export function cacheState(): CacheState {
@@ -14,7 +14,7 @@ export function cacheState(): CacheState {
 }
 
 let serial = 0
-export function searchCached(query: string, offset: number, signal?: AbortSignal): Promise<CachedResult> {
+export function searchCached(query: string, offset: number, signal?: AbortSignal, filters?: Record<string, unknown>): Promise<CachedResult> {
   return new Promise((resolve, reject) => {
     const native = window.Regista
     if (!native?.searchCachedCatalog || !native.catalogResponse) { reject(new Error('Aggiorna l’app per cercare nel catalogo salvato.')); return }
@@ -25,7 +25,8 @@ export function searchCached(query: string, offset: number, signal?: AbortSignal
     const abort = () => { cancel(); reject(new DOMException('Ricerca annullata', 'AbortError')) }
     if (signal?.aborted) { abort(); return }
     signal?.addEventListener('abort', abort, { once: true })
-    native.searchCachedCatalog(query, offset, token)
+    if (filters && native.searchCachedCatalogWithFilters) native.searchCachedCatalogWithFilters(query, offset, JSON.stringify(filters), token)
+    else native.searchCachedCatalog(query, offset, token)
     const poll = () => {
       const raw = native.catalogResponse!(token)
       if (raw) {

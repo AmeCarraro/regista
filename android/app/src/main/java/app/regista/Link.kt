@@ -8,6 +8,8 @@ import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.locks.ReentrantLock
+import javax.net.ssl.HttpsURLConnection
+import kotlin.concurrent.thread
 
 /**
  * Keeps the phone and the computer in step while the app is open. It finds the computer,
@@ -44,6 +46,8 @@ class Link(
     private val update: Update? = null,
     /** What the kinds of pictures come to in numbers, for the app's own link too. */
     private val kinds: Kinds? = null,
+    /** The visible activity hands explicit imports to the independent foreground service. */
+    private val requestImport: ((String) -> Unit)? = null,
 ) : Thread("link") {
     companion object {
         /** Only one round of work with the computer at a time: the app's own, or the copying by themselves. */
@@ -58,10 +62,18 @@ class Link(
     /** How many originals went to the computer in this round. */
     @Volatile private var sentNow = 0
     private var catalogProtocol = false
+    @Volatile private var connection: HttpsURLConnection? = null
 
     fun close() {
         open = false
         interrupt()
+        val active = connection
+        if (active != null) thread(name = "disconnect photo import") { active.disconnect() }
+    }
+
+    private fun connectionChanged(value: HttpsURLConnection?) {
+        connection = value
+        if (value != null && !open) { value.disconnect(); throw IOException("Importazione interrotta.") }
     }
 
     fun refresh() {
@@ -142,7 +154,7 @@ class Link(
         try {
             val reached = reach() ?: return 0
             if (!describe(reached)) return 0
-            if (catalogProtocol) { importCatalog(reached); return sentNow }
+            if (catalogProtocol) { importCatalog(reached, acceptRequest = false); return sentNow }
             askToTake(reached)
             // a few times, as the computer asks for what was just put in line
             for (round in 1..20) {
@@ -152,6 +164,19 @@ class Link(
         } finally {
             ROUNDS.unlock()
         }
+    }
+
+    /** One explicit, checkpointed pass. The service owns its lifetime, not an Activity. */
+    fun importOnce(session: PhotoImportSession): Boolean {
+        if (!open || !ROUNDS.tryLock(1, TimeUnit.SECONDS)) return false
+        try {
+            if (!open || !session.active) return false
+            val computer = reach() ?: return false
+            found(computer)
+            if (!catalogProtocol) throw Refused(426, "Aggiorna Regista sul PC per importare le foto.")
+            importCatalog(computer, session)
+            return true
+        } finally { ROUNDS.unlock() }
     }
 
     private fun pause(milliseconds: Long) {
@@ -168,7 +193,8 @@ class Link(
     private fun first(ways: List<Computer>): Computer? {
         for (way in ways) {
             try {
-                val hello = way.ask("GET", "/phone/hello")
+                if (!open) return null
+                val hello = way.ask("GET", "/phone/hello", connectionChanged = ::connectionChanged)
                 if (hello.optInt("protocol", 1) != 2) throw Refused(426, "Aggiorna Regista sul PC: serve il protocollo catalogo 2.")
                 catalogProtocol = hello.optBoolean("catalog", false)
                 memory.worked(way.address)
@@ -270,68 +296,86 @@ class Link(
     }
 
     /** All Android-visible folders, originals only; the PC deduplicates bytes before tagging. */
-    private fun importCatalog(computer: Computer) {
-        val request = computer.ask("GET", "/phone/catalog/import-request").optString("request_id")
+    private fun importCatalog(computer: Computer, session: PhotoImportSession? = null, acceptRequest: Boolean = true) {
+        val request = if (acceptRequest) computer.ask("GET", "/phone/catalog/import-request", connectionChanged = ::connectionChanged).optString("request_id") else ""
+        if (requestImport != null) {
+            if (request.isNotEmpty() || (!memory.autoCopy && memory.offers().isNotEmpty())) requestImport(request)
+            return
+        }
+        if (!gallery.allowed) throw SecurityException("Concedi a Regista l’accesso alle foto per riprendere.")
+        session?.attachRequest(request)
         val all = gallery.all()
         val offered = memory.offers().toSet()
-        val photos = if (request.isNotEmpty()) all else all.filter { it.id.toString() in offered }
-        if (photos.isEmpty() && request.isEmpty()) return
+        val photos = session?.select(all) ?: if (request.isNotEmpty()) all else all.filter { it.id.toString() in offered }
+        if (session == null && photos.isEmpty() && request.isEmpty()) return
         var copied = 0
         var duplicates = 0
         var failed = 0
         val confirmedHashes = HashSet<String>()
+        fun active() = open && (session == null || session.active)
+        fun fail(photo: Photo, reason: String) { failed++; session?.failed(photo.id, reason) }
         fun progress(done: Boolean) {
-            if (request.isNotEmpty()) computer.ask("POST", "/phone/catalog/progress", JSONObject()
-                .put("request_id", request).put("total", photos.size).put("copied", copied).put("duplicates", duplicates)
-                .put("done", done).put("error", if (failed > 0) "$failed foto non leggibili o non supportate; riprova l’importazione." else ""))
+            val checkpoint = session?.state
+            val requestId = checkpoint?.request ?: request
+            val errors = checkpoint?.failed ?: failed
+            if (requestId.isNotEmpty()) computer.ask("POST", "/phone/catalog/progress", JSONObject()
+                .put("request_id", requestId).put("total", checkpoint?.total ?: photos.size)
+                .put("copied", checkpoint?.copied ?: copied).put("duplicates", checkpoint?.duplicates ?: duplicates)
+                .put("done", done).put("error", if (errors > 0) "$errors foto non leggibili o non supportate; riprova l’importazione." else ""),
+                connectionChanged = ::connectionChanged)
         }
         progress(false)
         for (batch in photos.chunked(100)) {
-            if (!open) return
+            if (!active()) return
             val identities = gallery.identities(batch.map { it.id })
             val hashes = HashMap<String, String>()
             val sources = HashMap<String, android.net.Uri>()
             val manifest = JSONArray()
             for (photo in batch) {
-                if (!open) return
+                if (!active()) return
                 val source = gallery.source(photo.id, whole = true)
                 val identity = identities[photo.id]
-                if (source == null || identity == null) { failed++; continue }
+                if (source == null || identity == null) { fail(photo, "Una foto non è più accessibile sul telefono."); continue }
                 val hash = memory.photoHash(photo.id, identity) ?: gallery.fingerprint(source)?.also { memory.photoHash(photo.id, identity, it) }
-                if (hash == null) { failed++; continue }
+                if (hash == null) { fail(photo, "Non riesco a leggere ${photo.name}."); continue }
                 hashes[photo.id.toString()] = hash
                 sources[photo.id.toString()] = source
                 manifest.put(JSONObject().put("media", photo.id.toString()).put("stamp", identity).put("sha256", hash).put("name", photo.name))
             }
-            val missing = computer.ask("POST", "/phone/catalog/missing", JSONObject().put("protocol", 2).put("photos", manifest)).getJSONArray("wanted")
+            val missing = computer.ask("POST", "/phone/catalog/missing", JSONObject().put("protocol", 2).put("photos", manifest), connectionChanged = ::connectionChanged).getJSONArray("wanted")
             val wanted = (0 until missing.length()).map { missing.getString(it) }.toSet()
             for (photo in batch) {
-                if (!open) return
+                if (!active()) return
                 val media = photo.id.toString()
                 val hash = hashes[media] ?: continue
                 val identity = identities[photo.id] ?: continue
                 if (media !in wanted || hash in confirmedHashes) {
                     duplicates++
+                    session?.confirmed(photo.id, true)
                     memory.offered(listOf(media))
                     continue
                 }
                 try {
                     // Recheck identity after hashing: no cached hash may authorize changed bytes.
-                    if (gallery.identities(listOf(photo.id))[photo.id] != identity) { failed++; continue }
+                    if (gallery.identities(listOf(photo.id))[photo.id] != identity) { fail(photo, "${photo.name} è cambiata durante la lettura: riprova."); continue }
                     val stream = gallery.open(sources[media]!!) ?: throw IOException("Foto non leggibile")
-                    val answer = computer.send("/phone/catalog/import?media=${Uri.encode(media)}&stamp=${Uri.encode(identity)}&name=${Uri.encode(photo.name)}", 0, stream, hash)
+                    session?.uploading(photo.name)
+                    val answer = computer.send("/phone/catalog/import?media=${Uri.encode(media)}&stamp=${Uri.encode(identity)}&name=${Uri.encode(photo.name)}", 0, stream, hash, connectionChanged = ::connectionChanged)
                     if (answer.optBoolean("duplicate")) duplicates++ else { copied++; sentNow++ }
+                    session?.confirmed(photo.id, answer.optBoolean("duplicate"))
                     confirmedHashes.add(hash)
                     memory.offered(listOf(media))
                 } catch (refused: Refused) {
                     if (refused.status == 401) throw refused
-                    failed++
+                    fail(photo, refused.message ?: "Il PC non accetta ${photo.name}.")
                 }
                 tell("Importazione: $copied copiate, $duplicates già presenti, $failed errori, su ${photos.size}. Tag in pausa.")
             }
             progress(false)
         }
+        if (!active()) return
         progress(true)
+        session?.finished()
         if (copied > 0) memory.copied(copied)
         tell("Importazione completata: $copied copiate, $duplicates già presenti, $failed errori. Avvia i tag dal PC quando vuoi.")
     }

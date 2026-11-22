@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { answerPhone, forgetPhone, invitePhone } from './api.ts'
 import type { Device, Invite, PhoneState } from './api.ts'
+import { catalogRequest } from './catalogApi.ts'
 import * as icons from './icons.tsx'
 
 const OPEN_DOOR = '.\\run.ps1 -Phone'
@@ -18,6 +19,7 @@ function clock(when: string): string {
 
 function DeviceRow({ device, onGone }: { device: Device; onGone: () => void }) {
   const [asking, setAsking] = useState(false)
+  const [documents, setDocuments] = useState('')
   const seen = clock(device.seen)
 
   return (
@@ -32,6 +34,9 @@ function DeviceRow({ device, onGone }: { device: Device; onGone: () => void }) {
           : 'Non ha ancora mandato le sue foto: apri Regista sul telefono.'}
         {seen && ` · sentito ${seen}`}
       </p>
+      <button type="button" className="quiet-button" onClick={() => void catalogRequest('/api/documents/import-request', { device: device.id }).then(
+        () => setDocuments('Apri Regista sul telefono: potrai scegliere cartelle o documenti da importare.'), error => setDocuments(String(error.message)))}>Importa e indicizza documenti…</button>
+      {documents && <p className="fine" role="status">{documents}</p>}
       {device.waiting > 0 && (
         <p className="fine warn">
           Gli ho chiesto {device.waiting} foto: arrivano quando Regista è aperto sul telefono.
@@ -39,7 +44,7 @@ function DeviceRow({ device, onGone }: { device: Device; onGone: () => void }) {
       )}
       {asking ? (
         <p className="fine">
-          Lo scollego? Non potrà più entrare, e dimentico le sue foto.{' '}
+          Scollego questo telefono? L’accesso viene revocato; foto, video e backup sul PC restano conservati.{' '}
           <button type="button" className="link" onClick={() => void forgetPhone(device.id).then(onGone, onGone)}>
             Sì, scollega
           </button>{' '}

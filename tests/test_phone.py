@@ -129,14 +129,18 @@ def test_a_phone_is_known_by_its_key_and_the_key_is_not_kept(phones, tmp_path):
     assert "key" not in phones.described()[0]
 
 
-def test_a_phone_that_is_shut_out_is_forgotten_with_its_pictures(phones):
+def test_disconnecting_a_phone_revokes_access_and_preserves_its_pictures(phones):
     token, device = let_in(phones)
     phones.add(device, [shot("1", "red")])
     asked = phones.ask([photo["id"] for photo in phones.photos], "Rose")
 
+    photo_ids = {photo['id'] for photo in phones.photos}
+    thumbnails = {identifier: phones.thumbnail(identifier) for identifier in photo_ids}
     assert phones.forget_device(device) is True
-
-    assert phones.device_of(token) is None and phones.photos == [] and phones.search("red")["indexed"] == 0
+    assert phones.device_of(token) is None
+    assert {photo['id'] for photo in phones.photos} == photo_ids
+    assert phones.search("red")["indexed"] == 1
+    assert all(phones.thumbnail(identifier) == thumbnails[identifier] for identifier in photo_ids)
     assert phones.transfer(asked["id"])["state"] == "done" and phones.work(device) == []
     assert phones.forget_device(device) is False
 

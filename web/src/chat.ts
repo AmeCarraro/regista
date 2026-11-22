@@ -1,6 +1,6 @@
 // What the chat knows that is not drawing: how the events of a reply become
 // what is on screen, and what of a conversation is sent back to the model.
-import type { ChatEvent, Found, Job, Message, ModelInfo, Models, Photo, Place, Proposal } from './api.ts'
+import type { ChatEvent, Found, Job, Message, ModelInfo, Models, Photo, Place, Proposal, DocumentFile } from './api.ts'
 
 /**
  * A change the app proposed, and what became of it. It waits ("asked") until
@@ -28,6 +28,7 @@ export type Proposed = {
 
 /** A piece of a reply, in the order it arrived. */
 export type Part =
+  | { kind: 'documents'; description: string; files: DocumentFile[]; total: number }
   | { kind: 'text'; text: string }
   // `period` is the days the search looked at and `spot` the place the pictures were taken in, both in words, or nothing;
   // `description` can be empty when only a period or a place was asked for
@@ -88,6 +89,8 @@ export function apply(reply: Reply, event: ChatEvent): Reply {
       const { type: _, ...found } = event
       return { ...reply, parts: [...reply.parts, { kind: 'photos', ...found }] }
     }
+    case 'documents':
+      return { ...reply, status: 'writing', loading: false, parts: [...reply.parts, { kind: 'documents', description: event.description, files: event.files, total: event.total }] }
     case 'photo':
       // into the pictures of the reply, where its day puts it: the newest first
       return withPictures(reply, (found) => ({ ...found, sure: newestFirst([...found.sure, event.photo]), matching: found.matching + 1 }))

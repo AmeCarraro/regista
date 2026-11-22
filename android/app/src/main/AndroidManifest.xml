@@ -27,6 +27,9 @@
     <!-- to go on playing with the screen off: Android keeps a player running while it shows its notification -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- To transcribe one command after the user taps the microphone. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
@@ -44,6 +47,8 @@
         android:icon="@mipmap/icon"
         android:label="@string/app_name"
         android:theme="@style/App">
+
+        <provider android:name=".DocumentProvider" android:authorities="${applicationId}.documents" android:exported="false" android:grantUriPermissions="true" />
 
         <activity
             android:name=".MainActivity"
@@ -89,6 +94,10 @@
             android:name=".Player"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
+
+        <service android:name=".PhotoImportService" android:exported="false"
+            android:stopWithTask="false" android:foregroundServiceType="dataSync" />
+        <receiver android:name=".StopPhotoImport" android:exported="false" />
 
         <!-- the copying of the new pictures by themselves, run by Android now and then on a Wi-Fi (CopyJob) -->
         <service

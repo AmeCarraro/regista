@@ -827,3 +827,8 @@ body {
 .backup-folders li { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; }
 .backup-folders li > span { min-width: 0; overflow-wrap: anywhere; font-size: .85rem; }
 @media (prefers-reduced-motion: reduce) { .phone-toggle input::before { transition: none; } }
+.saved-filters { margin: 16px 0; }
+.saved-filters summary { font-size: 13px; opacity: .75; cursor: pointer; }
+.saved-filter-fields { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; margin-block: 14px; }
+.saved-filter-fields label { font-size: 12px; display: flex; flex-direction: column; gap: 7px; }
+.saved-filter-fields input,.saved-filter-fields select { width: 100%; min-width: 0; background: var(--card); color: var(--text); border: 1px solid var(--line); border-radius: 14px; padding: 12px; font: inherit; }

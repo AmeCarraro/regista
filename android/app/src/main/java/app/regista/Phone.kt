@@ -41,21 +41,32 @@ class Phone(
     private val backupFolders: BackupFolders,
 ) {
     @JavascriptInterface
-    fun mediaBackupState(): String = JSONObject(mediaBackup.state()).put("folders", backupFolders.state().getJSONArray("folders"))
+    fun mediaBackupState(): String {
+        val checkpoint=PhotoImportStore(app).read()
+        val status=if(checkpoint.scope=="all-media" && checkpoint.work.isNotEmpty()) JSONObject(PhotoImportStore(app).json())
+            .put("scanned",checkpoint.processed).put("complete",checkpoint.phase=="done")
+            .put("current",checkpoint.message).put("error",if(checkpoint.phase=="paused") checkpoint.message else "")
+            .put("errors",JSONArray()).put("warnings",JSONArray()).put("bytes",0).put("current_size",0)
+        else JSONObject(mediaBackup.state()).put("busy",PhotoImportService.running)
+        return status.put("folders", backupFolders.state().getJSONArray("folders"))
         .put("paired", memory.paired).put("reachable", app.reached != null).put("address", app.reached?.address.orEmpty())
         .put("missing_permissions", JSONArray(mediaBackup.missingPermissions().toList())).toString()
+    }
 
     @JavascriptInterface
     fun startMediaBackup() = app.runOnUiThread { app.requestMediaBackup() }
 
     @JavascriptInterface
-    fun cancelMediaBackup() = mediaBackup.cancel()
+    fun cancelMediaBackup() { PhotoImportService.cancel(app); mediaBackup.cancel() }
 
     @JavascriptInterface
     fun chooseBackupFolder() = app.runOnUiThread { app.chooseBackupFolder() }
 
     @JavascriptInterface
-    fun removeBackupFolder(id: String) { if (!mediaBackup.busy) backupFolders.remove(id) }
+    fun importDocuments()=app.runOnUiThread { app.requestDocumentImport() }
+
+    @JavascriptInterface
+    fun removeBackupFolder(id: String) { if (!mediaBackup.busy && !PhotoImportService.running) backupFolders.remove(id) }
 
     @JavascriptInterface
     fun openBackupNetworkSettings() = app.runOnUiThread {
@@ -257,20 +268,38 @@ class Phone(
 
     @JavascriptInterface
     fun searchCachedCatalog(query: String, offset: Int, token: String) {
+        cachedSearch(query,offset,JSONObject(),token)
+    }
+
+    @JavascriptInterface
+    fun searchCachedCatalogWithFilters(query:String,offset:Int,filters:String,token:String) {
+        val options=runCatching { JSONObject(filters) }.getOrDefault(JSONObject())
+        cachedSearch(query,offset,options,token)
+    }
+
+    private fun cachedSearch(query:String,offset:Int,filters:JSONObject,token:String) {
         if (!TOKEN.matches(token) || catalogAnswers.size >= 32) return
         catalogAnswers[token] = ""
         thread(name = "local catalog search") {
-            val result = try { catalogCache.search(query, offset) }
+            val result = try { catalogCache.search(query, offset,filters) }
                 catch (problem: Exception) { JSONObject().put("error", problem.message ?: "Catalogo non disponibile.") }
             catalogAnswers.replace(token, result.toString())
         }
     }
 
-    /** Only catalog reads are exposed to the local page; pairing keys stay native. */
+    @JavascriptInterface
+    fun openCachedMedia(id:String):String {
+        val source=runCatching { catalogCache.localMedia(id,gallery) }.getOrNull()
+            ?: return JSONObject().put("error","Originale non presente sul telefono. Aprilo dal catalogo del PC quando è collegato.").toString()
+        app.runOnUiThread { app.view(source.first) }
+        return JSONObject().put("opened",true).toString()
+    }
+
+    /** Catalog reads and the configured PC model control; pairing keys stay native. */
     @JavascriptInterface
     fun catalogRequest(path: String, body: String, token: String) {
         if (!TOKEN.matches(token) || catalogAnswers.size >= 32) return
-        if (path !in setOf("/api/catalog/status", "/api/catalog/search", "/api/catalog/plan")) return
+        if (path !in setOf("/api/catalog/status", "/api/catalog/search", "/api/catalog/plan", "/api/catalog/albums", "/api/model-runtime")) return
         catalogAnswers[token] = ""
         thread(name = "catalog") {
             val result = try {
@@ -296,11 +325,24 @@ class Phone(
 
     @JavascriptInterface
     fun importAll(): String {
-        if (!gallery.allowed) return JSONObject().put("error", "Concedi l’accesso alle foto nelle impostazioni Android.").toString()
-        val photos = gallery.all()
-        memory.offer(photos.map { it.id.toString() })
-        app.runOnUiThread { app.offered(photos.size) }
-        return JSONObject().put("queued", photos.size).toString()
+        val previous=PhotoImportStore(app).read()
+        val scope=if(previous.phase=="paused") previous.scope else "photos-videos"
+        val permissions=MediaFiles(app,if(scope=="all-media") setOf("image","video","audio") else if(scope=="documents") setOf("document") else setOf("image","video")).missingPermissions().isNotEmpty()
+        app.runOnUiThread { app.startPhotoImport(scope=scope) }
+        return JSONObject().put("background",true).put("queued",PhotoImportStore(app).read().remaining.size)
+            .put("message",if(permissions) "Completa le autorizzazioni Android: poi inizierà l’importazione." else "Importazione richiesta. Puoi seguirla nella notifica e spegnere lo schermo.").toString()
+    }
+
+    @JavascriptInterface
+    fun photoImportState():String=PhotoImportStore(app).json()
+
+    @JavascriptInterface
+    fun cancelPhotoImport() { PhotoImportService.cancel(app) }
+
+    @JavascriptInterface
+    fun newImportBlock()=app.runOnUiThread {
+        try { val scope=PhotoImportStore(app).newBlock(memory.fingerprint); app.startPhotoImport(scope=scope) }
+        catch(_:Exception) { /* Keep the previous committed checkpoint while it is still running. */ }
     }
 
     @JavascriptInterface
@@ -408,10 +450,8 @@ class Phone(
      */
     @JavascriptInterface
     fun setAutoCopy(on: Boolean) {
-        if (on && !memory.paired) return
-        if (on && !memory.autoCopy) memory.autoAfter = gallery.newest()
-        memory.autoCopy = on
-        CopyJob.plan(app, on)
+        memory.autoCopy = false
+        CopyJob.plan(app, false)
     }
 
     @JavascriptInterface
@@ -447,14 +487,18 @@ class Phone(
         if (address.scheme != "https" || address.host != HOST) return refused()
         if (Regex("/catalog-media/[a-f0-9]{64}/(thumb|full)").matches(path)) {
             val id = path.split('/')[2]
-            val local = runCatching { catalogCache.local(id, gallery) }.getOrNull()
+            val local = runCatching { catalogCache.localMedia(id, gallery) }.getOrNull()
             if (local != null) {
                 try {
-                    if (path.endsWith("/thumb")) gallery.small(local)?.let {
-                        return WebResourceResponse("image/jpeg", null, ByteArrayInputStream(it))
+                    if (path.endsWith("/thumb") && Build.VERSION.SDK_INT>=29) {
+                        val bitmap=app.contentResolver.loadThumbnail(local.first,android.util.Size(384,384),null)
+                        val buffer=java.io.ByteArrayOutputStream()
+                        bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG,85,buffer)
+                        bitmap.recycle()
+                        return WebResourceResponse("image/jpeg",null,ByteArrayInputStream(buffer.toByteArray()))
                     }
-                    if (path.endsWith("/full")) gallery.open(gallery.named(local))?.let {
-                        return WebResourceResponse(app.contentResolver.getType(gallery.named(local)) ?: "image/jpeg", null, it)
+                    if (path.endsWith("/full")) app.contentResolver.openInputStream(local.first)?.let {
+                        return WebResourceResponse(app.contentResolver.getType(local.first) ?: if(local.second=="video") "video/mp4" else "image/jpeg", null, it)
                     }
                 } catch (_: Exception) { /* The PC copy may still be available. */ }
             }

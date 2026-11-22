@@ -60,12 +60,15 @@ class IndexJobs:
         self.problem = ''
         self.idle = IdleGate()
         self.task = None
+        self.memory_unloading = False
 
     def status(self):
         return {**self.catalog.status(), 'mode': self.mode, 'current': self.current, 'problem': self.problem,
                 'waiting_reason': self.idle.reason if self.mode == 'idle' else '', 'version': VERSION}
 
     async def start(self, mode='manual'):
+        if self.memory_unloading:
+            raise ValueError('Attendi lo scaricamento del modello, poi premi Avvia analisi.')
         # Verify first, leaving the queue untouched when the requested tag is absent.
         await self.annotator.verify()
         self.problem = ''

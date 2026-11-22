@@ -4,6 +4,7 @@ import * as icons from './icons.tsx'
 import { splitBlocks, splitInline } from './markdown.ts'
 import PhotoResults from './Photos.tsx'
 import ProposalCard from './Proposal.tsx'
+import { DocumentFiles } from './Documents.tsx'
 import type { Answers } from './Proposal.tsx'
 
 const IDEAS: { icon: ReactNode; title: string; text: string }[] = [
@@ -66,6 +67,8 @@ function PartView({ part, answers }: { part: Part; answers: Answers }) {
       )
     case 'photos':
       return <PhotoResults found={part} />
+    case 'documents':
+      return <DocumentFiles files={part.files} total={part.total} />
     case 'proposal':
       return <ProposalCard proposed={part} answers={answers} />
   }

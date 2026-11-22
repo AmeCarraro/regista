@@ -24,6 +24,8 @@ def test_words_are_cut_into_the_pieces_the_model_knows():
 
 
 @needs_models
+@pytest.mark.skipif(not all((SAMPLES / f'{number:03d}.jpg').is_file() for number in range(0,200,20)),
+                    reason='Optional public example photos have been removed from the user library')
 def test_a_picture_is_read_the_same_alone_or_with_others_and_a_sentence_finds_it():
     model = ClipEmbedder(MODELS)
     pictures = [Image.open(SAMPLES / f"{number:03d}.jpg") for number in range(0, 200, 20)]

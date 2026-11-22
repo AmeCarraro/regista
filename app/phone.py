@@ -319,12 +319,11 @@ class Phones:
             return all(device.get("android", TRASH_SINCE) >= TRASH_SINCE for device in self.devices if device["id"] in devices)
 
     def forget_device(self, device: str) -> bool:
-        """Shuts a phone out: its key stops working, and what was known of its pictures is dropped."""
+        """Revoke access without deleting photos, metadata, original files or backups."""
         with self._lock:
             if not any(known["id"] == device for known in self.devices):
                 return False
             self.devices = [known for known in self.devices if known["id"] != device]
-            self._drop({photo["id"] for photo in self.photos if photo["device"] == device})
             for transfer in self.transfers + self.sends:
                 if transfer["device"] == device and transfer["state"] != "done":
                     transfer["state"] = "done"

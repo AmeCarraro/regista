@@ -1,0 +1,11 @@
+.document-results { display: grid; gap: 14px; margin-block: 16px; }
+.document-card { display: flex; align-items: flex-start; gap: 16px; background: var(--card); border: 1px solid var(--line); border-radius: 22px; padding: 20px; min-width: 0; }
+.document-type { border: 1px solid var(--line); border-radius: 14px; padding: 15px 9px; min-width: 54px; text-align: center; font-size: 11px; color: var(--accent); background: var(--raised); }
+.document-info { min-width: 0; overflow-wrap: anywhere; flex: 1; }
+.document-info > p { font-size: 12px; opacity: .75; margin: 7px 0; }
+.document-note { font-size: 12px; opacity: .65; }
+.document-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-block: 12px; }
+.document-actions a { display: inline-flex; padding: 9px 14px; border: 1px solid var(--line); border-radius: 999px; color: var(--text); font-size: 12px; text-decoration: none; background: var(--raised); }
+.document-info details { font-size: 11px; opacity: .65; }
+.chat.away:has(.documents-page) > .thread,.chat.away:has(.documents-page) > .composer { display: none; }
+@media(max-width:600px) { .document-card { padding: 15px; gap: 10px; } .document-type { min-width: 44px; } }

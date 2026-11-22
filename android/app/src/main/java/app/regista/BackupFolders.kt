@@ -13,6 +13,7 @@ import java.util.ArrayDeque
 /** Extra explicitly-authorized directory trees, including media not indexed because of .nomedia. */
 class BackupFolders(private val context: Context) {
     private val settings = context.getSharedPreferences("backup-folders", Context.MODE_PRIVATE)
+    private val known = context.getSharedPreferences("folder-media",Context.MODE_PRIVATE)
     private fun roots(): JSONArray = runCatching { JSONArray(settings.getString("roots", "[]")) }.getOrDefault(JSONArray())
 
     fun state(): JSONObject {
@@ -74,6 +75,7 @@ class BackupFolders(private val context: Context) {
         val files = mutableListOf<BackupMedia>()
         val visited = HashSet<String>()
         val roots = roots()
+        val remembered=known.edit()
         for (index in 0 until roots.length()) {
             if (cancelled()) break
             val root = roots.optJSONObject(index) ?: continue
@@ -113,7 +115,9 @@ class BackupFolders(private val context: Context) {
                                 val document = DocumentsContract.buildDocumentUriUsingTree(tree, entry.id)
                                 val version = entry.stamp()
                                 val rootKey = root.optString("id")
-                                files += BackupMedia(media = "tree:" + hash("${tree.authority}\u0000${entry.id}"),
+                                val media="tree:" + hash("${tree.authority}\u0000${entry.id}")
+                                remembered.putString(media,JSONObject().put("uri",document.toString()).put("root",rootKey).put("stamp",version).put("kind",kind).toString())
+                                files += BackupMedia(media = media,
                                     name = entry.name.ifBlank { "file" }.take(500), folder = relative.take(2000), kind = kind,
                                     size = entry.size, mime = entry.mime.ifBlank { "application/octet-stream" }, stamp = version,
                                     current = {
@@ -123,7 +127,8 @@ class BackupFolders(private val context: Context) {
                                                 described(document)?.stamp() == version
                                         }.getOrDefault(false)
                                     },
-                                    open = { MediaFiles.openOriginal(context, document, kind) })
+                                    open = { MediaFiles.openOriginal(context, document, kind) },
+                                    day=if(entry.modified>0) java.text.SimpleDateFormat("yyyy-MM-dd",java.util.Locale.ROOT).format(java.util.Date(entry.modified)) else "",uri=document)
                             }
                         }
                     } catch (error: Exception) {
@@ -134,7 +139,17 @@ class BackupFolders(private val context: Context) {
                 if (!cancelled()) onProblem("$rootName: ${error.message ?: "cartella non più autorizzata"}")
             }
         }
+        remembered.apply()
         return files
+    }
+
+    fun resolve(media:String,stamp:String):Pair<Uri,String>? {
+        val record=known.getString(media,null)?.let(::JSONObject) ?: return null
+        if(record.optString("stamp")!=stamp) return null
+        val roots=roots()
+        if(!(0 until roots.length()).any { roots.getJSONObject(it).optString("id")==record.optString("root") }) return null
+        val uri=Uri.parse(record.getString("uri"))
+        return if(described(uri)?.stamp()==stamp) Pair(uri,record.getString("kind")) else null
     }
 
     companion object {

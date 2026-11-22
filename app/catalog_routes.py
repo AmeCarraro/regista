@@ -5,6 +5,8 @@ import io
 import os
 from pathlib import Path
 import re
+import subprocess
+import threading
 import tempfile
 import zipfile
 import zlib
@@ -75,6 +77,7 @@ def phone_only(request):
 
 def routes(catalog, jobs, import_dir: Path, read_only=False, phones=None):
     router = APIRouter()
+    video_previews = threading.Semaphore(2)
     catalog.organize_imports = not read_only
     from photo_storage import adopt
     adopt(catalog, import_dir)
@@ -191,14 +194,36 @@ def routes(catalog, jobs, import_dir: Path, read_only=False, phones=None):
         if path is None:
             raise HTTPException(404, 'Foto non disponibile: ripeti la scansione.')
         try:
-            with Image.open(path) as original:
-                picture = ImageOps.exif_transpose(original).convert('RGB')
+            from photo_catalog import VIDEO_FORMATS
+            if path.suffix.lower() in VIDEO_FORMATS:
+                from video_tools import preview
+                cache = catalog.database.parent / 'video-previews' / (identifier + '.jpg')
+                with video_previews:
+                    if cache.is_file():
+                        data = cache.read_bytes()
+                        return Response(data, media_type='image/jpeg', headers={'Cache-Control': 'private,max-age=60', 'X-Regista-Sha256': hashlib.sha256(data).hexdigest()})
+                    picture = preview(path, 384)
+                    buffer = io.BytesIO()
+                    picture.save(buffer, 'JPEG', quality=85)
+                    cache.parent.mkdir(parents=True,exist_ok=True)
+                    descriptor,temporary_name = tempfile.mkstemp(suffix='.part',dir=cache.parent)
+                    temporary = Path(temporary_name)
+                    try:
+                        with os.fdopen(descriptor,'wb') as output:
+                            output.write(buffer.getvalue())
+                        temporary.replace(cache)
+                    finally:
+                        temporary.unlink(missing_ok=True)
+            else:
+                with Image.open(path) as original:
+                    picture = ImageOps.exif_transpose(original).convert('RGB')
+            with picture:
                 picture.thumbnail((384, 384))
                 buffer = io.BytesIO()
                 picture.save(buffer, 'JPEG', quality=85)
             data = buffer.getvalue()
             return Response(data, media_type='image/jpeg', headers={'Cache-Control': 'private,max-age=60', 'X-Regista-Sha256': hashlib.sha256(data).hexdigest()})
-        except (OSError, ValueError):
+        except (OSError, ValueError, subprocess.SubprocessError):
             raise HTTPException(422, 'Immagine non leggibile.')
 
     @router.get('/api/catalog/photos/{identifier}/full')
@@ -335,4 +360,8 @@ def routes(catalog, jobs, import_dir: Path, read_only=False, phones=None):
 
     from media_backup import routes as media_routes
     router.include_router(media_routes(catalog, jobs, read_only=read_only))
+    from import_batches import routes as batch_routes
+    router.include_router(batch_routes(catalog,jobs,import_dir,read_only=read_only,phones=phones))
+    from catalog_organize import routes as organization_routes
+    router.include_router(organization_routes(catalog,read_only=read_only))
     return router

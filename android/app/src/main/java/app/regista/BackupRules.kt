@@ -11,6 +11,7 @@ object BackupRules {
     private val images = setOf("jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff", "avif", "heic", "heif", "dng", "nef", "cr2", "cr3", "arw", "raf", "rw2", "orf", "pef", "srw")
     private val audios = setOf("mp3", "m4a", "aac", "flac", "wav", "ogg", "opus", "amr", "wma", "aiff", "aif", "alac", "ac3", "mka", "mid", "midi", "ape", "oga", "spx")
     private val videos = setOf("mp4", "m4v", "mov", "mkv", "webm", "3gp", "3g2", "avi", "wmv", "mpg", "mpeg", "mts", "m2ts", "ts", "vob", "ogv", "flv", "divx")
+    private val documents=setOf("pdf","xlsx","xls","docx","doc","csv","txt")
 
     fun kind(mime: String, name: String): String? {
         val type = mime.lowercase(Locale.ROOT).substringBefore(';').trim()
@@ -19,6 +20,7 @@ object BackupRules {
             in images -> "image"
             in audios -> "audio"
             in videos -> "video"
+            in documents -> "document"
             else -> null
         }
     }

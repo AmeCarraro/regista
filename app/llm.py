@@ -8,6 +8,7 @@ import json
 import math
 import os
 import re
+import threading
 
 import httpx2
 
@@ -20,6 +21,21 @@ NUM_CTX = int(os.getenv("NUM_CTX", "6144"))
 # then a search after a pause waits 15 to 20 seconds for the model to be loaded again. Half an hour,
 # and the memory goes back to the computer when Regista is not being used.
 KEEP_ALIVE = os.getenv("KEEP_ALIVE", "30m")
+_memory_guard = threading.Lock()
+_pinned: set[str] = set()
+
+
+def pin(model: str, enabled: bool):
+    with _memory_guard:
+        if enabled:
+            _pinned.add(model)
+        else:
+            _pinned.discard(model)
+
+
+def keep_alive(model: str):
+    with _memory_guard:
+        return -1 if model in _pinned else KEEP_ALIVE
 
 
 def inference_seconds() -> float | None:
@@ -96,7 +112,7 @@ async def ready(model: str, share: float | None = None) -> float | None:
         if loaded is None:
             # a request with nothing to answer only loads the model: with the context size of every other call,
             # or the first real request would load it again
-            response = await client.post(f"{OLLAMA_URL}/api/generate", json={"model": model, "keep_alive": KEEP_ALIVE, "options": {"num_ctx": NUM_CTX}})
+            response = await client.post(f"{OLLAMA_URL}/api/generate", json={"model": model, "keep_alive": keep_alive(model), "options": {"num_ctx": NUM_CTX}})
             if response.status_code != 200:
                 raise RuntimeError(f"Ollama answered {response.status_code}: {response.text[:300]}")
             loaded = await now()
@@ -132,7 +148,7 @@ async def sees_many(model: str, pictures: list[bytes], what: str, english: bool 
         "stream": False,
         "think": False,
         "options": {"temperature": 0, "num_ctx": NUM_CTX, "num_predict": 8 * count},
-        "keep_alive": KEEP_ALIVE,
+        "keep_alive": keep_alive(model),
     }
     async with scheduler.slot(), httpx2.AsyncClient(timeout=inference_timeout()) as client:
         response = await client.post(f"{OLLAMA_URL}/api/chat", json=payload)
@@ -158,7 +174,7 @@ async def sees(model: str, picture: bytes, question: str) -> bool:
         "stream": False,
         "think": False,
         "options": {"temperature": 0, "num_ctx": NUM_CTX, "num_predict": 3},
-        "keep_alive": KEEP_ALIVE,
+        "keep_alive": keep_alive(model),
     }
     async with scheduler.slot(), httpx2.AsyncClient(timeout=inference_timeout()) as client:
         response = await client.post(f"{OLLAMA_URL}/api/chat", json=payload)
@@ -183,7 +199,7 @@ async def stream(model: str, messages: list[dict], max_tokens: int = 700, schema
         # a decision of a few words: it answers straight away. Models that cannot think ignore this.
         "think": False,
         "options": {"temperature": 0, "num_ctx": NUM_CTX, "num_predict": max_tokens},
-        "keep_alive": KEEP_ALIVE,
+        "keep_alive": keep_alive(model),
     }
     if schema:
         payload["format"] = schema
@@ -217,7 +233,7 @@ async def structured(model: str, messages: list[dict], schema: dict, *, backgrou
         async with asyncio.timeout(inference_seconds()):
             response = await client.post(f"{OLLAMA_URL}/api/chat", json={
                 "model": model, "messages": messages, "format": schema, "stream": False, "think": False,
-                "options": {"temperature": 0, "num_ctx": NUM_CTX, "num_predict": max_tokens, **(options or {})}, "keep_alive": KEEP_ALIVE,
+                "options": {"temperature": 0, "num_ctx": NUM_CTX, "num_predict": max_tokens, **(options or {})}, "keep_alive": keep_alive(model),
             })
         response.raise_for_status()
         return response.json()

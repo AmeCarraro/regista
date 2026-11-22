@@ -12,7 +12,8 @@ from photo_catalog import CLASSIFICATION_SQL
 from photo_search import SYNONYMS
 
 SNAPSHOT_VERSION = 1
-METADATA = ('date', 'precision', 'date_source', 'place', 'city', 'country', 'place_source')
+METADATA = ('date', 'precision', 'date_source', 'place', 'city', 'country', 'place_source',
+            'media_kind', 'original_filename', 'source_folder', 'source_folders')
 
 
 class SnapshotResponse(FileResponse):
@@ -33,11 +34,14 @@ def snapshot(catalog, device: str) -> Path:
                 PRAGMA user_version=1;
                 CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
                 CREATE TABLE photos(id TEXT PRIMARY KEY,name TEXT NOT NULL,description TEXT NOT NULL,
-                    metadata TEXT NOT NULL,tags TEXT NOT NULL,day TEXT NOT NULL,stage TEXT NOT NULL);
+                    metadata TEXT NOT NULL,tags TEXT NOT NULL,day TEXT NOT NULL,stage TEXT NOT NULL,kind TEXT NOT NULL DEFAULT 'image');
                 CREATE INDEX photos_day ON photos(day DESC,id);
                 CREATE VIRTUAL TABLE search_text USING fts4(id,body,notindexed=id,tokenize=unicode61);
                 CREATE TABLE phone_media(asset_id TEXT NOT NULL,media TEXT NOT NULL,stamp TEXT NOT NULL);
                 CREATE INDEX phone_media_asset ON phone_media(asset_id);
+                CREATE TABLE albums(id TEXT PRIMARY KEY,name TEXT NOT NULL,hidden INTEGER NOT NULL);
+                CREATE TABLE album_items(album_id TEXT NOT NULL,asset_id TEXT NOT NULL,PRIMARY KEY(album_id,asset_id));
+                CREATE TABLE hidden_media(asset_id TEXT PRIMARY KEY);
             ''')
             # FTS5's asset_id and import hashes are not indexed for this join. Materialize
             # indexed TEMP projections once, avoiding a full-library scan for every photo.
@@ -47,6 +51,10 @@ def snapshot(catalog, device: str) -> Path:
             source.execute('BEGIN')
             source.execute('INSERT INTO snapshot_text SELECT asset_id,body FROM search_text')
             source.execute("INSERT INTO snapshot_media SELECT sha256,media,stamp FROM phone_import_items WHERE device=? AND state='received'", (device,))
+            source.execute('INSERT INTO snapshot_media SELECT asset_id,media,stamp FROM import_receipts WHERE device=?', (device,))
+            target.executemany('INSERT INTO albums VALUES (?,?,?)', (tuple(row) for row in source.execute('SELECT id,name,hidden FROM collections')))
+            target.executemany('INSERT INTO album_items VALUES (?,?)', (tuple(row) for row in source.execute('SELECT collection_id,asset_id FROM collection_items')))
+            target.executemany('INSERT INTO hidden_media VALUES (?)', (tuple(row) for row in source.execute('SELECT asset_id FROM hidden_media')))
             rows = source.execute(f'''SELECT a.id,l.relative,l.metadata,
                 coalesce((SELECT description FROM annotations WHERE asset_id=a.id ORDER BY id DESC LIMIT 1),'') description,
                 coalesce(s.body,'') body,
@@ -59,10 +67,10 @@ def snapshot(catalog, device: str) -> Path:
                 notes = json.loads(row['metadata'])
                 safe_notes = {key: notes[key] for key in METADATA if key in notes}
                 tags = catalog.effective_tags(source, row['id'])
-                cursor = target.execute('INSERT INTO photos VALUES (?,?,?,?,?,?,?)', (
-                    row['id'], Path(row['relative']).name, row['description'], json.dumps(safe_notes, ensure_ascii=False),
-                    json.dumps(tags, ensure_ascii=False), notes.get('date', ''), row['stage']))
-                searchable_metadata = ' '.join(str(notes.get(key, '')) for key in ('date', 'place', 'city', 'country'))
+                cursor = target.execute('INSERT INTO photos VALUES (?,?,?,?,?,?,?,?)', (
+                    row['id'], notes.get('original_filename') or Path(row['relative']).name, row['description'], json.dumps(safe_notes, ensure_ascii=False),
+                    json.dumps(tags, ensure_ascii=False), notes.get('date', ''), row['stage'], notes.get('media_kind','image')))
+                searchable_metadata = ' '.join(str(notes.get(key, '')) for key in ('date', 'place', 'city', 'country', 'source_folder'))
                 target.execute('INSERT INTO search_text(docid,id,body) VALUES (?,?,?)',
                                (cursor.lastrowid, row['id'], row['body'] + ' ' + searchable_metadata))
                 target.executemany('INSERT INTO phone_media VALUES (?,?,?)', (

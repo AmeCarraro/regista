@@ -18,6 +18,7 @@ class MediaBackup(
     private val onStarting: () -> Unit = {},
     private val onFinished: () -> Unit = {},
 ) {
+    private val appContext = context.applicationContext
     private val files = MediaFiles(context.applicationContext)
     private val folders = BackupFolders(context.applicationContext)
     val busy get() = ACTIVE.get()
@@ -38,6 +39,7 @@ class MediaBackup(
     }
 
     fun start(): String {
+        if (PhotoImportService.running || PhotoImportStore(appContext).read().requested) return JSONObject().put("error", "Termina o interrompi l’importazione delle foto prima del backup completo.").toString()
         if (busy) return JSONObject().put("error", "Un backup è già in corso o si sta chiudendo.").toString()
         if (!memory.paired) return JSONObject().put("error", "Collega prima il telefono al PC.").toString()
         if (missingPermissions().isNotEmpty()) return JSONObject().put("error", "Per il backup completo servono i permessi per tutte le foto, video, audio e metadati originali.").toString()
@@ -213,6 +215,7 @@ class MediaBackup(
         val totalBytes: Long = 0, val error: String = "", val errors: List<String> = emptyList(), val warnings: List<String> = emptyList())
 
     companion object {
+        val running get() = ACTIVE.get()
         private val ACTIVE = AtomicBoolean(false)
         private val CANCELLED = AtomicBoolean(false)
         @Volatile private var status = Status()

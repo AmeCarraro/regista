@@ -93,6 +93,7 @@ export type Proposal =
 
 /** The events of POST /api/chat, one JSON object per line. */
 export type ChatEvent =
+  | { type: 'documents'; description: string; files: DocumentFile[]; total: number }
   | { type: 'start'; director: string | null; writer: string; loading: boolean }
   | { type: 'text'; text: string }
   | { type: 'step'; tool: string; arguments: Record<string, unknown> }
@@ -104,6 +105,9 @@ export type ChatEvent =
   | ({ type: 'proposal' } & Proposal)
   | { type: 'done'; model: string; seconds: number; tokens_per_second?: number; memory: string }
   | { type: 'error'; message: string }
+
+export type DocumentFile = { id: string; name: string; extension: string; day: string; size: number; tags: string[];
+  text_state: string; reason: string; origins: { name: string; folder: string; day: string; source: string }[] }
 
 /** What a change did, once carried out: in numbers, and in the words to show. */
 export type Outcome = {

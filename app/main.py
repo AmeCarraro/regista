@@ -223,6 +223,10 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="regista", docs_url=None, openapi_url=None, redoc_url=None, lifespan=lifespan)
 if CATALOG_ENABLED:
     from catalog_routes import routes as catalog_routes
+    from model_runtime import ModelRuntime, routes as model_routes
+    from photo_annotator import MODEL
+    model_runtime = ModelRuntime(MODEL, INDEX_DIR, index_jobs)
+    app.include_router(model_routes(model_runtime))
     app.include_router(catalog_routes(photo_catalog, index_jobs, Path(os.getenv("REGISTA_IMPORT_DIR", str(Path(PHOTOS_DIR) / "Importate dal telefono"))).resolve(),
                                      read_only=not actions.writable(), phones=phones))
     from image_questions import image_routes
@@ -269,7 +273,7 @@ class Gate:
             await outer(message)
 
         # an original from a phone is counted by who writes it to disk, as it arrives
-        if not (scope["method"] == "PUT" and path.startswith(("/phone/transfers/", "/phone/music/", "/phone/catalog/import", "/phone/media-backup/upload"))):
+        if not (scope["method"] == "PUT" and path.startswith(("/phone/transfers/", "/phone/music/", "/phone/catalog/import", "/phone/media-backup/upload", "/phone/imports/upload"))):
             most = PAIRING_BODY if path in PAIRING else BODY
             declared = headers.get(b"content-length", "")
             if declared.isdigit() and int(declared) > most:
@@ -506,6 +510,17 @@ async def chat(body: ChatRequest):
     Nothing is changed from here: a change is only proposed, and POST /api/actions carries it out.
     """
     async def events():
+        if CATALOG_ENABLED:
+            asked=next((message.content for message in reversed(body.messages) if message.role=='user'),'')
+            document_result=await asyncio.to_thread(photo_catalog.batch_imports.documents.chat,asked)
+            if document_result is not None:
+                yield document_result
+                count=document_result['total']
+                memory=(f"Ho trovato {count} {'documento' if count==1 else 'documenti'}. Scegli il file da aprire o scaricare."
+                        if count else 'Nessun documento corrispondente nei file importati. Prova il nome o altri termini.')
+                yield {'type':'text','text':memory}
+                yield {'type':'done','model':'','seconds':0,'memory':memory}
+                return
         installed = await llm.installed()
         history = [message.model_dump() for message in body.messages]
         tests = selftest.load(INDEX_DIR)
@@ -806,6 +821,8 @@ def forget_phone(device: str):
     """Shuts a phone out. Its key stops working at once."""
     if not phones.forget_device(device):
         raise HTTPException(status_code=404, detail="no such phone")
+    if photo_catalog is not None and hasattr(photo_catalog,'batch_imports'):
+        photo_catalog.batch_imports.cleanup.revoke(device)
     return {"forgotten": True}
 
 
@@ -835,7 +852,7 @@ def hello(request: Request):
     """Tells a phone that its key is good, and how many of its pictures this computer knows."""
     device = request.state.device
     result = {"computer": phones.computer, "photos": sum(1 for photo in phones.photos if photo["device"] == device)}
-    return {**result, "protocol": 2, "catalog": True} if CATALOG_ENABLED else result
+    return {**result, "protocol": 2, "catalog": True,"import_protocol":2,"addresses":phones.addresses} if CATALOG_ENABLED else result
 
 
 @app.post("/phone/library")

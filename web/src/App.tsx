@@ -7,6 +7,7 @@ import Composer from './Composer.tsx'
 import ImageQuestion from './ImageQuestion.tsx'
 import * as icons from './icons.tsx'
 import Catalog from './Catalog.tsx'
+import Documents from './Documents.tsx'
 import Kinds from './Kinds.tsx'
 import Music from './Music.tsx'
 import type { Answers } from './Proposal.tsx'
@@ -40,7 +41,7 @@ export default function App() {
   const [testing, setTesting] = useState<{ model: string; done: number; of: number } | null>(null)
   const [panel, setPanel] = useState(false)
   // the pictures by kind or the music in place of the chat: the chat stays as it was, and the music goes on
-  const [view, setView] = useState<View>(() => window.location.hash === '#catalogo' ? 'photos' : 'chat')
+  const [view, setView] = useState<View>(() => window.location.hash === '#documenti' ? 'documents' : window.location.hash === '#catalogo' ? 'photos' : 'chat')
   const controller = useRef<AbortController | null>(null)
   const nextId = useRef(1)
   const end = useRef<HTMLDivElement>(null)
@@ -344,7 +345,7 @@ export default function App() {
           view={shownView}
           onView={(chosen) => {
             setView(chosen)
-            window.history.replaceState(null, '', chosen === 'photos' ? '#catalogo' : '#')
+            window.history.replaceState(null, '', chosen === 'documents' ? '#documenti' : chosen === 'photos' ? '#catalogo' : '#')
             setPanel(false)
           }}
         />
@@ -370,6 +371,7 @@ export default function App() {
           {usingCatalog ? <Catalog visible={shownView === 'photos'} /> : <Kinds visible={shownView === 'photos'} />}
         </Shelf>
         <Music visible={shownView === 'music'} />
+        <Documents visible={shownView === 'documents'} />
         <Composer
           models={models}
           model={model}
