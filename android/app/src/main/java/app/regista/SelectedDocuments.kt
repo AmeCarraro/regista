@@ -29,17 +29,21 @@ class SelectedDocuments(private val context:Context) {
         check(edit.commit()) { "Non riesco a salvare la selezione." }
         return ids
     }
-    fun scan(onProblem:(String)->Unit):List<BackupMedia> =settings.all.mapNotNull { (id,value) ->
+    fun lookup(id: String, expected: String? = null): BackupMedia? {
+        val uri = settings.getString(id, null)?.let(Uri::parse) ?: return null
+        val row = info(uri) ?: return null
+        val stamp = hash(row.toString())
+        if (expected != null && stamp != expected) return null
+        val folder = runCatching { DocumentsContract.getDocumentId(uri).substringBeforeLast('/', "") }.getOrDefault("")
+        return BackupMedia(id, row.getString("name"), folder, "document", row.getLong("size"), context.contentResolver.getType(uri).orEmpty(), stamp,
+            current = { runCatching { info(uri)?.let { hash(it.toString()) } == stamp }.getOrDefault(false) },
+            open = { context.contentResolver.openInputStream(uri) ?: throw java.io.IOException("Originale non leggibile") },
+            day = MediaFiles.day(row.getLong("modified")), uri = uri)
+    }
+
+    fun scan(onProblem:(String)->Unit):List<BackupMedia> =settings.all.keys.mapNotNull { id ->
         try {
-            val uri=Uri.parse(value as String)
-            val row=info(uri) ?: throw java.io.IOException("Documento non leggibile")
-            val stamp=hash(row.toString())
-            val folder=runCatching { DocumentsContract.getDocumentId(uri).substringBeforeLast('/',"") }.getOrDefault("")
-            val modified=row.getLong("modified")
-            BackupMedia(id,row.getString("name"),folder,"document",row.getLong("size"),context.contentResolver.getType(uri).orEmpty(),stamp,
-                current={runCatching { info(uri)?.let { hash(it.toString()) }==stamp }.getOrDefault(false)},
-                open={context.contentResolver.openInputStream(uri) ?: throw java.io.IOException("Originale non leggibile")},
-                day=if(modified>0) java.text.SimpleDateFormat("yyyy-MM-dd",java.util.Locale.ROOT).format(java.util.Date(modified)) else "",uri=uri)
+            lookup(id) ?: throw java.io.IOException("Documento non leggibile")
         } catch(error:Exception) { onProblem("Documento selezionato: ${error.message.orEmpty()}"); null }
     }
 }

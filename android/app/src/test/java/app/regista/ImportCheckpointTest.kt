@@ -38,6 +38,14 @@ class ImportCheckpointTest {
         assertFalse(start().canResume("other-pc",""))
         assertFalse(start().copy(request="a").canResume("pc","b"))
     }
+    @Test fun aPausedDiscoveryKeepsItsWorkIdentityBeforeTheSelectionIsComplete() {
+        val partial = ImportCheckpoint(work = "original", peer = "pc", phase = "paused", request = "request")
+        assertTrue(partial.canResume("pc", ""))
+        assertTrue(partial.canResume("pc", "request"))
+        assertFalse(partial.canResume("pc", "another-request"))
+        assertFalse(partial.canResume("another-pc", ""))
+        assertFalse(partial.copy(phase = "done").canResume("pc", ""))
+    }
     @Test fun finalZipCanBeResumedAfterAllBytesWereAcknowledged() {
         val state=start().remaining.fold(start()) { current,id->current.confirmed(id,ImportOutcome.COPIED) }
             .copy(batch="archive",phase="paused")

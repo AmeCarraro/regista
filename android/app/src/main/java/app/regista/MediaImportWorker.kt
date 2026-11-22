@@ -17,14 +17,22 @@ class MediaImportWorker(private val context:Context,private val memory:Memory,pr
     @Volatile private var stopped=false
     @Volatile private var connection:HttpsURLConnection?=null
     private val peer=store.read().peer
-    private var scanner:MediaFiles?=null
+    private val kinds = when (store.read().scope) {
+        "documents" -> setOf("document")
+        "all-media" -> setOf("image", "video", "audio", "document")
+        else -> setOf("image", "video")
+    }
+    private val scanner = MediaFiles(context, kinds)
+    private val folders = BackupFolders(context)
+    private val documents = SelectedDocuments(context)
+    private val inventory = ImportInventory.open(context)
     private val routes=ImportConnections(memory,::changed,::cancelled)
     private fun value()=store.read()
     private fun cancelled()=stopped || !memory.paired || peer!=memory.fingerprint
     private fun check() { if (cancelled()) throw CancellationException() }
     fun cancel() {
         stopped=true
-        scanner?.cancel()
+        scanner.cancel()
         val active=connection
         if (active!=null) thread(name="disconnect media import") { active.disconnect() }
     }
@@ -41,35 +49,12 @@ class MediaImportWorker(private val context:Context,private val memory:Memory,pr
         var selected=routes.choose() ?: return false
         found(selected.computer)
         store.update(work) { it.copy(transport=selected.transport) }
-        val initialState = value()
-        val kinds=when(initialState.scope) { "documents" -> setOf("document"); "all-media" -> setOf("image","video","audio","document"); else -> setOf("image","video") }
-        val scan=MediaFiles(context,kinds)
-        scanner=scan
-        val needSources=!initialState.prepared || initialState.remaining.isNotEmpty()
-        val all=if(needSources) {
-            if(scan.missingPermissions().isNotEmpty()) throw ImportNeedsUser("Concedi l’accesso a foto e video nelle impostazioni, poi premi Riprendi importazione.")
-            phase("scanning","Leggo le raccolte e le cartelle autorizzate.")
-            val warnings=mutableListOf<String>()
-            val listed=if(kinds.any { it in setOf("image","video","audio") }) scan.scan(::cancelled,{ warnings+=it }) else emptyList()
-            val extra=BackupFolders(context).scan(::cancelled,{ warnings+=it }, kinds)
-            val documents=if("document" in kinds) SelectedDocuments(context).scan { warnings+=it } else emptyList()
-            if(warnings.isNotEmpty()) throw ImportNeedsUser(warnings.take(3).joinToString("; "))
-            (listed+extra+documents).distinctBy { it.media }.sortedWith(compareBy<BackupMedia> { it.day }.thenBy { it.media })
-        } else emptyList()
+        if (scanner.missingPermissions().isNotEmpty()) {
+            throw ImportNeedsUser("Concedi l’accesso ai file nelle impostazioni, poi premi Riprendi importazione.")
+        }
+        inventory.begin(work)
+        prepareSelection()
         check()
-        val prepared = store.update(work) { it.prepare(all.map { item->item.media }) }
-        val byId=all.associateBy { it.media }
-        val missing = prepared.remaining.filterNot { it in byId }
-        if (missing.isNotEmpty()) {
-            store.update(work) { it.confirmed(missing.associateWith { ImportOutcome.FAILED }) }
-            if (prepared.groups.isEmpty()) throw ImportNeedsUser("Alcuni file selezionati non sono più accessibili. Controlla cartelle e permessi, poi riprendi.")
-        }
-        if(prepared.groups.isEmpty() && prepared.remaining.isNotEmpty()) {
-            store.update(work) { state ->
-                val members=state.remaining.associateWith { id -> byId.getValue(id).let { ImportGroups.key(it.folder,it.kind,it.name) } }
-                state.copy(members=members,groups=members.values.groupingBy { it }.eachCount())
-            }
-        }
         if(value().request.isEmpty() && value().scope!="documents") {
             val pendingRequest=selected.computer.ask("GET","/phone/catalog/import-request",connectionChanged=::changed).optString("request_id")
             if(pendingRequest.isNotEmpty()) store.update(work) { it.copy(request=pendingRequest) }
@@ -77,7 +62,7 @@ class MediaImportWorker(private val context:Context,private val memory:Memory,pr
         for(group in value().groups.keys.sorted()) {
             if(group in value().finishedGroups) continue
             phase("starting","Preparo ${ImportGroups.label(group)}.")
-            selected=importGroup(selected,group,byId)
+            selected=importGroup(selected,group)
             progress(selected.computer,false)
         }
         check()
@@ -88,6 +73,39 @@ class MediaImportWorker(private val context:Context,private val memory:Memory,pr
         return true
     }
 
+    private fun prepareSelection() {
+        val initial = value()
+        if (initial.prepared && (initial.groups.isNotEmpty() || initial.remaining.isEmpty())) return
+        val individual = initial.prepared && initial.scope == "documents" && initial.remaining.all { it.startsWith("document:") }
+        fun found(count: Int) = phase("scanning", "$count file trovati nelle raccolte e nelle cartelle autorizzate.")
+        found(inventory.size())
+        val warnings = mutableListOf<String>()
+        if (!individual) {
+            if (kinds.any { it in setOf("image", "video", "audio") }) scanner.scan(::cancelled, { warnings += it }, inventory, ::found)
+            if (warnings.isNotEmpty()) throw ImportNeedsUser(warnings.take(3).joinToString("\n"))
+            folders.scanResumable(inventory, kinds, ::cancelled, ::found)
+        }
+        if ("document" in kinds && !inventory.selectedDocumentsRecorded()) {
+            val chosen = if (individual) initial.remaining.map { id ->
+                documents.lookup(id) ?: throw ImportNeedsUser("Un documento selezionato non è più accessibile.")
+            } else documents.scan { warnings += it }
+            if (warnings.isNotEmpty()) throw ImportNeedsUser(warnings.take(3).joinToString("\n"))
+            check()
+            inventory.saveDocuments(chosen.map { ImportInventory.Source(it) })
+        }
+        check()
+        val listed = inventory.selection()
+        val members = if (initial.prepared) {
+            val byId = listed.associateBy { it.media }
+            initial.remaining.associateWith { id ->
+                byId[id]?.group ?: throw ImportNeedsUser("Un file della selezione non è più accessibile.")
+            }
+        } else listed.associate { it.media to it.group }
+        store.update(work) {
+            it.prepare(members.keys.toList()).copy(members = members, groups = members.values.groupingBy { group -> group }.eachCount())
+        }
+    }
+
     private fun progress(computer:Computer,done:Boolean) {
         val state=value()
         if(state.request.isEmpty() || state.scope=="documents") return
@@ -95,7 +113,7 @@ class MediaImportWorker(private val context:Context,private val memory:Memory,pr
             .put("copied",state.copied).put("duplicates",state.duplicates).put("done",done),connectionChanged=::changed)
     }
 
-    private fun importGroup(initial:ImportConnection,group:String,byId:Map<String,BackupMedia>):ImportConnection {
+    private fun importGroup(initial:ImportConnection,group:String):ImportConnection {
         var selected=initial
         val starting=value()
         val scope=if(group.contains("-documents-")) "documents" else if(starting.scope=="all-media") "all-media" else "photos-videos"
@@ -114,7 +132,7 @@ class MediaImportWorker(private val context:Context,private val memory:Memory,pr
         for(ids in pending.chunked(100)) {
             check()
             routes.choose(usbOnly=true)?.let { selected=it; found(it.computer); store.update(work) { state->state.copy(transport=it.transport) } }
-            transferChunk(selected, batch, ids, byId)
+            transferChunk(selected, batch, ids)
         }
         check()
         val checkpoint = value()
@@ -131,8 +149,9 @@ class MediaImportWorker(private val context:Context,private val memory:Memory,pr
         return selected
     }
 
-    private fun transferChunk(selected: ImportConnection, batch: String, ids: List<String>, byId: Map<String, BackupMedia>) {
+    private fun transferChunk(selected: ImportConnection, batch: String, ids: List<String>) {
         val recorded = mutableMapOf<String, ImportOutcome>()
+        val stamps = inventory.stamps(ids)
         var warning = ""
         fun failed(media: String, message: String) {
             recorded[media] = ImportOutcome.FAILED
@@ -146,15 +165,21 @@ class MediaImportWorker(private val context:Context,private val memory:Memory,pr
             val hashed=mutableListOf<Hashed>()
             for(id in ids) {
                 check()
-                val item=byId[id] ?: continue
                 try {
+                    val expected = stamps[id]
+                    val item = when {
+                        id.startsWith("tree:") -> folders.importItem(id, expected)
+                        id.startsWith("document:") -> documents.lookup(id, expected)
+                        else -> scanner.lookup(id, expected)
+                    }
+                    if (item == null) throw ImportNeedsUser("Un file della selezione è cambiato o non è più accessibile.")
                     if(!item.current()) throw ImportNeedsUser("${item.name} è cambiato: riprova la selezione.")
                     val digest=BackupRules.hash(item.open(),::cancelled)
                     if(!item.current() || (item.size>=0 && item.size!=digest.bytes)) throw ImportNeedsUser("${item.name} è cambiato durante la lettura.")
                     hashed+=Hashed(item,digest)
                 } catch(error:Exception) {
                     if(cancelled() || error is CancellationException) throw CancellationException()
-                    failed(id,"${item.name}: ${error.message.orEmpty()}")
+                    failed(id, error.message ?: "Un file della selezione non è leggibile.")
                 }
             }
             if(hashed.isEmpty()) return

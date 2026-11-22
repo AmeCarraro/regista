@@ -2,6 +2,7 @@ package app.regista
 
 import android.content.Context
 import android.content.Intent
+import android.database.Cursor
 import android.net.Uri
 import android.provider.DocumentsContract
 import org.json.JSONArray
@@ -9,6 +10,7 @@ import org.json.JSONObject
 import java.io.IOException
 import java.security.MessageDigest
 import java.util.ArrayDeque
+import java.util.concurrent.CancellationException
 
 /** Extra explicitly-authorized directory trees, including media not indexed because of .nomedia. */
 class BackupFolders(private val context: Context) {
@@ -64,11 +66,12 @@ class BackupFolders(private val context: Context) {
         fun stamp() = hash("$id\u0000$name\u0000$mime\u0000$size\u0000$modified\u0000$flags")
     }
 
+    private fun entry(rows: Cursor) = Entry(rows.getString(0).orEmpty(), rows.getString(1).orEmpty(), rows.getString(2).orEmpty(),
+        if (rows.isNull(3)) -1 else rows.getLong(3), if (rows.isNull(4)) 0 else rows.getLong(4),
+        if (rows.isNull(5)) 0 else rows.getInt(5))
+
     private fun described(uri: Uri): Entry? = context.contentResolver.query(uri, COLUMNS, null, null, null)?.use { rows ->
-        if (!rows.moveToFirst()) return@use null
-        Entry(rows.getString(0).orEmpty(), rows.getString(1).orEmpty(), rows.getString(2).orEmpty(),
-            if (rows.isNull(3)) -1 else rows.getLong(3), if (rows.isNull(4)) 0 else rows.getLong(4),
-            if (rows.isNull(5)) 0 else rows.getInt(5))
+        if (rows.moveToFirst()) entry(rows) else null
     }
 
     private fun item(media: String, entry: Entry, folder: String, kind: String, document: Uri, rootKey: String,
@@ -113,9 +116,7 @@ class BackupFolders(private val context: Context) {
                             ?: throw IOException("Elenco della cartella non disponibile.")
                         cursor.use { rows ->
                             while (!cancelled() && rows.moveToNext()) {
-                                val entry = Entry(rows.getString(0).orEmpty(), rows.getString(1).orEmpty(), rows.getString(2).orEmpty(),
-                                    if (rows.isNull(3)) -1 else rows.getLong(3), if (rows.isNull(4)) 0 else rows.getLong(4),
-                                    if (rows.isNull(5)) 0 else rows.getInt(5))
+                                val entry = entry(rows)
                                 if (entry.id.isEmpty() || !allowed(tree, entry.id)) continue
                                 if (entry.directory) {
                                     pending.add(entry.id to "$relative/${BackupFolderPolicy.label(entry.name)}")
@@ -149,8 +150,100 @@ class BackupFolders(private val context: Context) {
         return files
     }
 
+    internal fun scanResumable(inventory: ImportInventory, kinds: Set<String>, cancelled: () -> Boolean, onFound: (Int) -> Unit) {
+        fun folder(tree: Uri, id: String, path: String, grant: String) =
+            ImportInventory.Folder("${tree.authority}:$id", tree.toString(), id, path, grant)
+
+        if (inventory.needsFolderRoots()) {
+            val selected = roots()
+            val initial = (0 until selected.length()).mapNotNull { index ->
+                val root = selected.optJSONObject(index) ?: return@mapNotNull null
+                val tree = Uri.parse(root.getString("uri"))
+                val id = DocumentsContract.getTreeDocumentId(tree)
+                val path = if (tree.authority == EXTERNAL) id else root.optString("name", "cartella")
+                folder(tree, id, path, root.getString("id"))
+            }
+            inventory.saveFolderRoots(initial)
+        }
+        while (true) {
+            if (cancelled()) throw CancellationException()
+            val directory = inventory.nextFolder() ?: return
+            val tree = Uri.parse(directory.tree)
+            if (!stillSelected(directory.grant) || !allowed(tree, directory.document)) {
+                throw ImportNeedsUser("Cartella non più autorizzata: ${directory.relative}.")
+            }
+            val seen = inventory.savedIn(directory)
+            val files = ArrayList<ImportInventory.FolderFile>(ImportInventory.PAGE_SIZE)
+            val children = mutableListOf<ImportInventory.Folder>()
+            val uri = DocumentsContract.buildChildDocumentsUriUsingTree(tree, directory.document)
+            val cursor = context.contentResolver.query(uri, COLUMNS, null, null, null)
+                ?: throw ImportNeedsUser("Cartella non leggibile: ${directory.relative}.")
+            cursor.use { rows ->
+                var checkpoint = directory
+                if (directory.position >= 0 && (!rows.moveToPosition(directory.position) || rows.getString(0) != directory.anchor)) {
+                    // The provider reordered the directory. Re-read only its listing, keeping the entries already saved.
+                    rows.moveToPosition(-1)
+                    checkpoint = directory.copy(position = -1, anchor = "")
+                }
+                var inPage = 0
+                while (rows.moveToNext()) {
+                    if (cancelled()) throw CancellationException()
+                    val entry = entry(rows)
+                    if (entry.id.isNotEmpty() && allowed(tree, entry.id)) {
+                        if (entry.directory) {
+                            children += folder(tree, entry.id, "${directory.relative}/${BackupFolderPolicy.label(entry.name)}", directory.grant)
+                        } else {
+                            val kind = MediaFiles.kind(entry.mime, entry.name)
+                            if (kind in kinds) {
+                                val media = "tree:" + hash("${tree.authority}\u0000${entry.id}")
+                                if (media !in seen) {
+                                    if (entry.virtual) throw ImportNeedsUser("${entry.name}: originale non disponibile.")
+                                    val document = DocumentsContract.buildDocumentUriUsingTree(tree, entry.id)
+                                    val file = item(media, entry, directory.relative, checkNotNull(kind), document, directory.grant)
+                                    val record = JSONObject().put("uri", document.toString()).put("root", directory.grant)
+                                        .put("stamp", file.stamp).put("kind", kind).put("folder", directory.relative).toString()
+                                    files += ImportInventory.FolderFile(ImportInventory.Source(file), record)
+                                }
+                            }
+                        }
+                    }
+                    inPage++
+                    if (inPage == ImportInventory.PAGE_SIZE) {
+                        checkpoint = directory.copy(position = rows.position, anchor = entry.id)
+                        inventory.saveFolder(checkpoint, files, children, false)
+                        files.clear()
+                        children.clear()
+                        inPage = 0
+                        onFound(inventory.size())
+                    }
+                }
+                if (cancelled()) throw CancellationException()
+                inventory.saveFolder(checkpoint, files, children, true)
+                onFound(inventory.size())
+            }
+        }
+    }
+
+    private fun record(media: String, stamp: String? = null): JSONObject? {
+        val indexed = ImportInventory.open(context).folderRecord(media)?.let(::JSONObject)
+        if (indexed != null && (stamp == null || indexed.optString("stamp") == stamp)) return indexed
+        return known.getString(media, null)?.let(::JSONObject)?.takeIf { stamp == null || it.optString("stamp") == stamp }
+    }
+
+    fun importItem(media: String, expected: String? = null): BackupMedia? {
+        val record = record(media, expected) ?: return null
+        val stamp = expected ?: record.getString("stamp")
+        val root = record.getString("root")
+        if (record.optString("stamp") != stamp || !stillSelected(root)) return null
+        val uri = Uri.parse(record.getString("uri"))
+        val entry = described(uri) ?: return null
+        if (entry.directory || entry.virtual || entry.stamp() != stamp) return null
+        val folder = record.optString("folder", entry.id.substringBeforeLast('/', ""))
+        return item(media, entry, folder, record.getString("kind"), uri, root, stamp)
+    }
+
     fun resolve(media:String,stamp:String):Pair<Uri,String>? {
-        val record=known.getString(media,null)?.let(::JSONObject) ?: return null
+        val record=record(media, stamp) ?: return null
         if(record.optString("stamp")!=stamp) return null
         val roots=roots()
         if(!(0 until roots.length()).any { roots.getJSONObject(it).optString("id")==record.optString("root") }) return null
@@ -160,7 +253,7 @@ class BackupFolders(private val context: Context) {
 
     /** Only originals on local storage can enter the phone removal flow. */
     fun cleanupItem(media: String, stamp: String): BackupMedia? {
-        val record = known.getString(media, null)?.let(::JSONObject) ?: return null
+        val record = record(media, stamp) ?: return null
         val root = record.getString("root")
         if (record.optString("stamp") != stamp || !stillSelected(root)) return null
         val uri = Uri.parse(record.getString("uri"))

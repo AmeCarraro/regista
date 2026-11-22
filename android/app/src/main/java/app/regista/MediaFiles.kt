@@ -57,17 +57,17 @@ class MediaFiles(private val context: Context,private val kinds:Set<String> = se
         return lookup(media, expected)?.let { item -> item.uri?.let { Pair(it, item.kind) } }
     }
 
-    fun lookup(media: String, expected: String): BackupMedia? {
+    fun lookup(media: String, expected: String? = null): BackupMedia? {
         val parts=media.split(':')
-        if(parts.size!=3 || parts[0] !in setOf("image","video") || parts[2].toLongOrNull()==null) return null
+        if(parts.size!=3 || parts[0] !in kinds || parts[2].toLongOrNull()==null) return null
         val volume=parts[1]
         if(Build.VERSION.SDK_INT>=29 && volume !in MediaStore.getExternalVolumeNames(context)) return null
-        val base=if(parts[0]=="image") MediaStore.Images.Media.getContentUri(volume) else MediaStore.Video.Media.getContentUri(volume)
+        val base = collection(parts[0], volume)
         val uri=ContentUris.withAppendedId(base,parts[2].toLong())
         val before = version(volume)
         if (before.isEmpty()) return null
         return context.contentResolver.query(uri, columns(parts[0]), null, null, null)?.use { rows ->
-            if (!rows.moveToFirst() || stamp(rows, volume, before) != expected) null
+            if (!rows.moveToFirst() || (expected != null && stamp(rows, volume, before) != expected)) null
             else item(rows, parts[0], volume, before, uri)
         }
     }
@@ -75,6 +75,12 @@ class MediaFiles(private val context: Context,private val kinds:Set<String> = se
     private fun version(volume: String): String = if (Build.VERSION.SDK_INT >= 29) {
         MediaStore.getVersion(context, volume).orEmpty()
     } else "legacy"
+
+    private fun collection(kind: String, volume: String): Uri = when (kind) {
+        "image" -> MediaStore.Images.Media.getContentUri(volume)
+        "audio" -> MediaStore.Audio.Media.getContentUri(volume)
+        else -> MediaStore.Video.Media.getContentUri(volume)
+    }
 
     private fun columns(kind:String): Array<String> = (listOf(
         MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.SIZE,
@@ -120,7 +126,8 @@ class MediaFiles(private val context: Context,private val kinds:Set<String> = se
             phonePath = "$physicalVolume:${listOf(folder, name).filter(String::isNotEmpty).joinToString("/")}")
     }
 
-    fun scan(cancelled: () -> Boolean, onProblem: (String) -> Unit, onFound: (Int) -> Unit = {}): List<BackupMedia> {
+    internal fun scan(cancelled: () -> Boolean, onProblem: (String) -> Unit,
+                      inventory: ImportInventory? = null, onFound: (Int) -> Unit = {}): List<BackupMedia> {
         val results = mutableListOf<BackupMedia>()
         val volumes = if (Build.VERSION.SDK_INT >= 29) MediaStore.getExternalVolumeNames(context).sorted() else listOf("external")
         if (volumes.isEmpty()) onProblem("Nessuna memoria multimediale disponibile: controlla la memoria del telefono e le schede SD.")
@@ -131,23 +138,41 @@ class MediaFiles(private val context: Context,private val kinds:Set<String> = se
             try {
                 val before = version(volume)
                 if (before.isEmpty()) throw IOException("Memoria non disponibile")
-                val collection = when (type) {
-                    "image" -> MediaStore.Images.Media.getContentUri(volume)
-                    "audio" -> MediaStore.Audio.Media.getContentUri(volume)
-                    else -> MediaStore.Video.Media.getContentUri(volume)
-                }
-                val cursor = context.contentResolver.query(collection, columns(type), null, null,
+                val collection = collection(type, volume)
+                val key = "media:$volume:$type"
+                var position = inventory?.collectionPosition(key, before) ?: ImportInventory.CollectionPosition(before)
+                if (position.done) continue
+                val page = ArrayList<ImportInventory.Source>(ImportInventory.PAGE_SIZE)
+                val filter = inventory?.let { "${MediaStore.MediaColumns._ID}>?" }
+                val arguments = inventory?.let { arrayOf(position.lastId.toString()) }
+                val cursor = context.contentResolver.query(collection, columns(type), filter, arguments,
                     "${MediaStore.MediaColumns._ID} ASC", signal) ?: throw IOException("Elenco non leggibile")
                 cursor.use { rows ->
                     while (rows.moveToNext()) {
                         if (cancelled()) throw CancellationException()
                         val id = rows.getLong(0)
                         val uri = ContentUris.withAppendedId(collection, id)
-                        results += item(rows, type, volume, before, uri)
-                        onFound(results.size)
+                        val file = item(rows, type, volume, before, uri)
+                        if (inventory == null) {
+                            results += file
+                            onFound(results.size)
+                        } else {
+                            page += ImportInventory.Source(file)
+                            position = position.copy(lastId = id)
+                            if (page.size == ImportInventory.PAGE_SIZE) {
+                                inventory.saveCollection(key, position, page)
+                                page.clear()
+                                onFound(inventory.size())
+                            }
+                        }
                     }
                 }
                 if (version(volume) != before) throw IOException("La memoria è cambiata durante la scansione: riprova")
+                if (inventory != null) {
+                    if (cancelled()) throw CancellationException()
+                    inventory.saveCollection(key, position.copy(done = true), page)
+                    onFound(inventory.size())
+                }
             } catch (error: Exception) {
                 if (cancelled()) throw CancellationException()
                 onProblem("$type · $volume: ${error.message ?: "lettura non riuscita"}")

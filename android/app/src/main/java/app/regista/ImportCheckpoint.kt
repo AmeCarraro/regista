@@ -46,7 +46,8 @@ data class ImportCheckpoint(
         )
     }
     fun canResume(fingerprint: String, remoteRequest: String) =
-        work.isNotEmpty() && peer == fingerprint && prepared && (remaining.isNotEmpty() || ((batch.isNotEmpty() || batches.isNotEmpty()) && phase != "done")) &&
+        work.isNotEmpty() && peer == fingerprint && phase != "done" &&
+            (!prepared || remaining.isNotEmpty() || batch.isNotEmpty() || batches.isNotEmpty()) &&
             (remoteRequest.isEmpty() || request == remoteRequest)
 }
 
