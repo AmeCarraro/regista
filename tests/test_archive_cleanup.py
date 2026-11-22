@@ -1,10 +1,11 @@
 import hashlib
-import json
+from datetime import date
 
 from fastapi import HTTPException
 import pytest
 
-from archive_cleanup import ArchiveCleanup,Candidate,Matched,CleanupChunk,CleanupResult
+from archive_cleanup import ArchiveCleanup, Candidate, CleanupChunk, CleanupResult, CleanupTarget, Matched
+from import_batches import ImportManifest, StartImport
 from test_import_batches import batches,sample,begin,send
 
 
@@ -90,3 +91,57 @@ def test_revoke_cancels_pending_cleanup_without_forgetting_archive(batches,tmp_p
     assert cleanup.status(job)['state']=='cancelled'
     assert batches.status(batch)['zip_ready']
     assert batches.catalog.path_of(item.sha256).is_file()
+
+
+def test_whatsapp_cleanup_filters_exact_origins_dates_and_individual_choices(batches, tmp_path):
+    photo, camera = sample(tmp_path)
+    normal_batch = begin(batches)
+    send(batches, normal_batch, photo, camera)
+    batches.finalize_sync(normal_batch)
+    archive = batches.zip_path(normal_batch)
+    original_zip = archive.read_bytes()
+    folder = 'Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Images'
+    older, kept, recent, undated = [
+        camera.model_copy(update={'media': f'tree:{label}', 'name': f'{label}.png', 'folder': folder})
+        for label in ('older', 'kept', 'recent', 'undated')
+    ]
+    video = camera.model_copy(update={'media': 'tree:video', 'name': 'received.mp4', 'kind': 'video', 'folder': folder})
+    sync = batches.start('phone-1', StartImport(work_id='wa', total=5, source='whatsapp'))['id']
+    manifest = ImportManifest(batch_id=sync, files=[older, kept, recent, undated, video])
+    assert batches.manifest('phone-1', manifest)['wanted'] == []
+    assert not batches.finalize_sync(sync)['zip_ready']
+
+    cleanup = ArchiveCleanup(batches)
+    target = CleanupTarget(device='phone-1', source='whatsapp', kind='image', until=date(2024, 12, 31))
+    job = cleanup.prepare('', target)['id']
+    batches.pool.submit(lambda: None).result(timeout=5)
+    candidates = cleanup.candidates('phone-1', job, 0)['files']
+    assert {row['media'] for row in candidates} == {item.media for item in (older, kept, recent, undated)}
+    receipts = {row['media']: row for row in candidates}
+
+    def candidate(item, day, source='file'):
+        return Candidate(**receipts[item.media], day=day, date_source=source, method='folder')
+
+    for outside in (candidate(recent, '2025-01-01'), candidate(undated, None, ''),
+                    candidate(older, '2024-12-30', 'capture')):
+        with pytest.raises(HTTPException, match='data'):
+            cleanup.matched('phone-1', Matched(job_id=job, files=[outside], finished=False))
+    cleanup.matched('phone-1', Matched(job_id=job, files=[candidate(older, '2024-12-31'), candidate(kept, '2023-08-03')]))
+    assert cleanup.confirm(job, True, keep=[kept.media])['selected'] == 1
+    with pytest.raises(HTTPException, match='confermata'):
+        cleanup.authorize('phone-1', CleanupChunk(job_id=job, media=[older.media, kept.media]))
+    result = cleanup.authorize('phone-1', CleanupChunk(job_id=job, media=[older.media]))
+    assert [item['media'] for item in result['files']] == [older.media]
+    assert archive.read_bytes() == original_zip
+    assert batches.catalog.path_of(camera.sha256).is_file()
+
+
+def test_only_selected_files_and_current_pc_copies_allow_authorization(batches, tmp_path):
+    cleanup, batch, job, item = ready_cleanup(batches, tmp_path)
+    cleanup.matched('phone-1', Matched(job_id=job, files=[item]))
+    with pytest.raises(HTTPException, match='almeno un file'):
+        cleanup.confirm(job, True, only=[])
+    cleanup.confirm(job, True, only=[item.media])
+    batches.zip_path(batch).write_bytes(b'changed after confirmation')
+    with pytest.raises(HTTPException, match='ZIP'):
+        cleanup.authorize('phone-1', CleanupChunk(job_id=job, media=[item.media]))

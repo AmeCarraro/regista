@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import type { CatalogRequest } from './catalogApi.ts'
+import type { TagUsage } from './CatalogTags.tsx'
 
 type Preview = { preview_id: string; count: number; tags: string[]; album: string; hidden: boolean | null; sample_ids: string[] }
-export default function CatalogBulk({ selected, plan, total, request, onChanged }: {
-  selected: string[]; plan: Record<string, unknown>; total: number; request: CatalogRequest; onChanged: () => Promise<void>
+export default function CatalogBulk({ selected, plan, total, request, knownTags, onChanged }: {
+  selected: string[]; plan: Record<string, unknown>; total: number; request: CatalogRequest; knownTags: TagUsage[]; onChanged: () => Promise<void>
 }) {
   const selectionKey = JSON.stringify([selected, plan])
   const [allFor, setAllFor] = useState('')
@@ -28,6 +29,10 @@ export default function CatalogBulk({ selected, plan, total, request, onChanged 
     <label className="catalog-check"><input type="checkbox" checked={all} onChange={e => setAllFor(e.target.checked ? selectionKey : '')} />Tutti i {total} risultati della ricerca, comprese le altre pagine</label>
     <div className="catalog-filters">
       <label>Tag separati da virgole<input value={tags} onChange={e => setTags(e.target.value)} placeholder="Skopje, Macedonia" maxLength={4000} /></label>
+      <label>Aggiungi un tag esistente<select value="" onChange={event => {
+        const tag = event.target.value
+        if (tag) setTags(before => [...new Set([...before.split(',').map(value => value.trim()).filter(Boolean), tag])].join(', '))
+      }}><option value="">Scegli un tag</option>{knownTags.map(item => <option key={item.tag} value={item.tag}>{item.tag} ({item.count})</option>)}</select></label>
       <label>Album / cartella virtuale<input value={album} onChange={e => setAlbum(e.target.value)} placeholder="Viaggio a Skopje" maxLength={120} /></label>
       <label>Visibilità<select value={visibility} onChange={e => setVisibility(e.target.value)}><option value="keep">Mantieni</option><option value="hide">Nascondi dalla vista generale</option><option value="show">Rendi visibili</option></select></label>
     </div>

@@ -84,7 +84,7 @@ class MediaImportWorker(private val context:Context,private val memory:Memory,pr
         if(value().remaining.isNotEmpty()) throw ImportNeedsUser("Restano file da verificare. Le copie già confermate rimangono salvate; premi Riprendi.")
         progress(selected.computer,true)
         store.update(work) { it.copy(requested=false,phase="done",failed=0,failedMedia=emptyList(),
-            message="Importazione completata. ${it.finishedGroups.size} blocchi con copie normali e ZIP verificati sul PC.") }
+            message="Importazione completata. ${it.finishedGroups.size} blocchi verificati. Gli eventuali nuovi ZIP sono sul PC.") }
         return true
     }
 

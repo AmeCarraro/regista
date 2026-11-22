@@ -71,6 +71,21 @@ class BackupFolders(private val context: Context) {
             if (rows.isNull(5)) 0 else rows.getInt(5))
     }
 
+    private fun item(media: String, entry: Entry, folder: String, kind: String, document: Uri, rootKey: String): BackupMedia {
+        val version = entry.stamp()
+        val modified = MediaFiles.day(entry.modified)
+        return BackupMedia(media, entry.name.ifBlank { "file" }.take(500), folder.take(2000), kind,
+            entry.size, entry.mime.ifBlank { "application/octet-stream" }, version,
+            current = { stillSelected(rootKey) && described(document)?.stamp() == version },
+            open = { MediaFiles.openOriginal(context, document, kind) }, day = modified, uri = document,
+            modifiedDay = modified, phonePath = if (document.authority == EXTERNAL) entry.id else "")
+    }
+
+    private fun stillSelected(rootKey: String): Boolean {
+        val selected = roots()
+        return (0 until selected.length()).any { selected.optJSONObject(it)?.optString("id") == rootKey }
+    }
+
     fun scan(cancelled: () -> Boolean, onProblem: (String) -> Unit): List<BackupMedia> {
         val files = mutableListOf<BackupMedia>()
         val visited = HashSet<String>()
@@ -116,19 +131,9 @@ class BackupFolders(private val context: Context) {
                                 val version = entry.stamp()
                                 val rootKey = root.optString("id")
                                 val media="tree:" + hash("${tree.authority}\u0000${entry.id}")
-                                remembered.putString(media,JSONObject().put("uri",document.toString()).put("root",rootKey).put("stamp",version).put("kind",kind).toString())
-                                files += BackupMedia(media = media,
-                                    name = entry.name.ifBlank { "file" }.take(500), folder = relative.take(2000), kind = kind,
-                                    size = entry.size, mime = entry.mime.ifBlank { "application/octet-stream" }, stamp = version,
-                                    current = {
-                                        runCatching {
-                                            val selected = this@BackupFolders.roots()
-                                            (0 until selected.length()).any { selected.optJSONObject(it)?.optString("id") == rootKey } &&
-                                                described(document)?.stamp() == version
-                                        }.getOrDefault(false)
-                                    },
-                                    open = { MediaFiles.openOriginal(context, document, kind) },
-                                    day=if(entry.modified>0) java.text.SimpleDateFormat("yyyy-MM-dd",java.util.Locale.ROOT).format(java.util.Date(entry.modified)) else "",uri=document)
+                                remembered.putString(media, JSONObject().put("uri", document.toString()).put("root", rootKey)
+                                    .put("stamp", version).put("kind", kind).put("folder", relative).toString())
+                                files += item(media, entry, relative, kind, document, rootKey)
                             }
                         }
                     } catch (error: Exception) {
@@ -152,7 +157,36 @@ class BackupFolders(private val context: Context) {
         return if(described(uri)?.stamp()==stamp) Pair(uri,record.getString("kind")) else null
     }
 
+    /** Only originals on local storage can enter the phone removal flow. */
+    fun cleanupItem(media: String, stamp: String): BackupMedia? {
+        val record = known.getString(media, null)?.let(::JSONObject) ?: return null
+        val root = record.getString("root")
+        if (record.optString("stamp") != stamp || !stillSelected(root)) return null
+        val uri = Uri.parse(record.getString("uri"))
+        if (uri.authority != EXTERNAL) return null
+        val entry = described(uri) ?: return null
+        if (entry.directory || entry.virtual || entry.stamp() != stamp || !supportsDelete(entry)) return null
+        val folder = record.optString("folder", entry.id.substringBeforeLast('/', ""))
+        return item(media, entry, folder, record.getString("kind"), uri, root)
+    }
+
+    private fun supportsDelete(entry: Entry): Boolean = entry.flags and DocumentsContract.Document.FLAG_SUPPORTS_DELETE != 0
+
+    /** Rebind the exact same document to the tree the user just authorized for writing. */
+    fun writableDocument(document: Uri, selectedTree: Uri): Uri? {
+        if (document.authority != EXTERNAL || selectedTree.authority != EXTERNAL || !DocumentsContract.isTreeUri(selectedTree)) return null
+        val oldRoot = DocumentsContract.getTreeDocumentId(document)
+        val newRoot = DocumentsContract.getTreeDocumentId(selectedTree)
+        val file = DocumentsContract.getDocumentId(document)
+        if (!under(newRoot, oldRoot) || !under(file, newRoot) || file == newRoot || !allowed(selectedTree, file)) return null
+        val target = DocumentsContract.buildDocumentUriUsingTree(selectedTree, file)
+        val entry = described(target) ?: return null
+        return if (!entry.directory && !entry.virtual && supportsDelete(entry)) target else null
+    }
+
     companion object {
+        private const val EXTERNAL = "com.android.externalstorage.documents"
+        private fun under(file: String, folder: String): Boolean = file == folder || file.startsWith(folder.trimEnd('/') + "/")
         private val COLUMNS = arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME,
             DocumentsContract.Document.COLUMN_MIME_TYPE, DocumentsContract.Document.COLUMN_SIZE,
             DocumentsContract.Document.COLUMN_LAST_MODIFIED, DocumentsContract.Document.COLUMN_FLAGS)

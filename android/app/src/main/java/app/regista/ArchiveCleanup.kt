@@ -1,10 +1,15 @@
 package app.regista
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Process
+import android.provider.DocumentsContract
 import android.provider.MediaStore
 import org.json.JSONArray
 import org.json.JSONObject
@@ -12,153 +17,311 @@ import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
-/** A PC ZIP proposal can only reach Android's system trash dialog after fresh SHA checks on both sides. */
-class ArchiveCleanup(private val app:MainActivity,private val memory:Memory,private val tell:(String)->Unit) {
-    private val settings=app.getSharedPreferences("archive-cleanup",Context.MODE_PRIVATE)
-    private val busy=AtomicBoolean(false)
-    @Volatile private var scanning:MediaFiles?=null
-    @Volatile private var enabled=false
-    @Volatile private var last=0L
-    private fun stopped(peer:String)=!enabled || !memory.paired || memory.fingerprint!=peer
-    fun start() { enabled=true }
-    fun stop() { enabled=false; scanning?.cancel() }
+/** Review the exact imported phone copies, then require a local confirmation for each removal method. */
+class ArchiveCleanup(private val app: MainActivity, private val memory: Memory, private val tell: (String) -> Unit) {
+    private val settings = app.getSharedPreferences("archive-cleanup", Context.MODE_PRIVATE)
+    private val busy = AtomicBoolean(false)
+    private val folders = BackupFolders(app)
+    private val media = MediaFiles(app, setOf("image", "video"))
+    @Volatile private var enabled = false
+    @Volatile private var last = 0L
+    @Volatile private var inDialog = false
+    @Volatile private var writeRequest: WriteRequest? = null
+    @Volatile private var writeAccess: Pair<String, Uri>? = null
+    @Volatile private var folderConsent = ""
+    private data class WriteRequest(val job: String, val peer: String, val original: Uri)
+    private data class Checked(val file: BackupMedia, val receipt: JSONObject)
 
-    fun poll(computer:Computer?) {
-        if(computer==null || !enabled || PhotoImportService.running || Build.VERSION.SDK_INT<30) return
-        if(System.currentTimeMillis()-last<4000 || !busy.compareAndSet(false,true)) return
-        last=System.currentTimeMillis()
-        val peer=memory.fingerprint
-        thread(name="ZIP originals check") {
+    private fun stopped(peer: String) = !enabled || !memory.paired || memory.fingerprint != peer || PhotoImportService.running
+    fun start() { enabled = true }
+    fun stop() { enabled = false; folderConsent = "" }
+
+    fun poll(computer: Computer?) {
+        if (computer == null || !enabled || PhotoImportService.running || inDialog || writeRequest != null) return
+        if (System.currentTimeMillis() - last < 3000 || !busy.compareAndSet(false, true)) return
+        last = System.currentTimeMillis()
+        val peer = memory.fingerprint
+        thread(name = "phone originals review") {
             try {
-                val pending=settings.getString("pending",null)?.let(::JSONObject)
-                if(pending!=null) {
-                    if(pending.optString("peer")!=peer) return@thread
-                    if(pending.optString("phase")=="result") report(computer,pending)
-                    // A launched Android question must receive its own activity result, never an automatic yes.
+                val pending = settings.getString("pending", null)?.let(::JSONObject)
+                if (pending != null) {
+                    if (pending.optString("peer") != peer) settings.edit().remove("pending").commit()
+                    else if (pending.optString("phase") == "result") report(computer, pending)
                     return@thread
                 }
-                val job=computer.ask("GET","/phone/import-cleanup").optJSONObject("job") ?: return@thread
-                if(stopped(peer)) return@thread
-                when(job.getString("state")) {
-                    "finding" -> match(computer,job,peer)
-                    "approved" -> authorize(computer,job,peer)
+                val job = computer.ask("GET", "/phone/import-cleanup?protocol=2").optJSONObject("job")
+                if (job == null) {
+                    writeAccess = null
+                    folderConsent = ""
+                    return@thread
                 }
-            } catch(error:Exception) {
-                if(error is Refused && error.status in setOf(404,409) && settings.getString("pending",null)?.let { JSONObject(it).optString("phase")=="result" }==true)
+                if (stopped(peer)) return@thread
+                when (job.getString("state")) {
+                    "finding" -> match(computer, job, peer)
+                    "approved" -> applyApproved(computer, job, peer)
+                }
+            } catch (error: Exception) {
+                if (error is Refused && error.status in setOf(404, 409) && settings.getString("pending", null)
+                        ?.let { JSONObject(it).optString("phase") == "result" } == true) {
                     settings.edit().remove("pending").commit()
-                if(!stopped(peer)) tell("Verifica originali: ${error.message.orEmpty()}")
-            } finally { scanning=null; busy.set(false) }
+                }
+                if (!stopped(peer)) tell("Verifica originali: ${error.message.orEmpty()}")
+            } finally { busy.set(false) }
         }
     }
 
-    private fun sources(peer:String):List<BackupMedia> {
-        val scanner=MediaFiles(app,setOf("image","video"))
-        scanning=scanner
-        if(scanner.missingPermissions().isNotEmpty()) throw IOException("Concedi l’accesso completo a foto e video per verificare gli originali.")
-        val warnings=mutableListOf<String>()
-        val files=scanner.scan({stopped(peer)},{warnings+=it})
-        if(warnings.isNotEmpty()) throw IOException(warnings.first())
-        return files
+    private fun locate(receipt: JSONObject): BackupMedia? {
+        val id = receipt.getString("media")
+        val stamp = receipt.getString("stamp")
+        val item = if (id.startsWith("tree:")) folders.cleanupItem(id, stamp)
+            else if (Build.VERSION.SDK_INT >= 30) media.lookup(id, stamp) else null
+        return item?.takeIf {
+            it.uri != null && it.name == receipt.getString("name") && it.folder == receipt.getString("folder") &&
+                it.kind == receipt.getString("kind") && (it.size < 0 || it.size == receipt.getLong("size"))
+        }
     }
 
-    private fun digest(item:BackupMedia,peer:String):String? {
-        if(stopped(peer) || item.uri==null || !item.current()) return null
-        val hashed=BackupRules.hash(item.open(),{stopped(peer)})
-        return if(!stopped(peer) && item.current() && (item.size<0 || hashed.bytes==item.size)) hashed.sha256 else null
+    private fun day(file: BackupMedia) = CleanupDates.forFile(
+        ImportGroups.source(file.folder) == "whatsapp", file.name, file.modifiedDay, file.day)
+
+    private fun unchanged(item: BackupMedia, receipt: JSONObject, peer: String): Boolean {
+        if (stopped(peer) || !item.current()) return false
+        val digest = BackupRules.hash(item.open()) { stopped(peer) }
+        return !stopped(peer) && item.current() && digest.bytes == receipt.getLong("size") &&
+            digest.sha256 == receipt.getString("sha256")
     }
 
-    private fun match(computer:Computer,job:JSONObject,peer:String) {
-        val allowed=job.getJSONArray("allowed").let { values -> (0 until values.length()).map { values.getString(it) }.toSet() }
-        val found=JSONArray()
-        val files=sources(peer)
-        for((index,item) in files.withIndex()) {
-            if(stopped(peer)) return
-            if(index%20==0) tell("Controllo originali dello ZIP: ${index+1} / ${files.size}. Nessun file viene eliminato.")
-            val sha=try { digest(item,peer) } catch(_:IOException) { null }
-            if(sha!=null && sha in allowed) found.put(JSONObject().put("media",item.media).put("stamp",item.stamp)
-                .put("sha256",sha).put("name",item.name).put("folder",item.folder).put("kind",item.kind))
-        }
-        if(stopped(peer)) return
-        computer.ask("POST","/phone/import-cleanup/matched",JSONObject().put("job_id",job.getString("id")).put("files",found))
-        tell("Trovati ${found.length()} originali dello ZIP. Controlla l’anteprima e conferma sul PC.")
+    private fun match(computer: Computer, job: JSONObject, peer: String) {
+        val id = job.getString("id")
+        val policy = job.getJSONObject("policy")
+        val since = policy.optString("since").takeUnless { it == "null" }.orEmpty()
+        val until = policy.optString("until").takeUnless { it == "null" }.orEmpty()
+        val seenPaths = mutableSetOf<String>()
+        var offset = 0
+        var total = 0
+        var unknown = 0
+        var complete: Boolean
+        do {
+            val candidates = computer.ask("GET", "/phone/import-cleanup/candidates?job_id=$id&offset=$offset").getJSONArray("files")
+            val found = JSONArray()
+            for (index in 0 until candidates.length()) {
+                if (stopped(peer)) return
+                val receipt = candidates.getJSONObject(index)
+                val item = runCatching { locate(receipt) }.getOrNull() ?: continue
+                val physical = item.phonePath.ifEmpty { item.media }
+                if (physical in seenPaths) continue
+                val day = day(item)
+                if (!CleanupDates.includes(day, since, until)) {
+                    if (day.date.isEmpty()) unknown++
+                    continue
+                }
+                if (!runCatching { unchanged(item, receipt, peer) }.getOrDefault(false)) continue
+                seenPaths.add(physical)
+                val method = if (item.media.startsWith("tree:")) "folder" else "trash"
+                found.put(receipt.put("day", day.date.takeIf { it.isNotEmpty() } ?: JSONObject.NULL)
+                    .put("date_source", day.source).put("method", method))
+            }
+            if (stopped(peer)) return
+            offset += candidates.length()
+            total += found.length()
+            complete = candidates.length() < PAGE
+            computer.ask("POST", "/phone/import-cleanup/matched", JSONObject().put("job_id", id)
+                .put("files", found).put("finished", complete))
+            tell(if (complete) "Anteprima pronta sul PC: $total file trovati. ${if (unknown > 0) "$unknown file senza data restano sul telefono." else ""}"
+                else "Controllo originali sul Redmi: $offset verificati per la selezione.")
+        } while (!complete && !stopped(peer))
     }
 
-    private fun authorize(computer:Computer,job:JSONObject,peer:String) {
-        val expected=job.getJSONArray("files")
-        if(expected.length()==0) {
-            computer.ask("POST","/phone/import-cleanup/result",JSONObject().put("job_id",job.getString("id")).put("media",JSONArray()).put("done",true))
-            return
-        }
-        val current=sources(peer).associateBy { it.media }
-        val files=JSONArray()
-        val uris=mutableListOf<Uri>()
-        for(index in 0 until minOf(200,expected.length())) {
-            val original=expected.getJSONObject(index)
-            val item=current[original.getString("media")] ?: throw IOException("Un originale non è più disponibile. Annulla sul PC e ricontrolla il blocco.")
-            if(item.stamp!=original.getString("stamp") || digest(item,peer)!=original.getString("sha256"))
-                throw IOException("${item.name} è cambiato. Nessuna eliminazione autorizzata per questo gruppo.")
-            files.put(original.put("uri",item.uri.toString()))
-            uris+=item.uri!!
-        }
-        if(stopped(peer)) return
-        val ids=JSONArray((0 until files.length()).map { files.getJSONObject(it).getString("media") })
-        val approval=computer.ask("POST","/phone/import-cleanup/authorize",JSONObject().put("job_id",job.getString("id")).put("media",ids))
-        if(!approval.optBoolean("authorized") || !approval.optBoolean("requires_android_confirmation")) throw IOException("Manca la conferma del PC.")
-        // Check identity again after the potentially long PC ZIP verification.
-        if(files.let { (0 until it.length()).any { i -> current[it.getJSONObject(i).getString("media")]?.current()!=true } })
-            throw IOException("Un originale è cambiato durante la verifica del PC.")
-        val pending=JSONObject().put("job",job.getString("id")).put("peer",peer).put("files",files)
-            .put("phase","question").put("last",files.length()==expected.length())
-        app.runOnUiThread {
-            if(stopped(peer) || settings.contains("pending")) return@runOnUiThread
-            try {
-                val question=MediaStore.createTrashRequest(app.contentResolver,uris,true)
-                settings.edit().putString("pending",pending.toString()).commit()
-                app.startIntentSenderForResult(question.intentSender,REQUEST,null,0,0,0)
-            } catch(error:Exception) {
-                settings.edit().remove("pending").commit()
-                tell("Gli originali restano sul telefono: ${error.message.orEmpty()}")
+    private fun applyApproved(computer: Computer, job: JSONObject, peer: String) {
+        val id = job.getString("id")
+        val files = job.getJSONArray("files")
+        if (files.length() == 0) return
+        val method = files.getJSONObject(0).getString("method")
+        val group = (0 until files.length()).map(files::getJSONObject).takeWhile { it.getString("method") == method }
+        try {
+            if (method == "folder") {
+                val first = locate(group.first())?.uri ?: throw IOException("Un originale è cambiato. Ricrea l’anteprima dal PC.")
+                val grant = writeAccess?.takeIf { it.first == id }?.second
+                if (grant == null || folderUri(first, grant) == null) {
+                    askForFolder(WriteRequest(id, peer, first))
+                    return
+                }
+                if (folderConsent != id) {
+                    askForDeletion(id, peer, job.getInt("folder_remaining"))
+                    return
+                }
+                // Other folders, if selected, need their own grant and confirmation.
+                val checked = checked(group, peer).takeWhile { folderUri(it.file.uri!!, grant) != null }
+                if (checked.isEmpty()) throw IOException("Il telefono non concede la rimozione in questa cartella.")
+                authorize(computer, id, checked)
+                removeFromFolder(id, peer, checked, grant)
+            } else {
+                val checked = checked(group, peer)
+                authorize(computer, id, checked)
+                if (checked.any { !it.file.current() }) throw IOException("Un file è cambiato durante la verifica.")
+                askForTrash(id, peer, checked)
+            }
+        } catch (error: Exception) {
+            if (!stopped(peer)) {
+                recordResult(id, peer, JSONArray(), true, error.message.orEmpty())
+                tell("Pulizia interrotta. ${error.message.orEmpty()}")
             }
         }
     }
 
-    fun answered(result:Int) {
-        val pending=settings.getString("pending",null)?.let(::JSONObject) ?: return
-        pending.put("phase","result").put("yes",result==Activity.RESULT_OK)
-        settings.edit().putString("pending",pending.toString()).commit()
-        last=0
-        tell(if(result==Activity.RESULT_OK) "Android ha confermato il cestino. Verifico il risultato." else "Hai annullato: gli originali restano sul telefono.")
+    private fun checked(group: List<JSONObject>, peer: String): List<Checked> = group.map { receipt ->
+        val item = locate(receipt) ?: throw IOException("Un originale è cambiato. Ricrea l’anteprima dal PC.")
+        val currentDay = day(item)
+        if (currentDay.date != receipt.optString("day") || currentDay.source != receipt.optString("date_source") ||
+            !unchanged(item, receipt, peer)) throw IOException("${item.name} è cambiato. Ricrea l’anteprima dal PC.")
+        Checked(item, receipt)
     }
 
-    /** Restore safely after activity/process recreation: inspect the result; never relaunch a saved approval. */
-    fun recover() {
-        val pending=settings.getString("pending",null)?.let(::JSONObject) ?: return
-        if(pending.optString("phase")=="question") {
-            pending.put("phase","result").put("yes",false)
-            settings.edit().putString("pending",pending.toString()).commit()
+    private fun authorize(computer: Computer, id: String, checked: List<Checked>) {
+        val ids = JSONArray(checked.map { it.file.media })
+        val approval = computer.ask("POST", "/phone/import-cleanup/authorize", JSONObject().put("job_id", id).put("media", ids))
+        if (!approval.optBoolean("authorized") || !approval.optBoolean("requires_android_confirmation"))
+            throw IOException("Manca la nuova verifica sul PC.")
+    }
+
+    private fun folderUri(original: Uri, grant: Uri): Uri? {
+        val uri = folders.writableDocument(original, grant) ?: return null
+        return uri.takeIf { app.checkUriPermission(uri, Process.myPid(), Process.myUid(), Intent.FLAG_GRANT_WRITE_URI_PERMISSION) == PackageManager.PERMISSION_GRANTED }
+    }
+
+    private fun askForFolder(request: WriteRequest) = app.runOnUiThread {
+        if (stopped(request.peer) || inDialog) return@runOnUiThread
+        inDialog = true
+        folderConsent = ""
+        AlertDialog.Builder(app).setTitle("Autorizza la cartella di questa selezione")
+            .setMessage("Alcuni file sono nelle cartelle lette direttamente. Apri il selettore Android e autorizza la cartella originale per questa pulizia.")
+            .setPositiveButton("Scegli la cartella") { _, _ ->
+                writeRequest = request
+                try {
+                    app.startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                        .putExtra(Intent.EXTRA_LOCAL_ONLY, true)
+                        .putExtra(DocumentsContract.EXTRA_INITIAL_URI, request.original), WRITE_REQUEST)
+                } catch (_: Exception) {
+                    writeRequest = null
+                    recordResult(request.job, request.peer, JSONArray(), true, "Selettore delle cartelle non disponibile.")
+                }
+            }
+            .setNegativeButton("Annulla") { _, _ -> recordResult(request.job, request.peer, JSONArray(), true) }
+            .setOnCancelListener { recordResult(request.job, request.peer, JSONArray(), true) }
+            .setOnDismissListener { inDialog = false }.show()
+    }
+
+    fun folderAnswered(result: Int, data: Intent?) {
+        val request = writeRequest ?: return
+        writeRequest = null
+        val tree = data?.data
+        if (result != Activity.RESULT_OK || tree == null || runCatching { folderUri(request.original, tree) }.getOrNull() == null) {
+            recordResult(request.job, request.peer, JSONArray(), true, "Il Redmi non ha concesso accesso in scrittura alla cartella selezionata.")
+            tell("Autorizza la stessa cartella usata per l’importazione e ricrea l’anteprima.")
+            return
+        }
+        // This write grant is transient. The ordinary backup keeps only the read permission.
+        writeAccess = request.job to tree
+        last = 0
+    }
+
+    private fun askForDeletion(id: String, peer: String, count: Int) = app.runOnUiThread {
+        if (stopped(peer) || inDialog) return@runOnUiThread
+        inDialog = true
+        AlertDialog.Builder(app).setTitle("Conferma rimozione dal Redmi")
+            .setMessage("Rimuovere i file selezionati nelle cartelle autorizzate? Restano $count file di questo tipo. Android li elimina direttamente dalla cartella. Per recuperarli usa le copie e gli ZIP verificati sul PC.")
+            .setPositiveButton("Elimina dal Redmi") { _, _ -> if (!stopped(peer)) { folderConsent = id; last = 0 } }
+            .setNegativeButton("Conserva") { _, _ -> recordResult(id, peer, JSONArray(), true) }
+            .setOnCancelListener { recordResult(id, peer, JSONArray(), true) }
+            .setOnDismissListener { inDialog = false }.show()
+    }
+
+    private fun removeFromFolder(id: String, peer: String, checked: List<Checked>, grant: Uri) {
+        val removed = JSONArray()
+        // A restart records the partial result and requires a fresh review for any further removal.
+        val progress = JSONObject().put("job", id).put("peer", peer).put("phase", "removing").put("media", removed)
+        savePending(progress)
+        var error = ""
+        try {
+            for (item in checked) {
+                if (folderConsent != id || !unchanged(item.file, item.receipt, peer))
+                    throw IOException("La conferma o l’identità del file non è più valida.")
+                val uri = folderUri(item.file.uri!!, grant) ?: throw IOException("Il permesso di rimozione è cambiato.")
+                if (stopped(peer) || folderConsent != id || !item.file.current()) throw IOException("Pulizia interrotta sul telefono.")
+                if (!DocumentsContract.deleteDocument(app.contentResolver, uri)) throw IOException("Android non ha rimosso ${item.file.name}.")
+                removed.put(item.file.media)
+                savePending(progress)
+            }
+        } catch (failure: Exception) { error = failure.message.orEmpty().ifBlank { "Pulizia interrotta." } }
+        recordResult(id, peer, removed, error.isNotEmpty(), error)
+        tell("Rimossi dal Redmi ${removed.length()} file. Copie e ZIP conservati sul PC.")
+    }
+
+    private fun askForTrash(id: String, peer: String, checked: List<Checked>) = app.runOnUiThread {
+        if (stopped(peer) || settings.contains("pending") || Build.VERSION.SDK_INT < 30) return@runOnUiThread
+        try {
+            val uris = checked.map { checkNotNull(it.file.uri) }
+            val question = MediaStore.createTrashRequest(app.contentResolver, uris, true)
+            val files = JSONArray(checked.map { JSONObject().put("media", it.file.media).put("uri", it.file.uri.toString()) })
+            savePending(JSONObject().put("job", id).put("peer", peer).put("phase", "question").put("files", files))
+            app.startIntentSenderForResult(question.intentSender, REQUEST, null, 0, 0, 0)
+        } catch (error: Exception) {
+            recordResult(id, peer, JSONArray(), true, error.message.orEmpty())
         }
     }
 
-    private fun report(computer:Computer,pending:JSONObject) {
-        val files=pending.getJSONArray("files")
-        val trashed=JSONArray()
-        for(index in 0 until files.length()) {
-            val file=files.getJSONObject(index)
-            val uri=Uri.parse(file.getString("uri"))
-            val options=Bundle().apply { putInt(MediaStore.QUERY_ARG_MATCH_TRASHED,MediaStore.MATCH_INCLUDE) }
-            val gone=app.contentResolver.query(uri,arrayOf(MediaStore.MediaColumns.IS_TRASHED),options,null)?.use { rows ->
-                rows.moveToFirst() && rows.getInt(0)==1
-            } ?: false
-            if(gone) trashed.put(file.getString("media"))
+    fun answered(result: Int) {
+        val pending = settings.getString("pending", null)?.let(::JSONObject) ?: return
+        savePending(pending.put("phase", "result").put("yes", result == Activity.RESULT_OK))
+        last = 0
+    }
+
+    fun recover(discardedQuestion: Boolean) {
+        val pending = settings.getString("pending", null)?.let(::JSONObject) ?: return
+        when (pending.optString("phase")) {
+            "question" -> if (discardedQuestion) savePending(pending.put("phase", "result").put("yes", false))
+            "removing" -> savePending(pending.put("phase", "result").put("cancelled", true).put("error", "Ripresa dopo l’interruzione del telefono."))
         }
-        val yes=pending.optBoolean("yes")
-        computer.ask("POST","/phone/import-cleanup/result",JSONObject().put("job_id",pending.getString("job"))
-            .put("media",trashed).put("cancelled",!yes || trashed.length()!=files.length())
-            .put("done",yes && pending.optBoolean("last") && trashed.length()==files.length())
-            .put("error",if(yes && trashed.length()!=files.length()) "Alcuni file non risultano nel cestino. Le copie sul PC restano conservate." else ""))
+    }
+
+    private fun savePending(value: JSONObject) {
+        check(settings.edit().putString("pending", value.toString()).commit()) { "Impossibile salvare il risultato della pulizia." }
+    }
+
+    private fun recordResult(id: String, peer: String, removed: JSONArray, cancelled: Boolean, error: String = "") {
+        savePending(JSONObject().put("job", id).put("peer", peer).put("phase", "result")
+            .put("media", removed).put("cancelled", cancelled).put("error", error.take(1000)))
+        if (cancelled) { folderConsent = ""; writeAccess = null }
+        last = 0
+    }
+
+    private fun report(computer: Computer, pending: JSONObject) {
+        val removed = pending.optJSONArray("media") ?: JSONArray()
+        val files = pending.optJSONArray("files")
+        var cancelled = pending.optBoolean("cancelled")
+        var error = pending.optString("error")
+        if (files != null && Build.VERSION.SDK_INT >= 30) {
+            val options = Bundle().apply { putInt(MediaStore.QUERY_ARG_MATCH_TRASHED, MediaStore.MATCH_INCLUDE) }
+            for (index in 0 until files.length()) {
+                val file = files.getJSONObject(index)
+                val uri = Uri.parse(file.getString("uri"))
+                val gone = app.contentResolver.query(uri, arrayOf(MediaStore.MediaColumns.IS_TRASHED), options, null)?.use { rows ->
+                    rows.moveToFirst() && rows.getInt(0) == 1
+                } ?: false
+                if (gone) removed.put(file.getString("media"))
+            }
+            cancelled = !pending.optBoolean("yes") || removed.length() != files.length()
+            if (pending.optBoolean("yes") && cancelled) error = "Alcuni file non risultano nel cestino Android."
+        }
+        computer.ask("POST", "/phone/import-cleanup/result", JSONObject().put("job_id", pending.getString("job"))
+            .put("media", removed).put("cancelled", cancelled).put("error", error))
         settings.edit().remove("pending").commit()
-        tell("${trashed.length()} originali verificati nel cestino Android. Copie normali, catalogo e ZIP restano sul PC.")
     }
 
-    companion object { const val REQUEST=43 }
+    companion object {
+        const val REQUEST = 43
+        const val WRITE_REQUEST = 46
+        private const val PAGE = 200
+    }
 }

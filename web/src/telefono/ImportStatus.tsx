@@ -13,12 +13,13 @@ export default function ImportStatus() {
   useEffect(() => { const timer = setInterval(() => setState(importState()), 1000); return () => clearInterval(timer) }, [])
   if (!state || state.phase === 'idle' || !state.phase) return null
   return <div className="phone-panel" aria-label="Avanzamento importazione">
-    <h2>{state.phase === 'done' ? 'Archivio completato' : state.busy ? 'Importazione in corso' : 'Importazione in pausa'}</h2>
+    <h2>{state.phase === 'done' ? 'Importazione completata' : state.busy ? 'Importazione in corso' : 'Importazione in pausa'}</h2>
     <p role="status" className="phone-caption">{state.message}</p>
     <progress max={Math.max(1, state.total)} value={state.processed} aria-label="File verificati sul PC" />
     <p className="phone-caption">{state.processed} / {state.total} file · {state.copied} copiati · {state.duplicates} già presenti{state.failed > 0 && ` · ${state.failed} da riprovare`}</p>
     <p className="phone-caption">{transportName(state.transport)}{state.busy && ' · Puoi spegnere lo schermo o aprire un’altra app.'}</p>
-    {!!state.blocks && <p className="phone-caption">{state.blocks_ready || 0} / {state.blocks} blocchi ZIP verificati</p>}
+    {!!state.blocks && <p className="phone-caption">{state.blocks_ready || 0} / {state.blocks} blocchi verificati</p>}
+    {state.phase === 'done' && state.scope !== 'documents' && <p className="phone-caption">Per decidere cosa togliere dal telefono, apri Foto e video → Importazioni e archivi sul PC.</p>}
     {state.busy && <button className="phone-action" onClick={() => window.Regista?.cancelPhotoImport?.()}>Metti in pausa</button>}
     {!state.busy && state.phase !== 'done' && <button className="phone-action" onClick={() => window.Regista?.importAll?.()}>Riprendi importazione</button>}
     {!state.busy && state.phase === 'paused' && <details><summary>La selezione precedente non è più disponibile?</summary><p className="phone-caption">Un nuovo blocco controlla i file accessibili adesso. Le copie e i blocchi precedenti restano sul PC.</p><button className="phone-action" onClick={() => window.Regista?.newImportBlock?.()}>Avvia un nuovo blocco</button></details>}

@@ -5,6 +5,7 @@ import { catalogRequest } from './catalogApi.ts'
 import type { CatalogRequest } from './catalogApi.ts'
 import CatalogBulk from './CatalogBulk.tsx'
 import ImportArchives from './ImportArchives.tsx'
+import CatalogTags, { type TagPage, type TagUsage } from './CatalogTags.tsx'
 type Status = {
   discovered: number; analyzed: number; pending: number; failed: number; missing: number; coverage: number; excluded: number
   scanning: boolean; scan_error: string; mode: string; current: string; problem: string; waiting_reason: string; version: string
@@ -36,6 +37,8 @@ export default function Catalog({ visible = true, request = catalogRequest, medi
   const [place, setPlace] = useState('')
   const [folder, setFolder] = useState('')
   const [tag, setTag] = useState('')
+  const [knownTags, setKnownTags] = useState<TagUsage[]>([])
+  const [tagRevision, setTagRevision] = useState(0)
   const [stage, setStage] = useState('all')
   const [kind, setKind] = useState('all')
   const [album, setAlbum] = useState('')
@@ -92,6 +95,13 @@ export default function Catalog({ visible = true, request = catalogRequest, medi
     void request<Result>('/api/catalog/search', {}).then(setResult, () => {})
   }, [visible, request])
 
+  useEffect(() => {
+    if (!visible || !status?.computer) return
+    let active = true
+    void request<TagPage>('/api/catalog/tags?limit=500').then(value => { if (active) setKnownTags(value.tags) }, () => {})
+    return () => { active = false }
+  }, [visible, status?.computer, status?.classified, request, tagRevision])
+
   const control = (command: string) => perform(async () => {
     await request('/api/catalog/control', { command, ids: selected }); await refresh()
     if (command === 'reanalyze') setNote(`${selected.length} foto messe in coda. Premi Avvia per analizzarle.`)
@@ -136,6 +146,15 @@ export default function Catalog({ visible = true, request = catalogRequest, medi
         </details>
       </>}
       {status.computer && <ImportArchives request={request} />}
+      {status.computer && <><datalist id="catalog-known-tags">{knownTags.map(item => <option key={item.tag} value={item.tag}>{item.count} elementi</option>)}</datalist>
+        <CatalogTags request={request} revision={(status.classified ?? 0) + tagRevision} onChoose={value => {
+          setTag(value)
+          void perform(async () => {
+            setResult(await request<Result>('/api/catalog/search', { ...result?.plan, tag: value, offset: 0 }))
+            setSelected([])
+          })
+        }} />
+      </>}
       {(status.problem || status.scan_error || status.waiting_reason) && <p role="status">{status.problem || status.scan_error || status.waiting_reason}</p>}
       {status.imports?.map((item, at) => <p key={at} role="status">Telefono: {item.state === 'requested' ? 'in attesa del telefono' : item.state === 'done' ? 'importazione completata' : 'copia in corso'} · {item.copied} copiate · {item.duplicates} già presenti · {item.total} totali {item.error}</p>)}
       {status.failed > 0 && status.computer && <details><summary>Errori di analisi</summary>{status.errors.map(error => <p key={error.asset_id}>{error.asset_id.slice(0, 8)}: {error.error} ({error.attempts} tentativi)</p>)}</details>}
@@ -161,7 +180,7 @@ export default function Catalog({ visible = true, request = catalogRequest, medi
           <label>Al<input type="date" value={until} onChange={e => setUntil(e.target.value)} /></label>
           <label>Luogo da GPS<input value={place} onChange={e => setPlace(e.target.value)} placeholder="Giappone" /></label>
           <label>Indizio cartella<input value={folder} onChange={e => setFolder(e.target.value)} /></label>
-          <label>Tag<input value={tag} onChange={e => setTag(e.target.value)} /></label>
+          <label>Tag<input value={tag} list={status.computer ? 'catalog-known-tags' : undefined} onChange={e => setTag(e.target.value)} /></label>
           <label>Termini<select disabled={natural} value={operator} onChange={e => setOperator(e.target.value)}><option value="and">Tutti (AND)</option><option value="or">Almeno uno (OR)</option></select></label>
           <label>Escludi (separati da virgole)<input value={exclude} onChange={e => setExclude(e.target.value)} /></label>
           <label>Radice<select value={root} onChange={e => setRoot(e.target.value)}><option value="">Tutte le cartelle</option>{status.roots.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}</select></label>
@@ -172,7 +191,7 @@ export default function Catalog({ visible = true, request = catalogRequest, medi
       })}>{albums.find(item => item.id === album)?.hidden ? 'Mostra questo album nella vista generale' : 'Nascondi questo album dalla vista generale'}</button><p className="catalog-muted">L’album rimane consultabile qui, con foto e video insieme.</p></div>}
     </>}
     {result && <><p aria-live="polite">{result.total} risultati · {result.coverage.coverage}% del catalogo analizzato</p>
-      {status?.computer && <CatalogBulk selected={selected} plan={result.plan} total={result.total} request={request} onChanged={async () => { await find(0, result.plan); await refreshAlbums() }} />}
+      {status?.computer && <CatalogBulk selected={selected} plan={result.plan} total={result.total} request={request} knownTags={knownTags} onChanged={async () => { await find(0, result.plan); await refreshAlbums(); setTagRevision(value => value + 1) }} />}
       {result.total === 0 && <p>Nessuna corrispondenza nei dati disponibili. Le foto in attesa potrebbero non avere ancora tag.</p>}
       <div className="catalog-grid">{result.photos.map(photo => <article key={photo.id}>
         <CatalogThumb photo={photo} mediaUrl={mediaUrl} onOpen={() => void perform(async () => setOriginal({ url: mediaUrl ? await mediaUrl(photo.id, true) : `/api/catalog/photos/${photo.id}/full`, video: photo.kind === 'video' }))} />
@@ -189,11 +208,11 @@ export default function Catalog({ visible = true, request = catalogRequest, medi
           {photo.processing?.error && <p role="status" className="catalog-alert">{photo.processing.error}</p>}
           {status?.computer && photo.backup_available && <p><a href={`/api/catalog/photos/${photo.id}/backup`} download>Scarica originale in ZIP</a></p>}
           <div className="catalog-tags">{photo.tags.map(item => <span key={item.tag} title={`Fonte: ${item.source}`}>{item.tag}{status?.computer && <button aria-label={`Escludi tag ${item.tag}`} onClick={() => void perform(async () => {
-            await request(`/api/catalog/photos/${photo.id}/tags`, { tag: item.tag, included: false }, 'PUT'); await find(0, result.plan)
+            await request(`/api/catalog/photos/${photo.id}/tags`, { tag: item.tag, included: false }, 'PUT'); await find(0, result.plan); setTagRevision(value => value + 1)
           })}>×</button>}</span>)}</div>
           {status?.computer && <form onSubmit={event => { event.preventDefault(); const form = event.currentTarget; const term = String(new FormData(form).get('tag') || ''); void perform(async () => {
-            await request(`/api/catalog/photos/${photo.id}/tags`, { tag: term, included: true }, 'PUT'); form.reset(); await find(0, result.plan)
-          }) }}><input name="tag" aria-label={`Correggi tag di ${photo.name}`} placeholder="Aggiungi o ripristina tag" maxLength={100} required /><button>Salva</button></form>}
+            await request(`/api/catalog/photos/${photo.id}/tags`, { tag: term, included: true }, 'PUT'); form.reset(); await find(0, result.plan); setTagRevision(value => value + 1)
+          }) }}><input name="tag" list="catalog-known-tags" aria-label={`Correggi tag di ${photo.name}`} placeholder="Aggiungi o ripristina tag" maxLength={100} required /><button>Salva</button></form>}
           <p className="catalog-muted">{photo.day || 'Data sconosciuta'}{photo.day && ` · fonte ${photo.metadata.date_source}, precisione ${photo.metadata.precision}`}</p>
           {photo.metadata.place && <p className="catalog-muted">{photo.metadata.place} · {photo.metadata.place_source}</p>}
           {photo.folder && <p className="catalog-muted">Cartella (indizio): {photo.folder}</p>}

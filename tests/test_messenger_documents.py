@@ -139,6 +139,10 @@ def test_identical_media_keeps_one_content_both_origins_and_automatic_source_tag
     other=start(http,'whatsapp-same-content',1,'whatsapp')
     answer=manifest(http,other,[second]); assert answer['wanted']==[] and answer['confirmed'][second['media']]=='duplicate'
     env.manager.finalize_sync(other)
+    assert env.manager.status(other)['complete']
+    assert not env.manager.status(other)['zip_ready']
+    assert not env.manager.zip_path(other).exists()
+    assert len(list((env.target/'Importate dal telefono').rglob('*.png')))==1
     found=search(env.catalog,SearchPlan(tag='whatsapp'))
     assert found['total']==1
     with env.manager.connect() as db:
@@ -212,10 +216,23 @@ def test_telegram_and_next_month_have_new_archives_without_mutating_previous_blo
     archived=env.manager.zip_path(batch).read_bytes()
     assert (env.target/'Importate dal telefono/Documenti/Telegram/TXT/Telegram Documents/spese-novembre.txt').read_bytes()==first.read_bytes()
     assert env.manager.documents.search(DocumentSearch(tag='Telegram',query='carburante'))['total']==1
-    later=start(env.http,'december-telegram',1,'telegram','documents','txt')
-    assert manifest(env.http,later,[entry])['wanted']==[]
+    repeated = start(env.http, 'november-repeated', 1, 'telegram', 'documents', 'txt')
+    assert manifest(env.http, repeated, [entry])['wanted'] == []
+    env.manager.finalize_sync(repeated)
+    assert not env.manager.zip_path(repeated).exists()
+    phone_status = env.http.get('/phone/imports/status', params={'batch_id': repeated}).json()
+    assert phone_status['complete'] and phone_status['zip_ready'] and not phone_status['archive_available']
+    new_file = folder / 'spese-dicembre.txt'
+    new_file.write_text('Spese Telegram di dicembre, treno 22 euro.', encoding='utf-8')
+    new_entry = item(new_file, env.phone, 'tree:telegram-2', 'document')
+    later = start(env.http, 'december-telegram', 2, 'telegram', 'documents', 'txt')
+    assert manifest(env.http, later, [entry, new_entry])['wanted'] == [new_entry['media']]
+    upload(env.http, later, new_entry, new_file)
     env.manager.finalize_sync(later)
-    assert later!=batch and env.manager.zip_path(later).is_file()
+    with zipfile.ZipFile(env.manager.zip_path(later)) as archive:
+        contents = json.loads(archive.read('manifest.json'))
+        assert [row['sha256'] for row in contents['originals']] == [new_entry['sha256']]
+        assert [row['media'] for row in contents['sources']] == [new_entry['media']]
     assert env.manager.zip_path(batch).read_bytes()==archived
 
 

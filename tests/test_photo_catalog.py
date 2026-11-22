@@ -60,6 +60,28 @@ def drain(jobs):
     asyncio.run(run())
 
 
+def test_tag_list_counts_distinct_visible_assets_with_effective_corrections(library, tmp_path):
+    root, catalog, jobs, _ = library
+    first = photo(root / 'first.png')
+    second = photo(root / 'second.png', 'blue')
+    shutil.copy2(first, root / 'first-copy.png')
+    catalog.scan(VERSION, stable_seconds=0)
+    drain(jobs)
+    catalog.override(fingerprint(first), 'nero', False)
+    catalog.override(fingerprint(first), 'Giappone', True)
+    app = FastAPI()
+    app.include_router(routes(catalog, jobs, tmp_path / 'imported'))
+    with TestClient(app) as client:
+        first_page = client.get('/api/catalog/tags', params={'limit': 1}).json()
+        assert first_page == {'tags': [{'tag': 'cane', 'count': 2, 'automatic': 2}], 'total': 3}
+        assert client.get('/api/catalog/tags', params={'q': 'APPON'}).json() == {
+            'tags': [{'tag': 'giappone', 'count': 1, 'automatic': 0}], 'total': 1}
+        second.unlink()
+        catalog.scan(VERSION, stable_seconds=0)
+        assert client.get('/api/catalog/tags', params={'q': 'nero'}).json() == {'tags': [], 'total': 0}
+    catalog.batch_imports.pool.shutdown(wait=True)
+
+
 def test_100_contents_are_annotated_once_and_a_rescan_and_rename_do_not_call_ai(library):
     root, catalog, jobs, annotator = library
     for number in range(100):

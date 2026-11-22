@@ -110,6 +110,11 @@ class ImportBatches:
                 db.execute("ALTER TABLE runs ADD COLUMN source TEXT NOT NULL DEFAULT ''")
             if 'document_type' not in {row['name'] for row in db.execute('PRAGMA table_info(runs)')}:
                 db.execute("ALTER TABLE runs ADD COLUMN document_type TEXT NOT NULL DEFAULT ''")
+            if 'archived' not in {row['name'] for row in db.execute('PRAGMA table_info(runs)')}:
+                db.execute('ALTER TABLE runs ADD COLUMN archived INTEGER NOT NULL DEFAULT -1')
+            if 'archive_member' not in {row['name'] for row in db.execute('PRAGMA table_info(files)')}:
+                db.execute('ALTER TABLE files ADD COLUMN archive_member INTEGER NOT NULL DEFAULT 1')
+            db.execute('CREATE INDEX IF NOT EXISTS import_runs_device ON runs(device,state)')
         from documents import DocumentLibrary
         self.documents=DocumentLibrary(self)
 
@@ -147,7 +152,7 @@ class ImportBatches:
         with self.connect() as db:
             known = db.execute('SELECT * FROM normal_files WHERE sha256=?', (sha,)).fetchone()
         candidates = [Path(known['path'])] if known else []
-        catalog_path = self.catalog.verified_path_of(sha)
+        catalog_path = self.catalog.path_of(sha)
         if catalog_path and catalog_path not in candidates:
             candidates.append(catalog_path)
         for path in candidates:
@@ -212,7 +217,8 @@ class ImportBatches:
                     present = checked[item.sha256] is not None
                     uploaded = int(old['uploaded']) if old else 0
                     state = 'received' if present else 'wanted'
-                    db.execute('''INSERT INTO files VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                    db.execute('''INSERT INTO files(batch_id,media,stamp,sha256,name,folder,kind,size,mime,day,state,uploaded)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
                         ON CONFLICT(batch_id,media) DO UPDATE SET state=excluded.state''',
                         (body.batch_id,item.media,item.stamp,item.sha256,item.name,item.folder,item.kind,item.size,item.mime,item.day,state,uploaded))
                     db.execute('INSERT OR IGNORE INTO origins VALUES (?,?,?,?,?,?,?,?)',
@@ -273,14 +279,16 @@ class ImportBatches:
                 coalesce(sum(state='received' AND uploaded=1),0) copied,
                 coalesce(sum(state='received' AND uploaded=0),0) duplicates,
                 coalesce(sum(kind='image'),0) images,coalesce(sum(kind='video'),0) videos,
-                coalesce(sum(kind='audio'),0) audio,coalesce(sum(size),0) bytes FROM files WHERE batch_id=?""",(batch,)).fetchone())
+                coalesce(sum(kind='audio'),0) audio,coalesce(sum(size),0) bytes,
+                count(distinct CASE WHEN archive_member=1 THEN sha256 END) archive_members FROM files WHERE batch_id=?""",(batch,)).fetchone())
             counts['documents']=db.execute("SELECT count(*) FROM files WHERE batch_id=? AND kind='document'",(batch,)).fetchone()[0]
         return {**{key:run[key] for key in ('id','device','source','document_type','scope','total','state','created','updated','error','transport','zip_sha')},
-                **counts, 'protocol':2, 'zip_ready':run['state']=='ready', 'max_file_bytes':MAX_FILE}
+                **counts, 'protocol':2, 'complete':run['state']=='ready',
+                'zip_ready':run['state']=='ready' and bool(run['zip_sha']), 'max_file_bytes':MAX_FILE}
 
     def finalize(self, batch, device):
-        value = self.run(batch,device)
         with self.lock:
+            value = self.run(batch, device)
             if value['state'] != 'ready' and batch not in self.building:
                 with self.connect() as db:
                     count = db.execute("SELECT count(*) FROM files WHERE batch_id=? AND state='received'",(batch,)).fetchone()[0]
@@ -301,127 +309,174 @@ class ImportBatches:
             with self.lock:
                 self.building.discard(batch)
 
-    def finalize_sync(self,batch):
+    def finalize_sync(self, batch):
         value = self.run(batch)
-        with self.connect() as db:
-            files = [dict(row) for row in db.execute('SELECT * FROM files WHERE batch_id=? ORDER BY media',(batch,))]
-        if len(files) != value['total'] or any(item['state']!='received' for item in files):
-            raise ValueError('Il blocco non è completo.')
-        originals = {}
-        for item in files:
-            path = self.normal_path(item['sha256'])
-            if not path or path.stat().st_size != item['size']:
-                raise ValueError('Una copia normale è mancante o modificata: nessuna pulizia del telefono sarà autorizzata.')
-            originals.setdefault(item['sha256'],{'sha256':item['sha256'],'size':item['size'],
-                'filename':safe_name(item['name']), 'original':f"original/{item['kind']}/{item['sha256']}--{safe_name(item['name'])}"})
         archive = self.zip_path(batch)
-        archive.parent.mkdir(parents=True,exist_ok=True)
-        if not archive.exists():
-            descriptor, temporary = tempfile.mkstemp(suffix='.part',dir=archive.parent)
+        if value['state'] == 'ready':
+            if value['zip_sha']:
+                self.verify_zip(archive)
+                if fingerprint(archive) != value['zip_sha']:
+                    raise ValueError('ZIP già pubblicato con un SHA diverso.')
+            return self.status(batch)
+
+        with self.connect() as db:
+            files = [dict(row) for row in db.execute('SELECT * FROM files WHERE batch_id=? ORDER BY media', (batch,))]
+        if len(files) != value['total'] or any(item['state'] != 'received' for item in files):
+            raise ValueError('Il blocco non è completo.')
+        by_sha = {}
+        for item in files:
+            by_sha.setdefault(item['sha256'], []).append(item)
+        paths = {}
+        for sha, aliases in by_sha.items():
+            path = self.normal_path(sha)
+            if path is None:
+                # Recover a publication interrupted between the verified move and its database receipt.
+                destination = self.destination(aliases[0])
+                if destination.is_file() and destination.resolve().is_relative_to(self.import_dir) and fingerprint(destination) == sha:
+                    path = destination
+            paths[sha] = path
+        if any(path is None or path.stat().st_size != by_sha[sha][0]['size'] for sha, path in paths.items()):
+            raise ValueError('Una copia normale è mancante o modificata.')
+
+        if value['archived'] >= 0:
+            members = {item['sha256'] for item in files if item['archive_member']}
+        elif archive.exists():
+            # An older build may have been interrupted after publishing its immutable ZIP.
+            members = {item['sha256'] for item in self.verify_zip(archive)['originals']}
+        else:
+            members = {sha for sha in by_sha if not self.catalog.archive.has_verified(sha)}
+        if value['archived'] < 0:
+            with self.connect() as db:
+                db.executemany('UPDATE files SET archive_member=? WHERE batch_id=? AND media=?',
+                               [(int(item['sha256'] in members), batch, item['media']) for item in files])
+                db.execute('UPDATE runs SET archived=? WHERE id=?', (len(members), batch))
+        if not members <= set(by_sha):
+            raise ValueError('Lo ZIP contiene originali estranei alla selezione.')
+
+        if files:
+            self.import_dir.mkdir(parents=True, exist_ok=True)
+            import_root = self.catalog.add_root(self.import_dir)
+            roots = [(row['id'], Path(row['path'])) for row in self.catalog.roots(local=True)]
+            for sha, origins in by_sha.items():
+                paths[sha] = self.publish_original(paths[sha], origins, value['device'], import_root, roots)
+        archive_sha = self.write_archive(value, archive, files, by_sha, paths, members) if members else ''
+        with self.connect() as db:
+            db.execute("UPDATE runs SET state='ready',zip_sha=?,error='',updated=? WHERE id=?", (archive_sha, time.time(), batch))
+        return self.status(batch)
+
+    def write_archive(self, value, archive, files, by_sha, paths, members):
+        originals = {}
+        for sha, aliases in by_sha.items():
+            if sha not in members:
+                continue
+            item = aliases[0]
+            name = safe_name(item['name'])
+            originals[sha] = {'sha256': sha, 'size': item['size'], 'filename': name,
+                              'original': f"original/{item['kind']}/{sha}--{name}"}
+        if archive.exists():
+            self.verify_zip(archive, originals)
+            archive_sha = fingerprint(archive)
+        else:
+            archive.parent.mkdir(parents=True, exist_ok=True)
+            descriptor, temporary = tempfile.mkstemp(suffix='.part', dir=archive.parent)
             os.close(descriptor)
             temporary = Path(temporary)
             try:
-                with zipfile.ZipFile(temporary,'w',compression=zipfile.ZIP_STORED,allowZip64=True) as target:
-                    target.writestr('manifest.json',json.dumps({'version':2,'batch_id':batch,'created':value['created'],'source':value['source'],'scope':value['scope'],'document_type':value['document_type'],
-                        'originals':list(originals.values()),'sources':files},ensure_ascii=False))
-                    for sha,item in originals.items():
-                        target.write(self.normal_path(sha),item['original'])
-                self.verify_zip(temporary,originals)
+                manifest = {key: value[key] for key in ('created', 'source', 'scope', 'document_type')}
+                manifest.update(version=2, batch_id=value['id'], originals=list(originals.values()),
+                                sources=[{key: val for key, val in item.items() if key != 'archive_member'}
+                                         for item in files if item['sha256'] in members])
+                with zipfile.ZipFile(temporary, 'w', compression=zipfile.ZIP_STORED, allowZip64=True) as target:
+                    target.writestr('manifest.json', json.dumps(manifest, ensure_ascii=False))
+                    for sha, item in originals.items():
+                        target.write(paths[sha], item['original'])
+                self.verify_zip(temporary, originals)
+                archive_sha = fingerprint(temporary)
                 with temporary.open('r+b') as synced:
                     os.fsync(synced.fileno())
-                move_new(temporary,archive)
+                move_new(temporary, archive)
             finally:
                 temporary.unlink(missing_ok=True)
-        # Existing archives are verified and reused, never modified, appended to or replaced.
-        self.verify_zip(archive,originals)
-        archive_sha = fingerprint(archive)
+
         stamp = archive.stat()
         with self.catalog.connect() as db:
-            for sha,item in originals.items():
-                db.execute('INSERT INTO original_backups VALUES (?,?,?,?,?,?) ON CONFLICT(asset_id) DO NOTHING',
-                    (sha,archive.relative_to(self.catalog.archive.root).as_posix(),item['size'],stamp.st_size,stamp.st_mtime_ns,time.time()))
-        self.import_dir.mkdir(parents=True,exist_ok=True)
-        root_id = self.catalog.add_root(self.import_dir)
-        catalog_root = Path(next(root['path'] for root in self.catalog.roots(local=True) if root['id']==root_id))
-        for item in files:
-            sha = item['sha256']
-            source = self.normal_path(sha)
-            subfolder = {'image':'Da catalogare','video':'Video','audio':'Audio','document':'Documenti'}[item['kind']]
-            extension = Path(safe_name(item['name'])).suffix.lower()
-            if not re.fullmatch(r'\.[a-z0-9]{1,10}',extension):
-                extension='.bin'
-            destination = self.import_dir / subfolder / (sha+extension)
-            group=source_group(item['folder'])
-            if item['kind']=='document':
-                destination=self.import_dir/'Documenti'/document_label(document_category(item['name']))/(sha+'--'+safe_name(item['name']))
-            if group!='normal':
-                base=self.import_dir/'Documenti' if item['kind']=='document' else self.import_dir
-                destination=base/source_tag(group)
-                if item['kind']=='document': destination/=document_label(document_category(item['name']))
-                for part in source_parts(item['folder']):
-                    destination/=safe_name(part)
-                destination/=safe_name(item['name'])
-                if destination.exists() and fingerprint(destination)!=sha:
-                    destination=destination.with_name(sha[:16]+'--'+destination.name)
+            db.executemany('''INSERT INTO original_backups VALUES (?,?,?,?,?,?) ON CONFLICT(asset_id) DO UPDATE SET
+                relative=excluded.relative,original_size=excluded.original_size,archive_size=excluded.archive_size,
+                mtime_ns=excluded.mtime_ns,verified_at=excluded.verified_at''',
+                [(sha, archive.relative_to(self.catalog.archive.root).as_posix(), item['size'],
+                  stamp.st_size, stamp.st_mtime_ns, time.time()) for sha, item in originals.items()])
+        return archive_sha
+
+    def destination(self, item):
+        sha, kind = item['sha256'], item['kind']
+        name = safe_name(item['name'])
+        group = source_group(item['folder'])
+        folder = {'image': 'Da catalogare', 'video': 'Video', 'audio': 'Audio', 'document': 'Documenti'}[kind]
+        if group == 'normal':
+            if kind == 'document':
+                return self.import_dir / folder / document_label(document_category(item['name'])) / (sha + '--' + name)
+            extension = Path(name).suffix.lower()
+            return self.import_dir / folder / (sha + (extension if re.fullmatch(r'\.[a-z0-9]{1,10}', extension) else '.bin'))
+        base = self.import_dir / folder if kind == 'document' else self.import_dir
+        destination = base / source_tag(group)
+        if kind == 'document':
+            destination /= document_label(document_category(item['name']))
+        for part in source_parts(item['folder']):
+            destination /= safe_name(part)
+        destination /= name
+        if not destination.resolve().is_relative_to(self.import_dir):
+            raise ValueError('Cartella di importazione non autorizzata.')
+        if destination.exists() and fingerprint(destination) != sha:
+            destination = destination.with_name(sha + '--' + destination.name)
+        return destination
+
+    def publish_original(self, source, aliases, device, import_root, roots):
+        item = aliases[0]
+        sha, kind = item['sha256'], item['kind']
+        destination = source
+        if source.resolve().is_relative_to(self.staging):
+            destination = self.destination(item)
             if not destination.resolve().is_relative_to(self.import_dir):
                 raise ValueError('Cartella di importazione non autorizzata.')
-            destination.parent.mkdir(parents=True,exist_ok=True)
-            if source != destination:
-                if destination.exists():
-                    if fingerprint(destination)!=sha:
-                        raise ValueError('Destinazione già occupata: nessuna sovrascrittura.')
-                elif source.resolve().is_relative_to(self.staging):
-                    move_new(source,destination,sha)
-                else:
-                    # A second provenance can refer to one physical original through a hard link.
-                    try:
-                        os.link(source,destination)
-                    except OSError:
-                        self.copy_verified(source,destination,sha)
-            if fingerprint(destination)!=sha:
-                raise ValueError('Copia normale non verificata.')
-            with self.connect() as db:
-                db.execute('INSERT OR REPLACE INTO normal_files VALUES (?,?,?)',(sha,str(destination),item['size']))
-            if item['kind']=='document':
-                self.documents.register(item,destination,value['device'])
-            if item['kind'] in ('image','video') and destination.suffix.lower() in FORMATS:
-                self.catalog.register(root_id,destination,VERSION)
-                with self.catalog.connect() as db:
-                    if item['kind']=='image' and group=='normal':
-                        db.execute('INSERT OR IGNORE INTO managed_imports VALUES (?,?,?)',(sha,root_id,self.import_dir.relative_to(catalog_root).as_posix()))
-                    relative=destination.relative_to(catalog_root).as_posix()
-                    row=db.execute('SELECT metadata FROM file_locations WHERE root_id=? AND relative=?',(root_id,relative)).fetchone()
-                    notes=json.loads(row[0])
-                    notes.update(original_filename=item['name'],source_folder=item['folder'],media_kind=item['kind'],source_media=item['media'])
-                    with self.connect() as origins:
-                        notes['source_folders']=[row[0] for row in origins.execute('SELECT DISTINCT folder FROM origins WHERE sha256=? ORDER BY folder',(sha,))]
-                    if item['day'] and (not notes.get('date') or notes.get('date_source')=='path'):
-                        notes.update(date=item['day'],date_source='phone_media',precision='day')
-                    db.execute('UPDATE file_locations SET metadata=? WHERE root_id=? AND relative=?',(json.dumps(notes,ensure_ascii=False),root_id,relative))
-                    for other in db.execute('SELECT id,metadata FROM file_locations WHERE asset_id=?',(sha,)).fetchall():
-                        other_notes=json.loads(other['metadata']); other_notes['source_folders']=notes['source_folders']
-                        db.execute('UPDATE file_locations SET metadata=? WHERE id=?',(json.dumps(other_notes,ensure_ascii=False),other['id']))
-                    db.execute('INSERT INTO import_receipts VALUES (?,?,?,?) ON CONFLICT(device,media) DO UPDATE SET stamp=excluded.stamp,asset_id=excluded.asset_id',
-                        (value['device'],item['media'],item['stamp'],sha))
-                    self.catalog.refresh_text(db,sha)
-                if group!='normal':
-                    self.catalog.override(sha,source_tag(group),True,source='phone_folder')
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if not destination.exists():
+                move_new(source, destination, sha)
+        if fingerprint(destination) != sha:
+            raise ValueError('Copia normale non verificata.')
         with self.connect() as db:
-            db.execute("UPDATE runs SET state='ready',zip_sha=?,error='',updated=? WHERE id=?",(archive_sha,time.time(),batch))
-        return self.status(batch)
+            db.execute('INSERT OR REPLACE INTO normal_files VALUES (?,?,?)', (sha, str(destination), item['size']))
+            folders = [row[0] for row in db.execute('SELECT DISTINCT folder FROM origins WHERE sha256=? ORDER BY folder', (sha,))]
+        if kind == 'document':
+            for alias in aliases:
+                self.documents.register(alias, destination, device)
+        elif kind in ('image', 'video') and destination.suffix.lower() in FORMATS:
+            root_id, root = next((entry for entry in roots if destination.is_relative_to(entry[1])))
+            self.catalog.register(root_id, destination, VERSION)
+            self.record_catalog_origins(sha, kind, destination, root_id, root, import_root, aliases, folders, device)
+        return destination
 
-    @staticmethod
-    def copy_verified(source,destination,sha):
-        descriptor,temporary_name = tempfile.mkstemp(suffix='.part',dir=destination.parent)
-        temporary = Path(temporary_name)
-        try:
-            with source.open('rb') as original,os.fdopen(descriptor,'wb') as landed:
-                import shutil
-                shutil.copyfileobj(original,landed)
-                landed.flush(); os.fsync(landed.fileno())
-            move_new(temporary,destination,sha)
-        finally:
-            temporary.unlink(missing_ok=True)
+    def record_catalog_origins(self, sha, kind, destination, root_id, root, import_root, aliases, folders, device):
+        item = aliases[0]
+        relative = destination.relative_to(root).as_posix()
+        with self.catalog.connect() as db:
+            if kind == 'image' and root_id == import_root and destination.parent == self.import_dir / 'Da catalogare':
+                db.execute('INSERT OR IGNORE INTO managed_imports VALUES (?,?,?)',
+                           (sha, root_id, self.import_dir.relative_to(root).as_posix()))
+            for location in db.execute('SELECT id,root_id,relative,metadata FROM file_locations WHERE asset_id=?', (sha,)).fetchall():
+                notes = json.loads(location['metadata'])
+                notes['source_folders'] = folders
+                if location['root_id'] == root_id and location['relative'] == relative and not notes.get('source_media'):
+                    notes.update(original_filename=item['name'], source_folder=item['folder'], media_kind=kind, source_media=item['media'])
+                    if item['day'] and (not notes.get('date') or notes.get('date_source') == 'path'):
+                        notes.update(date=item['day'], date_source='phone_media', precision='day')
+                db.execute('UPDATE file_locations SET metadata=? WHERE id=?', (json.dumps(notes, ensure_ascii=False), location['id']))
+            db.executemany('''INSERT INTO import_receipts VALUES (?,?,?,?) ON CONFLICT(device,media)
+                DO UPDATE SET stamp=excluded.stamp,asset_id=excluded.asset_id''',
+                [(device, alias['media'], alias['stamp'], sha) for alias in aliases])
+            tags = {source_tag(source_group(alias['folder'])).casefold() for alias in aliases}
+            for tag in tags - {''}:
+                db.execute("INSERT OR IGNORE INTO overrides VALUES (?,?,1,'phone_folder')", (sha, tag))
+            self.catalog.refresh_text(db, sha)
 
     @staticmethod
     def verify_zip(path, expected=None):
@@ -465,9 +520,13 @@ def routes(catalog,jobs,import_dir,read_only=False,phones=None):
         if getattr(request.state,'device',None):
             raise HTTPException(403,'Questo comando si usa dal computer.')
 
+    def phone_status(value):
+        # Version 0.9 waits for zip_ready to mean that the worker can advance to the next block.
+        return {**value, 'archive_available': value['zip_ready'], 'zip_ready': value['complete']}
+
     @router.post('/phone/imports/start')
     async def start(request:Request,body:StartImport):
-        return await asyncio.to_thread(manager.start,phone(request),body)
+        return phone_status(await asyncio.to_thread(manager.start,phone(request),body))
 
     @router.post('/phone/imports/manifest')
     async def manifest(request:Request,body:ImportManifest):
@@ -505,11 +564,11 @@ def routes(catalog,jobs,import_dir,read_only=False,phones=None):
 
     @router.post('/phone/imports/finalize')
     def finalize(request:Request,body:BatchRequest):
-        return manager.finalize(body.batch_id,phone(request))
+        return phone_status(manager.finalize(body.batch_id,phone(request)))
 
     @router.get('/phone/imports/status')
     def status(request:Request,batch_id:str=Query(pattern=BATCH)):
-        return manager.status(batch_id,phone(request))
+        return phone_status(manager.status(batch_id,phone(request)))
 
     @router.get('/api/imports')
     def pc_status(request:Request):
@@ -520,7 +579,7 @@ def routes(catalog,jobs,import_dir,read_only=False,phones=None):
     def download(request:Request,batch:str):
         local(request)
         value=manager.run(batch)
-        if value['state']!='ready':
+        if value['state']!='ready' or not value['zip_sha']:
             raise HTTPException(409,'Lo ZIP del blocco non è ancora pronto.')
         from datetime import datetime
         stats=manager.status(batch)
@@ -539,7 +598,7 @@ def routes(catalog,jobs,import_dir,read_only=False,phones=None):
         return {**value,'files':files,'offset':offset,'cleanup':jobs[0] if jobs else None}
 
     from archive_cleanup import routes as cleanup_routes
-    router.include_router(cleanup_routes(manager,phones))
+    router.include_router(cleanup_routes(manager,phones,read_only=read_only))
     from documents import routes as document_routes
     router.include_router(document_routes(manager.documents,phones,read_only))
     return router

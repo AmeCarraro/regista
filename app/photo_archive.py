@@ -31,6 +31,18 @@ class OriginalArchive:
             raise ValueError('Archivio fuori dalla cartella di backup.')
         return target
 
+    def has_verified(self, sha):
+        """An unchanged archive that this catalog already verified for this original."""
+        with self.catalog.connect() as db:
+            known = db.execute('SELECT archive_size,mtime_ns FROM original_backups WHERE asset_id=?', (sha,)).fetchone()
+        if known is None:
+            return False
+        try:
+            stamp = self.path(sha).stat()
+        except (OSError, ValueError):
+            return False
+        return (stamp.st_size, stamp.st_mtime_ns) == (known['archive_size'], known['mtime_ns'])
+
     def inspect(self, path, sha):
         with zipfile.ZipFile(path) as archive:
             if archive.getinfo('manifest.json').file_size > 64 * 1024 * 1024:

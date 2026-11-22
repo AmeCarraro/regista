@@ -25,6 +25,7 @@ data class BackupMedia(
     val current: () -> Boolean, val open: () -> InputStream,
     val cacheable: Boolean = false,
     val day: String = "", val uri: Uri? = null,
+    val modifiedDay: String = "", val phonePath: String = "",
 )
 
 /** All granted image, audio and video collections, across mounted volumes; no album or music-only filter. */
@@ -53,13 +54,22 @@ class MediaFiles(private val context: Context,private val kinds:Set<String> = se
 
     /** Resolve a portable catalog receipt directly, preserving volume and generation checks. */
     fun resolve(media:String,expected:String):Pair<Uri,String>? {
+        return lookup(media, expected)?.let { item -> item.uri?.let { Pair(it, item.kind) } }
+    }
+
+    fun lookup(media: String, expected: String): BackupMedia? {
         val parts=media.split(':')
         if(parts.size!=3 || parts[0] !in setOf("image","video") || parts[2].toLongOrNull()==null) return null
         val volume=parts[1]
         if(Build.VERSION.SDK_INT>=29 && volume !in MediaStore.getExternalVolumeNames(context)) return null
         val base=if(parts[0]=="image") MediaStore.Images.Media.getContentUri(volume) else MediaStore.Video.Media.getContentUri(volume)
         val uri=ContentUris.withAppendedId(base,parts[2].toLong())
-        return if(current(uri,volume,expected,parts[0])) Pair(uri,parts[0]) else null
+        val before = version(volume)
+        if (before.isEmpty()) return null
+        return context.contentResolver.query(uri, columns(parts[0]), null, null, null)?.use { rows ->
+            if (!rows.moveToFirst() || stamp(rows, volume, before) != expected) null
+            else item(rows, parts[0], volume, before, uri)
+        }
     }
 
     private fun version(volume: String): String = if (Build.VERSION.SDK_INT >= 29) {
@@ -77,13 +87,37 @@ class MediaFiles(private val context: Context,private val kinds:Set<String> = se
         "$volume:$version:${rows.getLong(0)}:${rows.getLong(2)}:${rows.getLong(3)}:" +
             if (Build.VERSION.SDK_INT >= 30) "${rows.getLong(6)}:${rows.getLong(7)}" else "legacy"
 
-    private fun current(uri: Uri, volume: String, expected: String,kind:String): Boolean {
+    private fun folder(rows: Cursor): String {
+        val path = rows.getString(5).orEmpty()
+        return if (Build.VERSION.SDK_INT >= 29) path.trim('/') else
+            path.substringBeforeLast('/', "").removePrefix("/storage/").substringAfter('/', "").trim('/')
+    }
+
+    private fun current(uri: Uri, volume: String, expected: String, kind: String, name: String, folder: String): Boolean {
         val before = version(volume)
         if (before.isEmpty()) return false
         val found = context.contentResolver.query(uri, columns(kind), null, null, null)?.use { rows ->
-            rows.moveToFirst() && stamp(rows, volume, before) == expected
+            rows.moveToFirst() && stamp(rows, volume, before) == expected &&
+                rows.getString(1).orEmpty().ifBlank { "media-${rows.getLong(0)}" } == name && folder(rows) == folder
         } ?: false
         return found && version(volume) == before
+    }
+
+    private fun item(rows: Cursor, kind: String, volume: String, version: String, uri: Uri): BackupMedia {
+        val id = rows.getLong(0)
+        val identity = stamp(rows, volume, version)
+        val name = rows.getString(1).orEmpty().ifBlank { "media-$id" }
+        val folder = folder(rows)
+        val dateColumn = rows.getColumnIndex(MediaStore.Images.ImageColumns.DATE_TAKEN)
+        val taken = if (dateColumn >= 0 && !rows.isNull(dateColumn)) rows.getLong(dateColumn) else 0L
+        val modified = day(rows.getLong(3) * 1000)
+        val physicalVolume = if (volume == "external_primary" || volume == "external") "primary" else volume
+        return BackupMedia("$kind:$volume:$id", name, folder, kind, if (rows.isNull(2)) -1 else rows.getLong(2),
+            rows.getString(4).orEmpty().ifBlank { "$kind/*" }, identity,
+            current = { current(uri, volume, identity, kind, name, folder) },
+            open = { openOriginal(context, uri, kind) }, cacheable = Build.VERSION.SDK_INT >= 30,
+            day = day(taken).ifBlank { modified }, uri = uri, modifiedDay = modified,
+            phonePath = "$physicalVolume:${listOf(folder, name).filter(String::isNotEmpty).joinToString("/")}")
     }
 
     fun scan(cancelled: () -> Boolean, onProblem: (String) -> Unit, onFound: (Int) -> Unit = {}): List<BackupMedia> {
@@ -109,18 +143,7 @@ class MediaFiles(private val context: Context,private val kinds:Set<String> = se
                         if (cancelled()) throw CancellationException()
                         val id = rows.getLong(0)
                         val uri = ContentUris.withAppendedId(collection, id)
-                        val identity = stamp(rows, volume, before)
-                        val name = rows.getString(1).orEmpty().ifBlank { "media-$id" }
-                        val path = rows.getString(5).orEmpty()
-                        val folder = if (Build.VERSION.SDK_INT >= 29) path.trim('/') else
-                            path.substringBeforeLast('/', "").removePrefix("/storage/").substringAfter('/', "").trim('/')
-                        val dateColumn=rows.getColumnIndex(MediaStore.Images.ImageColumns.DATE_TAKEN)
-                        val taken=if (dateColumn>=0 && !rows.isNull(dateColumn)) rows.getLong(dateColumn) else 0L
-                        val day=SimpleDateFormat("yyyy-MM-dd",Locale.ROOT).format(Date(if (taken>0) taken else rows.getLong(3)*1000))
-                        results += BackupMedia("$type:$volume:$id", name, folder, type, if (rows.isNull(2)) -1 else rows.getLong(2),
-                            rows.getString(4).orEmpty().ifBlank { "$type/*" }, identity,
-                            current = { current(uri, volume, identity,type) },
-                            open = { openOriginal(context, uri, type) }, cacheable = Build.VERSION.SDK_INT >= 30,day=day,uri=uri)
+                        results += item(rows, type, volume, before, uri)
                         onFound(results.size)
                     }
                 }
@@ -134,6 +157,9 @@ class MediaFiles(private val context: Context,private val kinds:Set<String> = se
     }
 
     companion object {
+        fun day(milliseconds: Long): String = if (milliseconds > 0)
+            SimpleDateFormat("yyyy-MM-dd", Locale.ROOT).format(Date(milliseconds)) else ""
+
         fun kind(mime: String, name: String): String? = BackupRules.kind(mime, name)
 
         /** No fallback to redacted or transcoded copies when the original was requested. */

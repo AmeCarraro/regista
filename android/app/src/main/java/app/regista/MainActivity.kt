@@ -115,7 +115,7 @@ class MainActivity : Activity() {
         catalogCache = CatalogCache(this, memory)
         archiveCleanup = ArchiveCleanup(this,memory) { line -> runOnUiThread { say(line) } }
         remoteDocuments=RemoteDocuments(this) { line -> runOnUiThread { say(line) } }
-        if(saved==null) archiveCleanup.recover()
+        archiveCleanup.recover(saved == null)
         backupFolders = BackupFolders(this)
         mediaBackup = MediaBackup(this, memory, { reached }, onStarting = {
             runOnUiThread { window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
@@ -735,6 +735,7 @@ class MainActivity : Activity() {
         super.onActivityResult(request, result, data)
         if(request==RemoteDocuments.SAVE) { remoteDocuments.saved(result,data?.data); return }
         if(request==ArchiveCleanup.REQUEST) { archiveCleanup.answered(result); return }
+        if(request==ArchiveCleanup.WRITE_REQUEST) { archiveCleanup.folderAnswered(result, data); return }
         if (request == SCAN_QR) {
             if (result == RESULT_OK) {
                 val invite = data?.getStringExtra(PairingScanner.INVITE)?.let(::readInvite)

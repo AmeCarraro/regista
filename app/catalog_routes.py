@@ -17,6 +17,7 @@ from PIL import Image, ImageOps
 from pydantic import BaseModel, Field
 
 from photo_annotator import VERSION
+from photo_catalog import normalized
 from photo_search import SearchPlan, natural_plan, search
 
 PROTOCOL = 2
@@ -171,6 +172,28 @@ def routes(catalog, jobs, import_dir: Path, read_only=False, phones=None):
                 if photo['processing']['error']:
                     photo['processing']['error'] = 'Da catalogare: consulta il motivo sul computer.'
         return result
+
+    @router.get('/api/catalog/tags')
+    def tags(q: str = Query(default='', max_length=100), offset: int = Query(default=0, ge=0),
+             limit: int = Query(default=80, ge=1, le=1000)):
+        # Count each content once, using the same latest annotation and corrections as search.
+        with catalog.connect() as db:
+            rows = db.execute('''WITH latest AS (SELECT asset_id,max(id) AS id FROM annotations GROUP BY asset_id),
+                effective AS (
+                    SELECT n.asset_id,t.tag,t.source FROM latest n JOIN asset_tags t ON n.id=t.annotation_id
+                    WHERE NOT EXISTS(SELECT 1 FROM overrides o WHERE o.asset_id=n.asset_id AND o.tag=t.tag)
+                    UNION ALL SELECT asset_id,tag,source FROM overrides WHERE included=1
+                ), counts AS (
+                    SELECT tag,count(DISTINCT asset_id) AS count,
+                        count(DISTINCT CASE WHEN source='qwen' THEN asset_id END) AS automatic
+                    FROM effective e WHERE instr(tag,?)>0 AND EXISTS(
+                        SELECT 1 FROM file_locations l WHERE l.asset_id=e.asset_id AND l.present=1)
+                    GROUP BY tag
+                )
+                SELECT *,count(*) OVER() AS total FROM counts ORDER BY count DESC, tag LIMIT ? OFFSET ?''',
+                (normalized(q), limit, offset)).fetchall()
+        return {'tags': [{key: row[key] for key in ('tag', 'count', 'automatic')} for row in rows],
+                'total': rows[0]['total'] if rows else 0}
 
     @router.post('/api/catalog/plan')
     async def plan(body: Natural):
