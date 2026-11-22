@@ -80,7 +80,11 @@ class BackupFolders(private val context: Context) {
         return BackupMedia(media, entry.name.ifBlank { "file" }.take(500), folder.take(2000), kind,
             entry.size, entry.mime.ifBlank { "application/octet-stream" }, version,
             current = { stillSelected(rootKey) && described(document)?.stamp() == version },
-            open = { MediaFiles.openOriginal(context, document, kind) }, day = modified, uri = document,
+            open = {
+                if (document.authority == EXTERNAL) {
+                    context.contentResolver.openInputStream(document) ?: throw IOException("Originale nella cartella non leggibile.")
+                } else MediaFiles.openOriginal(context, document, kind)
+            }, day = modified, uri = document,
             modifiedDay = modified, phonePath = if (document.authority == EXTERNAL) entry.id else "")
     }
 

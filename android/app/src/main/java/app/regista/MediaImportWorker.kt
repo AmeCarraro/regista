@@ -75,7 +75,16 @@ class MediaImportWorker(private val context:Context,private val memory:Memory,pr
 
     private fun prepareSelection() {
         val initial = value()
-        if (initial.prepared && (initial.groups.isNotEmpty() || initial.remaining.isEmpty())) return
+        if (initial.prepared && (initial.groups.isNotEmpty() || initial.remaining.isEmpty())) {
+            // Older versions saved the fixed selection before keeping a durable folder inventory.
+            if (initial.remaining.any { it.startsWith("tree:") } && (inventory.needsFolderRoots() || inventory.nextFolder() != null)) {
+                phase("scanning", "Recupero i riferimenti alle cartelle del blocco esistente.")
+                folders.scanResumable(inventory, kinds, ::cancelled) { count ->
+                    phase("scanning", "$count riferimenti alle cartelle salvati per riprendere la copia.")
+                }
+            }
+            return
+        }
         val individual = initial.prepared && initial.scope == "documents" && initial.remaining.all { it.startsWith("document:") }
         fun found(count: Int) = phase("scanning", "$count file trovati nelle raccolte e nelle cartelle autorizzate.")
         found(inventory.size())
@@ -182,7 +191,7 @@ class MediaImportWorker(private val context:Context,private val memory:Memory,pr
                     failed(id, error.message ?: "Un file della selezione non è leggibile.")
                 }
             }
-            if(hashed.isEmpty()) return
+            if (hashed.isEmpty()) throw ImportNeedsUser(warning.ifBlank { "I file del gruppo non sono leggibili." })
             val manifest=JSONArray()
             for((item,digest) in hashed) manifest.put(JSONObject().put("media",item.media).put("stamp",item.stamp)
                 .put("sha256",digest.sha256).put("name",item.name).put("folder",item.folder).put("kind",item.kind)
