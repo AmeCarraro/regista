@@ -1,7 +1,6 @@
 package app.regista
 
 import android.content.Context
-import android.net.Uri
 import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
@@ -32,38 +31,6 @@ import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
-
-/**
- * What the link shown by the computer says: where the computer is, how to recognise it, and the
- * secret that lets this phone in. `addresses` holds only the ones inside a private network.
- */
-class Invite(val addresses: List<String>, val port: Int, val secret: String, val fingerprint: String, val computer: String)
-
-/**
- * Whether an address is inside a private network: the one at home, or a private link between
- * one's own devices. The user's computer is never out on the open internet, so a link that
- * points there is not the user's: it is someone who wants this phone's pictures.
- */
-fun isPrivate(address: String): Boolean {
-    val parts = address.split(".").map { it.toIntOrNull() ?: return false }
-    if (parts.size != 4 || parts.any { it !in 0..255 }) return false
-    val (first, second) = parts
-    return first == 10 || (first == 172 && second in 16..31) || (first == 192 && second == 168) || (first == 100 && second in 64..127)
-}
-
-/** Reads a link like regista://pair?a=192.168.1.23&p=8443&s=...&f=... Anything else is not an invitation. */
-fun readInvite(text: String): Invite? {
-    val link = Uri.parse(text.trim())
-    if (link.scheme != "regista" || link.host != "pair") return null
-    val addresses = link.getQueryParameter("a")?.split(",")?.filter { it.isNotBlank() } ?: return null
-    val port = link.getQueryParameter("p")?.toIntOrNull() ?: return null
-    val secret = link.getQueryParameter("s") ?: return null
-    val fingerprint = link.getQueryParameter("f") ?: return null
-    if (addresses.isEmpty() || secret.isEmpty() || fingerprint.length != 64) return null
-    // the name is shown to the user in the question that pairs: one line of it, so that it cannot pass for the rest of the question
-    val computer = (link.getQueryParameter("n") ?: "").filter { !it.isISOControl() }.trim().take(40)
-    return Invite(addresses.filter(::isPrivate), port, secret, fingerprint, computer)
-}
 
 /**
  * The other addresses of the network this phone is on by Wi-Fi or by cable, where the computer may be: the same

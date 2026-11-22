@@ -2,6 +2,16 @@
 
 Aggiornamento del 19 novembre 2026, APK **0.6**. L'AI fotografica viene eseguita sul PC. Il telefono conserva un indice di tag, descrizioni e metadati; riproduce musica e video locali senza un modello neurale nell'app.
 
+Dal 22 novembre, APK **0.8**: Foto, Video e impostazioni riprendono colori, tipografia, schede e pulsanti arrotondati delle schermate originali. Le impostazioni, con importazione delle foto, copia automatica e backup completo, si aprono dal pulsante in alto nella scheda Telefono. Il pulsante circolare di aggiornamento accanto a **Il tuo catalogo** conserva l'azione **Aggiorna il catalogo dal PC**.
+
+## Collegamento con la fotocamera
+
+In **Computer → Scansiona QR**, Regista chiede il permesso della fotocamera e apre uno scanner locale limitato ai QR. Inquadra il codice mostrato sul PC nella sezione Telefono. Lo scanner restituisce soltanto inviti Regista validi; collegamento e accesso alle foto richiedono ancora conferma sul telefono e sul PC. Nessun fotogramma viene salvato o inviato. Puoi annullare e incollare il link; se il permesso è negato, rimangono disponibili inserimento manuale e accesso alle impostazioni del permesso.
+
+Il vecchio flusso offriva soltanto il link manuale e l'apertura di Regista dalla fotocamera esterna: lo scanner interno viene aggiunto in questa versione, con ZXing Android Embedded 4.3.0. Non dipende da Google Play Services e non riattiva i modelli del telefono. Il parser condiviso da QR, link incollati e deep link verifica formato, porta, certificato e indirizzi privati; gli inviti non validi non avviano connessioni.
+
+Verifiche 0.8: 119 test web, TypeScript, lint, 23 test JVM Android (8 sugli inviti QR), compilazione release e confronto visivo a larghezza telefono con dati fittizi per Foto, Video e Backup. Lo scanner compila; non è ancora stato provato con una fotocamera fisica.
+
 ## Catalogo sul telefono
 
 Il PC esporta una copia SQLite separata contenente una riga per contenuto SHA-256, tag effettivi con correzioni, descrizione, data, luogo e stato di catalogazione. Il file non contiene originali, ZIP, percorsi del PC, credenziali o tabelle interne del catalogo. Gli identificativi Android sono inclusi soltanto per il telefono che richiede la copia.

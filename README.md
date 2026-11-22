@@ -21,6 +21,8 @@ Musica locale e widget funzionano senza PC. Nella scheda **Video** scegli i file
 
 Con l'APK **0.7**, **Impostazioni e backup** contiene il comando confermato per copiare sul PC immagini, audio e video accessibili, con cartelle supplementari selezionabili, deduplicazione SHA-256, ZIP verificati e ripresa. Supporta la rete del tethering USB; il solo cavo in modalità ricarica/MTP non basta. [Copertura, collegamento e recupero](docs/backup-completo-telefono.md).
 
+L'APK **0.8** uniforma Foto, Video, impostazioni e catalogo allo stile di Musica e Computer. In **Computer → Scansiona QR** apre la fotocamera dentro Regista: consenti il permesso, inquadra il codice sul PC e conferma il collegamento sui due dispositivi. La lettura avviene sul telefono, senza servizi Google o modelli AI; resta disponibile l'inserimento manuale del link. Importazione e backup sono raccolti nel pulsante **Impostazioni e backup** in alto nella scheda Telefono.
+
 ## Modello esplicito
 
 Il candidato predefinito è `qwen3-vl:2b-instruct`, configurabile con `REGISTA_QWEN_MODEL` oppure `qwen_model` nel `settings.json` desktop. Serve il tag esatto: nessun modello alternativo viene scelto automaticamente e nessun modello viene scaricato all’avvio.

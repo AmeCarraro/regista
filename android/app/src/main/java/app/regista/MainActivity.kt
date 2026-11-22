@@ -435,6 +435,9 @@ class MainActivity : Activity() {
     // ---- pairing
 
     private fun setUpPairing() {
+        findViewById<Button>(R.id.scan_qr).setOnClickListener {
+            startActivityForResult(Intent(this, PairingScanner::class.java), SCAN_QR)
+        }
         findViewById<Button>(R.id.pair).setOnClickListener {
             val invite = readInvite(findViewById<EditText>(R.id.link).text.toString())
             if (invite == null) {
@@ -604,6 +607,13 @@ class MainActivity : Activity() {
     /** The user answered Android's question. The computer is told which pictures left, or that none did. */
     override fun onActivityResult(request: Int, result: Int, data: Intent?) {
         super.onActivityResult(request, result, data)
+        if (request == SCAN_QR) {
+            if (result == RESULT_OK) {
+                val invite = data?.getStringExtra(PairingScanner.INVITE)?.let(::readInvite)
+                if (invite != null) offer(invite) else pairingSays("QR non valido. Inquadra il codice di Regista sul PC.")
+            }
+            return
+        }
         if (request == BACKUP_FOLDER) {
             if (result == RESULT_OK && data?.data != null) {
                 try { backupFolders.add(data.data!!) }
@@ -665,6 +675,7 @@ class MainActivity : Activity() {
         const val ADD_VIDEOS = 6
         const val BACKUP_PERMISSIONS = 7
         const val BACKUP_FOLDER = 8
+        const val SCAN_QR = 9
         // the tab the app is opened on, when it is not the first one
         const val TAB = "app.regista.TAB"
 

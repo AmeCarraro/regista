@@ -18,10 +18,10 @@ android {
         // A larger number at every build, the minutes since 2026 began: a phone takes from the computer an app
         // with a larger one than its own, with no cable (Update.kt). The last number set by hand was 3.
         versionCode = (System.currentTimeMillis() / 60_000 - 29_453_760).toInt()
-        versionName = "0.7"
+        versionName = "0.8"
     }
 
-    // One app file for each kind of phone, each with only its own copy of the engine that runs the models:
+    // One app file for each kind of phone; photo models stay on the PC.
     // arm64-v8a for almost every phone and tablet, armeabi-v7a for older 32-bit ones, x86_64 for the emulator.
     splits {
         abi {
@@ -73,5 +73,6 @@ android {
 
 dependencies {
     // Photo models run only on the PC; no neural runtime is shipped to the phone.
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
     testImplementation("junit:junit:4.13.2")
 }

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import './bridge.ts'
+import PhoneHeader from './PhoneHeader.tsx'
+import { Cross, Play, Plus, Search } from '../icons.tsx'
 
 type VideoState = { videos: { id: string; title: string }[]; adding: boolean; error: string }
 function current(): VideoState {
@@ -21,16 +23,17 @@ export default function Video({ visible }: { visible: boolean }) {
   }, [state.videos, query])
   if (!visible) return null
   return <main className="phone videos">
-    <h1>Video del telefono</h1>
-    <p>Scegli i video dalle tue cartelle e guardali in Regista. Restano dove sono, senza copiarli sul PC.</p>
-    <button disabled={state.adding} onClick={() => window.Regista?.addVideos?.()}>{state.adding ? 'Aggiungo i video…' : 'Scegli video dal telefono'}</button>
-    {state.error && <p role="alert">{state.error}</p>}
-    <label>Cerca un video<input value={query} placeholder="Nome del video" onChange={event => setQuery(event.target.value)} /></label>
-    {!shown.length && <p>{state.videos.length ? 'Nessun video con questo nome.' : 'Non hai ancora scelto video.'}</p>}
+    <PhoneHeader section="video" />
+    <div className="phone-intro"><h1>I tuoi video</h1><p>Un momento da riguardare, anche senza PC.</p></div>
+    <button className="phone-action primary" disabled={state.adding} onClick={() => window.Regista?.addVideos?.()}><Plus />{state.adding ? 'Aggiungo i video…' : 'Scegli video dal telefono'}</button>
+    {state.error && <p className="phone-feedback" role="alert">{state.error}</p>}
+    <label className="ask saved-search"><Search /><input aria-label="Cerca un video" value={query} placeholder="Cerca un video" enterKeyHint="search" onChange={event => setQuery(event.target.value)} /></label>
+    {!shown.length && <div className="phone-empty"><span className="phone-empty-icon"><Play /></span><h2>{state.videos.length ? 'Nessun video trovato' : 'La tua sala, sul telefono'}</h2>
+      <p>{state.videos.length ? 'Prova a cercare con un altro nome.' : 'Aggiungi un video dalle tue cartelle e guardalo qui. Il file resta dove si trova.'}</p></div>}
     <ul className="video-list">{shown.map(video => <li key={video.id}>
-      <button onClick={() => window.Regista?.playVideo?.(video.id)}>Riproduci · {video.title}</button>
-      <button disabled={state.adding} aria-label={`Togli ${video.title} dalla raccolta`} onClick={() => { window.Regista?.removeVideo?.(video.id); setState(current()) }}>Togli dalla raccolta</button>
+      <button className="video-play" onClick={() => window.Regista?.playVideo?.(video.id)} aria-label={`Riproduci ${video.title}`}><span className="video-play-icon"><Play /></span><span><b>{video.title}</b><small>Sul telefono</small></span></button>
+      <button className="phone-icon" disabled={state.adding} aria-label={`Togli ${video.title} dalla raccolta`} onClick={() => { window.Regista?.removeVideo?.(video.id); setState(current()) }}><Cross /></button>
     </li>)}</ul>
-    <p>Il lettore usa i formati supportati dal telefono. Togliere un video dalla raccolta lascia intatto il file originale.</p>
+    <p className="phone-caption">Togliere un video dalla raccolta lascia intatto il file originale. Il lettore usa i formati supportati dal telefono.</p>
   </main>
 }

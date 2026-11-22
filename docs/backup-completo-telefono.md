@@ -2,7 +2,7 @@
 
 19 novembre 2026 · APK 0.7.
 
-In **Telefono → Impostazioni e backup → Sincronizza tutti i contenuti sul PC**, una conferma esplicita avvia il backup di immagini, foto, audio e video. Non è un'operazione periodica e non cancella originali dal telefono. La classificazione AI resta separata e in pausa.
+In **Telefono → Impostazioni e backup → Sincronizza tutti i contenuti…**, una conferma esplicita avvia il backup di immagini, foto, audio e video. Non è un'operazione periodica e non cancella originali dal telefono. La classificazione AI resta separata e in pausa. Nell'APK 0.8 le impostazioni si aprono dal pulsante in alto nella scheda Telefono; dettagli su cartelle, USB e copertura sono sezioni espandibili.
 
 ## Copertura della scansione
 

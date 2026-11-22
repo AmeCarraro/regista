@@ -2,7 +2,7 @@
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/ground"
+    android:background="@drawable/pairing_ground"
     android:fillViewport="true">
 
     <LinearLayout
@@ -13,9 +13,9 @@
         android:padding="28dp">
 
         <ImageView
-            android:layout_width="84dp"
-            android:layout_height="84dp"
-            android:layout_marginTop="36dp"
+            android:layout_width="64dp"
+            android:layout_height="64dp"
+            android:layout_marginTop="24dp"
             android:contentDescription="@null"
             android:src="@drawable/mark" />
 
@@ -26,7 +26,7 @@
             android:gravity="center"
             android:text="@string/pairing_title"
             android:textColor="@color/text"
-            android:textSize="24sp"
+            android:textSize="28sp"
             android:textStyle="bold" />
 
         <TextView
@@ -38,11 +38,29 @@
             android:textColor="@color/muted"
             android:textSize="16sp" />
 
+        <Button
+            android:id="@+id/scan_qr"
+            style="@style/PillButton"
+            android:layout_width="match_parent"
+            android:layout_height="54dp"
+            android:layout_marginTop="26dp"
+            android:drawableStart="@drawable/qr"
+            android:drawablePadding="12dp"
+            android:text="@string/pairing_scan" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="26dp"
+            android:text="@string/pairing_manual"
+            android:textColor="@color/muted"
+            android:textSize="13sp" />
+
         <EditText
             android:id="@+id/link"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="22dp"
+            android:layout_marginTop="10dp"
             android:background="@drawable/field"
             android:hint="@string/pairing_hint"
             android:importantForAutofill="no"
@@ -55,10 +73,10 @@
 
         <Button
             android:id="@+id/pair"
+            style="@style/PillButton.Secondary"
             android:layout_width="match_parent"
             android:layout_height="52dp"
             android:layout_marginTop="14dp"
-            android:background="@drawable/go"
             android:text="@string/pairing_go"
             android:textAllCaps="false"
             android:textColor="#FFFFFF"

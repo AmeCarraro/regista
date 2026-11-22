@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:fitsSystemWindows="true" android:background="@drawable/pairing_ground"
+    android:orientation="vertical" android:padding="24dp">
+    <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:text="Scansiona il QR del PC" android:textColor="@color/text" android:textSize="26sp" android:textStyle="bold" />
+    <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="10dp" android:layout_marginBottom="20dp"
+        android:text="Inquadra il codice nella sezione Telefono di Regista sul computer."
+        android:textColor="@color/muted" android:textSize="15sp" />
+    <FrameLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
+        android:background="@drawable/field" android:clipToOutline="true">
+        <com.journeyapps.barcodescanner.DecoratedBarcodeView
+            android:id="@+id/scanner" android:layout_width="match_parent" android:layout_height="match_parent" />
+    </FrameLayout>
+    <TextView android:id="@+id/scan_message" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="16dp" android:accessibilityLiveRegion="polite"
+        android:textColor="@color/muted" android:textSize="14sp" />
+    <Button android:id="@+id/scan_permission" style="@style/PillButton" android:layout_width="match_parent"
+        android:layout_height="52dp" android:layout_marginTop="12dp" android:text="Consenti fotocamera" android:visibility="gone" />
+    <Button android:id="@+id/scan_cancel" style="@style/PillButton.Secondary" android:layout_width="match_parent"
+        android:layout_height="52dp" android:layout_marginTop="12dp" android:text="Usa il collegamento manuale" />
+</LinearLayout>
