@@ -218,7 +218,7 @@ def api(catalog, jobs, root, read_only=False):
     return TestClient(app)
 
 
-def test_import_deduplicates_across_folders_keeps_annotations_paused_and_requires_hash(library):
+def test_import_deduplicates_across_folders_preserves_tagging_mode_and_requires_hash(library):
     root, catalog, jobs, annotator = library
     data = io.BytesIO()
     Image.new('RGB', (32, 24), 'red').save(data, 'PNG')
@@ -232,7 +232,7 @@ def test_import_deduplicates_across_folders_keeps_annotations_paused_and_require
     uploaded = client.put('/phone/catalog/import?media=1&stamp=a', content=content, headers=headers)
     assert uploaded.status_code == 200, uploaded.text
     assert uploaded.json()['duplicate'] is False
-    assert jobs.mode == 'paused'
+    assert uploaded.json()['tagging'] == jobs.mode == 'manual'
     assert annotator.calls == []
     duplicate = client.put('/phone/catalog/import?media=2&stamp=a', content=content, headers=headers)
     assert duplicate.json()['duplicate'] is True
@@ -240,7 +240,9 @@ def test_import_deduplicates_across_folders_keeps_annotations_paused_and_require
     catalog.scan(VERSION, stable_seconds=0)
     assert catalog.status()['copies'] == 1
     body = {'protocol': 2, 'photos': [{'media': '3', 'stamp': 'x', 'sha256': sha}]}
-    assert client.post('/phone/catalog/missing', json=body, headers=headers).json()['wanted'] == []
+    manifest = client.post('/phone/catalog/missing', json=body, headers=headers).json()
+    assert manifest['wanted'] == []
+    assert manifest['tagging'] == jobs.mode == 'manual'
     assert client.post('/phone/catalog/missing', json={**body, 'protocol': 1}, headers=headers).status_code == 426
     assert client.put('/phone/catalog/import?media=4&stamp=x', content=b'wrong', headers=headers).status_code == 400
     assert client.get('/api/catalog/status', headers=headers).json()['roots'][0].keys() == {'id', 'label'}

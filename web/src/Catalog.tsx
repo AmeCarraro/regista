@@ -135,7 +135,7 @@ export default function Catalog({ visible = true, request = catalogRequest, medi
           <button disabled={busy || !selected.length} onClick={() => void control('reanalyze')}>Rianalizza selezione ({selected.length})</button>
           <button disabled={busy} onClick={() => void perform(async () => {
             const imported = await request<{ devices: number }>('/api/catalog/phone-import', {})
-            setNote(`Importazione richiesta a ${imported.devices} telefoni. Apri Regista sul telefono; i tag restano in pausa.`); await refresh()
+            setNote(`Importazione richiesta a ${imported.devices} telefoni. Apri Regista sul telefono per seguire la copia.`); await refresh()
           })}>Importa foto e video dal telefono</button>
         </div>
         <details><summary>Cartelle autorizzate e modello</summary><ul>{status.roots.map(r => <li key={r.id}>{r.label}: {r.path}</li>)}</ul>

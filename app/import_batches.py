@@ -82,8 +82,8 @@ def safe_name(name):
 
 
 class ImportBatches:
-    def __init__(self, catalog, import_dir, jobs=None):
-        self.catalog, self.jobs = catalog, jobs
+    def __init__(self, catalog, import_dir):
+        self.catalog = catalog
         self.database = catalog.database.parent / 'import-batches.sqlite'
         self.staging = catalog.database.parent.resolve() / 'media-staging'
         self.import_dir = Path(import_dir).resolve()
@@ -181,8 +181,6 @@ class ImportBatches:
                 now = time.time()
                 db.execute('INSERT INTO runs(id,device,work,request_id,scope,total,state,created,updated,transport,source,document_type) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
                            (batch, device, body.work_id, body.request_id, body.scope, body.total, 'copying', now, now,body.transport,body.source,body.document_type))
-        if self.jobs:
-            self.jobs.pause()
         return self.status(batch, device)
 
     def manifest(self, device, body):
@@ -353,13 +351,15 @@ class ImportBatches:
         if not members <= set(by_sha):
             raise ValueError('Lo ZIP contiene originali estranei alla selezione.')
 
+        # The local copies above are verified. Finish their block ZIP before
+        # publishing them into the catalog, where an active worker can claim them.
+        archive_sha = self.write_archive(value, archive, files, by_sha, paths, members) if members else ''
         if files:
             self.import_dir.mkdir(parents=True, exist_ok=True)
             import_root = self.catalog.add_root(self.import_dir)
             roots = [(row['id'], Path(row['path'])) for row in self.catalog.roots(local=True)]
             for sha, origins in by_sha.items():
-                paths[sha] = self.publish_original(paths[sha], origins, value['device'], import_root, roots)
-        archive_sha = self.write_archive(value, archive, files, by_sha, paths, members) if members else ''
+                self.publish_original(paths[sha], origins, value['device'], import_root, roots)
         with self.connect() as db:
             db.execute("UPDATE runs SET state='ready',zip_sha=?,error='',updated=? WHERE id=?", (archive_sha, time.time(), batch))
         return self.status(batch)
@@ -503,9 +503,9 @@ class ImportBatches:
         return manifest
 
 
-def routes(catalog,jobs,import_dir,read_only=False,phones=None):
+def routes(catalog,import_dir,read_only=False,phones=None):
     router=APIRouter()
-    manager=ImportBatches(catalog,import_dir,jobs)
+    manager=ImportBatches(catalog,import_dir)
     catalog.batch_imports=manager
 
     def phone(request):

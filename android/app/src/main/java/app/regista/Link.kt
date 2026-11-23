@@ -369,7 +369,7 @@ class Link(
                     if (refused.status == 401) throw refused
                     fail(photo, refused.message ?: "Il PC non accetta ${photo.name}.")
                 }
-                tell("Importazione: $copied copiate, $duplicates già presenti, $failed errori, su ${photos.size}. Tag in pausa.")
+                tell("Importazione: $copied copiate, $duplicates già presenti, $failed errori, su ${photos.size}.")
             }
             progress(false)
         }
@@ -377,7 +377,7 @@ class Link(
         progress(true)
         session?.finished()
         if (copied > 0) memory.copied(copied)
-        tell("Importazione completata: $copied copiate, $duplicates già presenti, $failed errori. Avvia i tag dal PC quando vuoi.")
+        tell("Importazione completata: $copied copiate, $duplicates già presenti, $failed errori.")
     }
 
     /** Puts in line for the computer the pictures added to the gallery since the user asked for the new ones to go by themselves. */

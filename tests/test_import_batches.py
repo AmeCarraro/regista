@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from PIL import Image
 import pytest
 
-from photo_catalog import PhotoCatalog
+from photo_catalog import PhotoCatalog, fingerprint
 from import_batches import ImportBatches, ImportFile, ImportManifest, StartImport
 
 
@@ -63,13 +63,21 @@ def test_retry_retains_work_and_does_not_request_confirmed_file_again(batches,tm
     assert batches.status(batch)['copied']==1
 
 
-def test_photos_and_videos_share_one_verified_immutable_zip_with_origins(batches,tmp_path):
+def test_photos_and_videos_share_one_verified_immutable_zip_with_origins(batches,tmp_path,monkeypatch):
     photo,p=sample(tmp_path)
     video,v=sample(tmp_path,'viaggio.mp4','video','video:external:1','Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Video')
     originals={p.sha256:photo.read_bytes(),v.sha256:video.read_bytes()}
     batch=begin(batches,total=2)
     send(batches,batch,photo,p)
     send(batches,batch,video,v)
+    assert batches.catalog.status()['pending'] == 0
+    register = batches.catalog.register
+
+    def register_after_zip(root, path, version):
+        assert batches.catalog.archive.has_verified(fingerprint(path))
+        return register(root, path, version)
+
+    monkeypatch.setattr(batches.catalog, 'register', register_after_zip)
     result=batches.finalize_sync(batch)
     assert result['zip_ready'] and result['images']==1 and result['videos']==1
     archive=batches.zip_path(batch)
@@ -87,6 +95,7 @@ def test_photos_and_videos_share_one_verified_immutable_zip_with_origins(batches
     batches.finalize_sync(batch)
     assert archive.read_bytes()==immutable
     assert batches.catalog.status()['backup']['archives']==1
+    assert set(batches.catalog.archive.root.rglob('*.zip')) == {archive}
     with batches.catalog.connect() as db:
         notes=[json.loads(row[0]) for row in db.execute('SELECT metadata FROM file_locations')]
     assert {row['media_kind'] for row in notes}=={'image','video'}

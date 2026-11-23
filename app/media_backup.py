@@ -297,7 +297,7 @@ class MediaBackup:
         return self.status(device, body.run_id)
 
 
-def routes(catalog, jobs, *, read_only=False):
+def routes(catalog, *, read_only=False):
     router = APIRouter()
     backup = MediaBackup(catalog)
 
@@ -313,12 +313,14 @@ def routes(catalog, jobs, *, read_only=False):
 
     @router.post('/phone/media-backup/start')
     def start(request: Request):
-        selected = device(request); writable(); jobs.pause()
+        selected = device(request)
+        writable()
         return backup.start(selected)
 
     @router.post('/phone/media-backup/manifest')
     def manifest(body: Manifest, request: Request):
-        selected = device(request); writable(); jobs.pause()
+        selected = device(request)
+        writable()
         try:
             return backup.manifest(selected, body)
         except (OSError, ValueError) as error:
@@ -326,7 +328,8 @@ def routes(catalog, jobs, *, read_only=False):
 
     @router.put('/phone/media-backup/upload')
     async def upload(request: Request, run_id: str, media: str, stamp: str):
-        selected = device(request); writable(); jobs.pause()
+        selected = device(request)
+        writable()
         if not re.fullmatch(RUN, run_id) or not media or len(media) > 300 or len(stamp) > 1000:
             raise HTTPException(400, 'Identità del trasferimento non valida.')
         item = backup.named(selected, run_id, media, stamp)

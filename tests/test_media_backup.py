@@ -78,7 +78,7 @@ def test_all_media_are_preserved_byte_for_byte_in_verified_stored_zips_without_a
         assert db.execute('SELECT count(*) FROM assets').fetchone()[0] == 0
         assert db.execute('SELECT count(*) FROM jobs').fetchone()[0] == 0
         assert db.execute('SELECT count(*) FROM original_backups').fetchone()[0] == 3
-    assert jobs.mode == 'paused'
+    assert jobs.mode == 'manual'
     done = client.post('/phone/media-backup/progress', json={'run_id': run, 'total': 3, 'scanned': 3, 'done': True}, headers={'device': 'phone'}).json()
     assert done['state'] == 'completed' and done['copied'] == 3 and done['duplicates'] == 0
     portable = list((catalog.archive.root / 'sessioni').rglob(run + '.json'))
@@ -270,7 +270,7 @@ def test_photo_import_restores_existing_backup_without_another_phone_transfer(ba
     assert restored is not None and restored.read_bytes() == data
     assert restored.parent.name == 'Da catalogare'
     assert catalog.status()['discovered'] == 1 and catalog.status()['analyzed'] == 0
-    assert jobs.mode == 'paused'
+    assert jobs.mode == 'manual'
     with catalog.connect() as db:
         assert db.execute('SELECT state FROM jobs').fetchone()[0] == 'pending'
         assert db.execute('SELECT state FROM phone_import_items WHERE media=?', ('42',)).fetchone()[0] == 'received'

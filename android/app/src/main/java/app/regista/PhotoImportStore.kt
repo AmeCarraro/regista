@@ -120,5 +120,5 @@ class PhotoImportSession(private val store: PhotoImportStore, val work: String) 
     }
     fun uploading(name: String) { store.update(work) { it.copy(phase = "uploading", message = name) } }
     fun finished() { store.update(work) { check(it.complete); it.copy(requested = false, phase = "done",
-        message = if (it.failed == 0) "Importazione completata. I tag si avviano dal PC." else "Importazione terminata: ${it.failed} foto da riprovare.") } }
+        message = if (it.failed == 0) "Importazione completata." else "Importazione terminata: ${it.failed} foto da riprovare.") } }
 }

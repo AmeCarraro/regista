@@ -83,9 +83,20 @@ def test_new_phone_protocol_keeps_pairing_revocation_and_blocks_management(servi
     for path in ('/phone/vectors', '/phone/library'):
         assert phone.post(path, json={'photos': []}, headers=headers).status_code == 426
     assert phone.get('/phone/models', headers=headers).status_code == 426
-    assert client.post('/api/catalog/phone-import', json={}).json()['devices'] == 1
+    module.index_jobs.mode = 'manual'
+    assert client.post('/api/catalog/phone-import', json={}).json() == {'devices': 1, 'tagging': 'manual'}
     requested = phone.get('/phone/catalog/import-request', headers=headers).json()['request_id']
     assert requested
+    block = {'work_id': 'android-backup', 'request_id': requested, 'total': 10, 'source': 'whatsapp'}
+    started = phone.post('/phone/imports/start', headers=headers, json=block)
+    assert started.status_code == 200
+    assert module.index_jobs.mode == 'manual'
+    resumed = phone.post('/phone/imports/start', headers=headers, json=block)
+    assert resumed.json()['id'] == started.json()['id']
+    assert module.index_jobs.mode == 'manual'
+    module.index_jobs.pause()
+    assert phone.post('/phone/imports/start', headers=headers, json=block).status_code == 200
+    assert module.index_jobs.mode == 'paused'
     device = module.phones.devices[0]['id']
     client.post(f'/api/phone/devices/{device}/forget')
     assert phone.get('/api/catalog/status', headers=headers).status_code == 401

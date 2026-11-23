@@ -106,13 +106,12 @@ def routes(catalog, jobs, import_dir: Path, read_only=False, phones=None):
         if not devices:
             raise HTTPException(409, 'Nessun telefono collegato. Esegui prima il collegamento dal pannello Telefono.')
         import uuid
-        jobs.pause()
         with catalog.connect() as db:
             for device in devices:
                 db.execute('''INSERT INTO phone_import_requests(device,request_id) VALUES (?,?) ON CONFLICT(device)
                     DO UPDATE SET request_id=excluded.request_id,state='requested',total=0,copied=0,duplicates=0,error='' ''',
                            (device['id'], uuid.uuid4().hex))
-        return {'devices': len(devices), 'tagging': 'paused'}
+        return {'devices': len(devices), 'tagging': jobs.mode}
 
     @router.get('/phone/catalog/import-request')
     def import_request(request: Request):
@@ -294,7 +293,6 @@ def routes(catalog, jobs, import_dir: Path, read_only=False, phones=None):
             raise HTTPException(426, 'Aggiorna Regista su telefono e PC.')
         if read_only:
             raise HTTPException(409, 'Importazione disabilitata: cartella in sola lettura.')
-        jobs.pause()  # Import first, annotation only after another explicit Start.
         wanted = []
         for photo in body.photos:
             from photo_import import RestoreBackupError, restore_backup
@@ -326,7 +324,7 @@ def routes(catalog, jobs, import_dir: Path, read_only=False, phones=None):
                 with catalog.connect() as db:
                     db.execute('INSERT INTO import_receipts VALUES (?,?,?,?) ON CONFLICT(device,media) DO UPDATE SET stamp=excluded.stamp,asset_id=excluded.asset_id',
                                (device, photo.media, photo.stamp, photo.sha256))
-        return {'protocol': PROTOCOL, 'wanted': wanted, 'tagging': 'paused'}
+        return {'protocol': PROTOCOL, 'wanted': wanted, 'tagging': jobs.mode}
 
     @router.put('/phone/catalog/import')
     async def upload(request: Request, media: str = Query(min_length=1, max_length=100), stamp: str = Query(max_length=100), name: str = Query(default='', max_length=300)):
@@ -336,7 +334,6 @@ def routes(catalog, jobs, import_dir: Path, read_only=False, phones=None):
         sha = request.headers.get('x-regista-sha256', '').lower()
         if not re.fullmatch('[a-f0-9]{64}', sha):
             raise HTTPException(400, 'Serve SHA-256 della foto originale.')
-        jobs.pause()
         staging = catalog.database.parent / 'catalog-staging'
         staging.mkdir(parents=True, exist_ok=True)
         descriptor, temporary = tempfile.mkstemp(suffix='.part', dir=staging)
@@ -372,7 +369,8 @@ def routes(catalog, jobs, import_dir: Path, read_only=False, phones=None):
                         ON CONFLICT(device,media) DO UPDATE SET stamp=excluded.stamp,asset_id=excluded.asset_id''', (result['id'],))
                 return result
             try:
-                return await asyncio.to_thread(commit)
+                result = await asyncio.to_thread(commit)
+                return {**result, 'tagging': jobs.mode}
             except (ValueError, OSError) as error:
                 with catalog.connect() as db:
                     db.execute("UPDATE phone_import_items SET state='error',error=? WHERE device=? AND media=?",
@@ -382,9 +380,9 @@ def routes(catalog, jobs, import_dir: Path, read_only=False, phones=None):
             partial.unlink(missing_ok=True)
 
     from media_backup import routes as media_routes
-    router.include_router(media_routes(catalog, jobs, read_only=read_only))
+    router.include_router(media_routes(catalog, read_only=read_only))
     from import_batches import routes as batch_routes
-    router.include_router(batch_routes(catalog,jobs,import_dir,read_only=read_only,phones=phones))
+    router.include_router(batch_routes(catalog,import_dir,read_only=read_only,phones=phones))
     from catalog_organize import routes as organization_routes
     router.include_router(organization_routes(catalog,read_only=read_only))
     return router

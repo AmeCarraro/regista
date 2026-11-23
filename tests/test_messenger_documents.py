@@ -48,7 +48,6 @@ def setup(tmp_path):
     target=tmp_path/'PC'
     target.mkdir()
     catalog.add_root(target)
-    jobs=SimpleNamespace(pause=lambda:None)
     phones=SimpleNamespace(devices=[{'id':'redmi','name':'Redmi di prova'}])
     def client():
         app=FastAPI()
@@ -57,7 +56,7 @@ def setup(tmp_path):
             if request.url.path.startswith('/phone/'):
                 request.state.device=request.headers.get('X-Test-Device','redmi')
             return await call_next(request)
-        app.include_router(routes(catalog,jobs,target/'Importate dal telefono',phones=phones))
+        app.include_router(routes(catalog,target/'Importate dal telefono',phones=phones))
         return TestClient(app),catalog.batch_imports
     http,manager=client()
     yield SimpleNamespace(phone=phone,wa=wa,normal=normal,catalog=catalog,manager=manager,http=http,restart=client,target=target)
