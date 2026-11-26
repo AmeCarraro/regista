@@ -21,7 +21,7 @@ from photo_catalog import fingerprint
 PROTOCOL = 3
 PAGE = 200
 PARTS = 4
-ORDER = "(media LIKE 'tree:%'),media"
+ORDER = "scan_group,(media LIKE 'tree:%'),media"
 
 
 def whatsapp_folder(folder):
@@ -66,6 +66,8 @@ class Matched(BaseModel):
     files: list[Candidate] = Field(max_length=PAGE)
     finished: bool = True
     offset: int | None = Field(default=None, ge=0)
+    review: int | None = Field(default=None, ge=0)
+    checked: int | None = Field(default=None, ge=0, le=PAGE)
 
 
 class ReviewStep(BaseModel):
@@ -110,6 +112,12 @@ class ArchiveCleanup:
                     selected INTEGER NOT NULL DEFAULT 0,authorized INTEGER NOT NULL DEFAULT 0,removed INTEGER NOT NULL DEFAULT 0,
                     PRIMARY KEY(job,media));''')
             db.execute('BEGIN IMMEDIATE')
+            file_columns = {row['name'] for row in db.execute('PRAGMA table_info(cleanup_files)')}
+            if 'scan_group' not in file_columns:
+                db.execute('ALTER TABLE cleanup_files ADD COLUMN scan_group INTEGER NOT NULL DEFAULT 0')
+            if 'reviewed' not in file_columns:
+                db.execute('ALTER TABLE cleanup_files ADD COLUMN reviewed INTEGER NOT NULL DEFAULT 0')
+                db.execute("ALTER TABLE cleanup_files ADD COLUMN original TEXT NOT NULL DEFAULT ''")
             if 'policy' not in {row['name'] for row in db.execute('PRAGMA table_info(cleanup_jobs)')}:
                 db.execute("ALTER TABLE cleanup_jobs ADD COLUMN policy TEXT NOT NULL DEFAULT ''")
             db.execute("""UPDATE cleanup_jobs SET state='cancelled',error='Richiesta precedente. Crea una nuova anteprima.'
@@ -125,10 +133,6 @@ class ArchiveCleanup:
                     if row['state'] == 'finding':
                         scanned = self.legacy_offset(db, row['id'], total)
                     db.execute('UPDATE cleanup_jobs SET scan_total=?,scanned=? WHERE id=?', (total, scanned, row['id']))
-            file_columns = {row['name'] for row in db.execute('PRAGMA table_info(cleanup_files)')}
-            if 'reviewed' not in file_columns:
-                db.execute('ALTER TABLE cleanup_files ADD COLUMN reviewed INTEGER NOT NULL DEFAULT 0')
-                db.execute("ALTER TABLE cleanup_files ADD COLUMN original TEXT NOT NULL DEFAULT ''")
             db.execute("CREATE INDEX IF NOT EXISTS cleanup_originals ON cleanup_files(job,original) WHERE original!=''")
 
     @staticmethod
@@ -196,38 +200,47 @@ class ArchiveCleanup:
         self.batches.pool.submit(self.prepare_sync, identifier)
         return self.status(identifier)
 
+    def receipts(self, value, target):
+        sql = '''SELECT f.* FROM files f JOIN runs r ON r.id=f.batch_id
+            WHERE r.device=? AND r.state='ready' AND f.state='received' AND f.kind IN ('image','video')'''
+        parameters = [target.device]
+        if value['batch_id']:
+            sql += ' AND f.batch_id=? AND f.archive_member=1'
+            parameters.append(value['batch_id'])
+        with self.batches.connect() as db:
+            rows = db.execute(sql + ' ORDER BY r.created DESC, f.media', parameters).fetchall()
+        receipts = []
+        seen = set()
+        for item in rows:
+            if item['media'] in seen:
+                continue
+            seen.add(item['media'])
+            if target.kind not in ('all', item['kind']):
+                continue
+            if target.source == 'whatsapp' and not whatsapp_folder(item['folder']):
+                continue
+            if target.source in ('normal', 'telegram') and source_group(item['folder']) != target.source:
+                continue
+            receipts.append(item)
+        return receipts
+
+    @staticmethod
+    def insert_receipts(db, identifier, receipts, group=0):
+        return db.executemany('''INSERT OR IGNORE INTO cleanup_files(job,media,stamp,sha256,name,folder,kind,size,scan_group)
+            VALUES (?,?,?,?,?,?,?,?,?)''',
+            [(identifier, item['media'], item['stamp'], item['sha256'], item['name'], item['folder'],
+              item['kind'], item['size'], group) for item in receipts]).rowcount
+
     def prepare_sync(self, identifier):
         value = self.job(identifier)
         try:
             target = CleanupTarget.model_validate_json(value['policy'])
-            sql = '''SELECT f.* FROM files f JOIN runs r ON r.id=f.batch_id
-                WHERE r.device=? AND r.state='ready' AND f.state='received' AND f.kind IN ('image','video')'''
-            parameters = [target.device]
-            if value['batch_id']:
-                sql += ' AND f.batch_id=? AND f.archive_member=1'
-                parameters.append(value['batch_id'])
-            with self.batches.connect() as db:
-                rows = db.execute(sql + ' ORDER BY r.created DESC, f.media', parameters).fetchall()
-            receipts = {}
-            seen = set()
-            for item in rows:
-                if item['media'] in seen:
-                    continue
-                seen.add(item['media'])
-                if target.kind not in ('all', item['kind']):
-                    continue
-                if target.source == 'whatsapp' and not whatsapp_folder(item['folder']):
-                    continue
-                if target.source in ('normal', 'telegram') and source_group(item['folder']) != target.source:
-                    continue
-                receipts[item['media']] = item
+            receipts = self.receipts(value, target)
             with self.batches.connect() as db:
                 db.execute('BEGIN IMMEDIATE')
                 if db.execute('SELECT state FROM cleanup_jobs WHERE id=?', (identifier,)).fetchone()[0] != 'verifying':
                     return
-                db.executemany('INSERT INTO cleanup_files(job,media,stamp,sha256,name,folder,kind,size) VALUES (?,?,?,?,?,?,?,?)',
-                               [(identifier, item['media'], item['stamp'], item['sha256'], item['name'], item['folder'],
-                                 item['kind'], item['size']) for item in receipts.values()])
+                self.insert_receipts(db, identifier, receipts)
                 db.execute('UPDATE cleanup_jobs SET state=?,scan_total=?,updated=? WHERE id=?',
                            ('finding' if receipts else 'matched', len(receipts), time.time(), identifier))
         except Exception as error:
@@ -282,9 +295,11 @@ class ArchiveCleanup:
             finished = body.finished
             page = None
             if body.offset is not None:
-                if body.offset != end:
+                if body.offset != end or (body.review is not None and body.review != row['review']):
                     raise HTTPException(409, 'Il punto di ripresa è cambiato.')
                 end = self.page_end(body.offset, row['scan_total'])
+                if body.checked is not None and body.checked != end - body.offset:
+                    raise HTTPException(409, 'Il lotto da controllare è cambiato.')
                 page = {item['media']: item for item in db.execute(f'''SELECT * FROM cleanup_files
                     WHERE job=? ORDER BY {ORDER} LIMIT ? OFFSET ?''', (body.job_id, end - body.offset, body.offset))}
                 finished = end >= row['scan_total'] or PARTS * end // row['scan_total'] > PARTS * body.offset // row['scan_total']
@@ -336,6 +351,22 @@ class ArchiveCleanup:
             if not changed:
                 raise HTTPException(409, 'Non ci sono altri file da controllare per questo lotto.')
             db.execute("UPDATE cleanup_files SET reviewed=1 WHERE job=? AND method!='' AND reviewed=0", (identifier,))
+        return self.status(identifier)
+
+    def include_videos(self, identifier, review):
+        value = self.job(identifier)
+        target = CleanupTarget.model_validate_json(value['policy'])
+        if target.source != 'whatsapp' or target.kind != 'image':
+            raise HTTPException(409, 'I video WhatsApp possono essere aggiunti a una verifica delle foto WhatsApp.')
+        receipts = self.receipts(value, target.model_copy(update={'kind': 'video'}))
+        with self.batches.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT state,review,policy FROM cleanup_jobs WHERE id=?', (identifier,)).fetchone()
+            if row['review'] != review or row['policy'] != value['policy'] or row['state'] not in ('matched', 'reviewed'):
+                raise HTTPException(409, 'Metti la verifica in pausa prima di aggiungere i video.')
+            count = self.insert_receipts(db, identifier, receipts, group=1)
+            db.execute('UPDATE cleanup_jobs SET policy=?,scan_total=scan_total+?,updated=? WHERE id=?',
+                       (target.model_copy(update={'kind': 'all'}).model_dump_json(), count, time.time(), identifier))
         return self.status(identifier)
 
     def verify_copies(self, job, files, *, check_archive_digest=False):
@@ -519,6 +550,13 @@ def routes(batches, phones=None, *, read_only=False):
         if read_only:
             raise HTTPException(409, 'Pulizia non disponibile in sola lettura.')
         return cleanup.continue_review(job, body.review)
+
+    @router.post('/api/import-cleanup/{job}/include-videos')
+    async def include_videos(request: Request, job: str, body: ReviewStep):
+        local(request)
+        if read_only:
+            raise HTTPException(409, 'Pulizia non disponibile in sola lettura.')
+        return await asyncio.to_thread(cleanup.include_videos, job, body.review)
 
     @router.get('/phone/import-cleanup')
     def pending(request: Request, protocol: int = 0):

@@ -236,9 +236,37 @@ def test_existing_legacy_review_recovers_the_last_saved_page(batches, tmp_path, 
         db.execute('DROP INDEX cleanup_originals')
         for column in ('scanned', 'scan_total', 'review'):
             db.execute(f'ALTER TABLE cleanup_jobs DROP COLUMN {column}')
-        for column in ('reviewed', 'original'):
+        for column in ('reviewed', 'original', 'scan_group'):
             db.execute(f'ALTER TABLE cleanup_files DROP COLUMN {column}')
     cleanup = ArchiveCleanup(batches)
     recovered = cleanup.status(job)
     assert (recovered['state'], recovered['count'], recovered['scanned'], recovered['scan_total']) == ('finding', 1, 2, 12)
     assert cleanup.pause_review(job, 0)['files'][0]['media'] == photo.media
+
+
+def test_add_whatsapp_videos_keeps_existing_photo_progress_and_excludes_other_media(batches, tmp_path):
+    root = 'Android/media/com.whatsapp/WhatsApp/Media'
+    photos = [sample(tmp_path, f'{i}.png', media=f'tree:{i}', folder=root + '/WhatsApp Images') for i in range(2)]
+    video = sample(tmp_path, 'received.mp4', 'video', 'tree:a', root + '/WhatsApp Video')
+    camera = sample(tmp_path, 'camera.mp4', 'video', 'video:external:1', 'DCIM/Camera')
+    batch = begin(batches, total=4)
+    for path, item in (*photos, video, camera):
+        batches.manifest('phone-1', ImportManifest(batch_id=batch, files=[item]))
+        if path.exists() and batches.normal_path(item.sha256) is None:
+            batches.receive('phone-1', batch, item.media, path, item.sha256)
+    assert batches.finalize_sync(batch)['zip_ready']
+    cleanup = ArchiveCleanup(batches)
+    target = CleanupTarget(device='phone-1', source='whatsapp', kind='image', until=date(2024, 12, 31))
+    job = cleanup.prepare('', target)['id']
+    batches.pool.submit(lambda: None).result(timeout=5)
+    old = Candidate(**cleanup.candidates('phone-1', job, 0, checkpoint=True)['files'][0],
+                    method='folder', day='2024-12-31', date_source='file')
+    cleanup.matched('phone-1', Matched(job_id=job, files=[old], offset=0))
+    result = cleanup.include_videos(job, 0)
+    assert result['policy']['until'] == '2024-12-31' and result['policy']['kind'] == 'all'
+    assert (result['scanned'], result['scan_total'], result['count']) == (1, 3, 1)
+    cleanup.continue_review(job, 0)
+    assert [row['media'] for row in cleanup.candidates('phone-1', job, 1, checkpoint=True)['files']] == ['tree:1']
+    cleanup.matched('phone-1', Matched(job_id=job, files=[], offset=1))
+    cleanup.continue_review(job, 1)
+    assert [row['media'] for row in cleanup.candidates('phone-1', job, 2, checkpoint=True)['files']] == ['tree:a']

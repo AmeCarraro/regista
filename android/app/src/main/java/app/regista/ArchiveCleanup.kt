@@ -14,7 +14,6 @@ import android.provider.MediaStore
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
-import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
@@ -22,8 +21,7 @@ import kotlin.concurrent.thread
 class ArchiveCleanup(private val app: MainActivity, private val memory: Memory, private val tell: (String) -> Unit) {
     private val settings = app.getSharedPreferences("archive-cleanup", Context.MODE_PRIVATE)
     private val busy = AtomicBoolean(false)
-    private val folders = BackupFolders(app)
-    private val media = MediaFiles(app, setOf("image", "video"))
+    private val originals = ArchiveOriginals(app)
     @Volatile private var enabled = false
     @Volatile private var last = 0L
     @Volatile private var inDialog = false
@@ -65,8 +63,13 @@ class ArchiveCleanup(private val app: MainActivity, private val memory: Memory, 
                 if (stopped(peer)) return@thread
                 when (job.getString("state")) {
                     "finding" -> {
-                        app.runOnUiThread { app.window.decorView.keepScreenOn = enabled }
-                        match(computer, job, peer, checkpoint)
+                        if (!checkpoint || !ArchiveReviewService.start(app, job.getString("id"), peer)) {
+                            app.runOnUiThread { app.window.decorView.keepScreenOn = enabled }
+                            originals.scan(computer, job, checkpoint, { stopped(peer) }, { scanned, total, complete ->
+                                tell(if (complete) "Lotto pronto sul PC. Controllati $scanned originali."
+                                    else "Controllo originali sul Redmi: $scanned${if (total > 0) " su $total" else ""}.")
+                            })
+                        }
                     }
                     "approved" -> applyApproved(computer, job, peer)
                 }
@@ -75,88 +78,12 @@ class ArchiveCleanup(private val app: MainActivity, private val memory: Memory, 
                         ?.let { JSONObject(it).optString("phase") == "result" } == true) {
                     settings.edit().remove("pending").commit()
                 }
-                if (!stopped(peer)) tell("Verifica originali: ${error.message.orEmpty()}")
+                if (!stopped(peer) && !(error is Refused && error.status == 409)) tell("Verifica originali: ${error.message.orEmpty()}")
             } finally {
                 app.runOnUiThread { app.window.decorView.keepScreenOn = false }
                 busy.set(false)
             }
         }
-    }
-
-    private fun locate(receipt: JSONObject): BackupMedia? {
-        val id = receipt.getString("media")
-        val stamp = receipt.getString("stamp")
-        val item = if (id.startsWith("tree:")) folders.cleanupItem(id, stamp)
-            else if (Build.VERSION.SDK_INT >= 30) media.lookup(id, stamp) else null
-        return item?.takeIf {
-            it.uri != null && it.name == receipt.getString("name") && it.folder == receipt.getString("folder") &&
-                it.kind == receipt.getString("kind") && (it.size < 0 || it.size == receipt.getLong("size"))
-        }
-    }
-
-    private fun day(file: BackupMedia) = CleanupDates.forFile(
-        ImportGroups.source(file.folder) == "whatsapp", file.name, file.modifiedDay, file.day)
-
-    private fun unchanged(item: BackupMedia, receipt: JSONObject, peer: String): Boolean {
-        if (stopped(peer) || !item.current()) return false
-        val digest = BackupRules.hash(item.open()) { stopped(peer) }
-        return !stopped(peer) && item.current() && digest.bytes == receipt.getLong("size") &&
-            digest.sha256 == receipt.getString("sha256")
-    }
-
-    private fun match(computer: Computer, job: JSONObject, peer: String, checkpoint: Boolean) {
-        val id = job.getString("id")
-        val policy = job.getJSONObject("policy")
-        val since = policy.optString("since").takeUnless { it == "null" }.orEmpty()
-        val until = policy.optString("until").takeUnless { it == "null" }.orEmpty()
-        val seenPaths = mutableSetOf<String>()
-        var offset = job.optInt("scanned")
-        var total = 0
-        var unknown = 0
-        val digest = MessageDigest.getInstance("SHA-256")
-        val protocol = if (checkpoint) 3 else 2
-        var complete: Boolean
-        do {
-            val candidates = computer.ask("GET", "/phone/import-cleanup/candidates?job_id=$id&offset=$offset&protocol=$protocol")
-                .getJSONArray("files")
-            val found = JSONArray()
-            for (index in 0 until candidates.length()) {
-                if (stopped(peer)) return
-                val receipt = candidates.getJSONObject(index)
-                val item = runCatching { locate(receipt) }.getOrNull() ?: continue
-                val physical = item.phonePath.ifEmpty { item.media }
-                if (physical in seenPaths) continue
-                val day = day(item)
-                if (!CleanupDates.includes(day, since, until)) {
-                    if (day.date.isEmpty()) unknown++
-                    continue
-                }
-                if (!runCatching { unchanged(item, receipt, peer) }.getOrDefault(false)) continue
-                seenPaths.add(physical)
-                val method = if (item.media.startsWith("tree:")) "folder" else "trash"
-                val original = receipt.put("day", day.date.takeIf { it.isNotEmpty() } ?: JSONObject.NULL)
-                    .put("date_source", day.source).put("method", method)
-                if (checkpoint) original.put("original", digest.digest(physical.toByteArray()).joinToString("") { "%02x".format(it) })
-                found.put(original)
-            }
-            if (stopped(peer)) return
-            val report = JSONObject().put("job_id", id).put("files", found).put("finished", candidates.length() < PAGE)
-            if (checkpoint) report.put("offset", offset)
-            val accepted = try { computer.ask("POST", "/phone/import-cleanup/matched", report) }
-            catch (refused: Refused) { if (refused.status == 409) return else throw refused }
-            offset += candidates.length()
-            total += found.length()
-            complete = candidates.length() < PAGE
-            if (checkpoint) {
-                offset = accepted.getInt("scanned")
-                complete = accepted.getBoolean("finished")
-                tell(if (complete) "Lotto pronto sul PC. Controllati $offset su ${job.getInt("scan_total")} originali."
-                    else "Controllo originali sul Redmi: $offset su ${job.getInt("scan_total")}.")
-            } else {
-                tell(if (complete) "Anteprima pronta sul PC: $total file trovati. ${if (unknown > 0) "$unknown file senza data restano sul telefono." else ""}"
-                    else "Controllo originali sul Redmi: $offset verificati per la selezione.")
-            }
-        } while (!complete && !stopped(peer))
     }
 
     private fun applyApproved(computer: Computer, job: JSONObject, peer: String) {
@@ -167,7 +94,7 @@ class ArchiveCleanup(private val app: MainActivity, private val memory: Memory, 
         val group = (0 until files.length()).map(files::getJSONObject).takeWhile { it.getString("method") == method }
         try {
             if (method == "folder") {
-                val first = locate(group.first())?.uri ?: throw IOException("Un originale è cambiato. Ricrea l’anteprima dal PC.")
+                val first = originals.locate(group.first())?.uri ?: throw IOException("Un originale è cambiato. Ricrea l’anteprima dal PC.")
                 val grant = writeAccess?.takeIf { it.first == review }?.second
                 if (grant == null || folderUri(first, grant) == null) {
                     askForFolder(WriteRequest(review, peer, first))
@@ -197,10 +124,10 @@ class ArchiveCleanup(private val app: MainActivity, private val memory: Memory, 
     }
 
     private fun checked(group: List<JSONObject>, peer: String): List<Checked> = group.map { receipt ->
-        val item = locate(receipt) ?: throw IOException("Un originale è cambiato. Ricrea l’anteprima dal PC.")
-        val currentDay = day(item)
+        val item = originals.locate(receipt) ?: throw IOException("Un originale è cambiato. Ricrea l’anteprima dal PC.")
+        val currentDay = originals.day(item)
         if (currentDay.date != receipt.optString("day") || currentDay.source != receipt.optString("date_source") ||
-            !unchanged(item, receipt, peer)) throw IOException("${item.name} è cambiato. Ricrea l’anteprima dal PC.")
+            !originals.unchanged(item, receipt) { stopped(peer) }) throw IOException("${item.name} è cambiato. Ricrea l’anteprima dal PC.")
         Checked(item, receipt)
     }
 
@@ -212,7 +139,7 @@ class ArchiveCleanup(private val app: MainActivity, private val memory: Memory, 
     }
 
     private fun folderUri(original: Uri, grant: Uri): Uri? {
-        val uri = folders.writableDocument(original, grant) ?: return null
+        val uri = originals.folders.writableDocument(original, grant) ?: return null
         return uri.takeIf { app.checkUriPermission(uri, Process.myPid(), Process.myUid(), Intent.FLAG_GRANT_WRITE_URI_PERMISSION) == PackageManager.PERMISSION_GRANTED }
     }
 
@@ -272,7 +199,7 @@ class ArchiveCleanup(private val app: MainActivity, private val memory: Memory, 
         var error = ""
         try {
             for (item in checked) {
-                if (folderConsent != review || !unchanged(item.file, item.receipt, peer))
+                if (folderConsent != review || !originals.unchanged(item.file, item.receipt) { stopped(peer) })
                     throw IOException("La conferma o l’identità del file non è più valida.")
                 val uri = folderUri(item.file.uri!!, grant) ?: throw IOException("Il permesso di rimozione è cambiato.")
                 if (stopped(peer) || folderConsent != review || !item.file.current()) throw IOException("Pulizia interrotta sul telefono.")
@@ -350,6 +277,5 @@ class ArchiveCleanup(private val app: MainActivity, private val memory: Memory, 
     companion object {
         const val REQUEST = 43
         const val WRITE_REQUEST = 46
-        private const val PAGE = 200
     }
 }

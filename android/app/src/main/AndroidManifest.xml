@@ -98,6 +98,8 @@
         <service android:name=".PhotoImportService" android:exported="false"
             android:stopWithTask="false" android:foregroundServiceType="dataSync" />
         <receiver android:name=".StopPhotoImport" android:exported="false" />
+        <service android:name=".ArchiveReviewService" android:exported="false"
+            android:stopWithTask="false" android:foregroundServiceType="dataSync" />
 
         <!-- the copying of the new pictures by themselves, run by Android now and then on a Wi-Fi (CopyJob) -->
         <service

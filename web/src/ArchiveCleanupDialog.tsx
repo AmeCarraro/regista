@@ -119,6 +119,8 @@ export default function ArchiveCleanupDialog({ request, archive, onClose }: {
   const selected = job ? (allSelected ? job.count - exceptions.size : exceptions.size) : 0
   const hasMore = !!job && job.scanned < job.scan_total
   const canContinue = hasMore && (job.state === 'matched' || job.state === 'reviewed')
+  const canIncludeVideos = !!job && job.policy.source === 'whatsapp' && job.policy.kind === 'image'
+    && (job.state === 'matched' || job.state === 'reviewed')
   const part = job?.scan_total
     ? Math.min(job.parts, Math.floor(Math.max(0, job.scanned - (job.state === 'finding' ? 0 : 1)) * job.parts / job.scan_total) + 1)
     : 1
@@ -166,7 +168,7 @@ export default function ArchiveCleanupDialog({ request, archive, onClose }: {
         {job.selected > 0 && ` · ${number.format(job.selected)} confermati`}
         {job.removed > 0 && ` · ${number.format(job.removed)} rimossi in tutto`}</p>
       {job.state === 'finding' && <>
-        <p className="catalog-muted">Tieni Regista aperto sul telefono. Regista salva il punto di ripresa man mano che controlla gli originali.</p>
+        <p className="catalog-muted">Apri Regista sul telefono per avviare il lotto. Quando appare la notifica di verifica puoi spegnere lo schermo.</p>
         <button type="button" disabled={!!busy} onClick={() => void act(`/api/import-cleanup/${job.id}/pause`, { review: job.review }, 'pause')}>
           {job.count ? 'Rivedi i file trovati finora' : 'Metti in pausa'}
         </button>
@@ -204,6 +206,10 @@ export default function ArchiveCleanupDialog({ request, archive, onClose }: {
       </>}
       {canContinue && <button type="button" disabled={!!busy} onClick={() => void act(`/api/import-cleanup/${job.id}/continue`, { review: job.review }, 'continue')}>
         {job.state === 'matched' && job.count > 0 ? 'Conserva i file del lotto e continua' : 'Continua la verifica'}
+      </button>}
+      {canIncludeVideos && <button type="button" disabled={!!busy} onClick={() => void act(
+        `/api/import-cleanup/${job.id}/include-videos`, { review: job.review }, 'include-videos')}>
+        {busy === 'include-videos' ? 'Aggiungo i video…' : 'Includi anche i video WhatsApp'}
       </button>}
       {activeJob && <button disabled={!!busy} onClick={() => void act(`/api/import-cleanup/${job.id}/confirm`, { yes: false, review: job.review }, 'cancel')}>
         {job.state === 'approved' ? 'Interrompi la richiesta' : 'Annulla verifica'}</button>}
