@@ -7,24 +7,29 @@ type Filter = { source: string; kind: string; since: string; until: string }
 type CleanupFile = { media: string; name: string; folder: string; kind: string; day: string; sha256: string; date_source: string }
 type Cleanup = { id: string; state: string; updated: number; count: number; images: number; videos: number;
   folder_files: number; selected: number; removed: number; error: string; files: CleanupFile[]; offset: number; limit: number;
+  scanned: number; scan_total: number; parts: number; review: number;
   policy: { source: string; kind: string; since: string | null; until: string | null } }
+type Selection = { key: string; all: boolean; exceptions: Set<string> }
 
 const anyFile: Filter = { source: 'all', kind: 'all', since: '', until: '' }
 const whatsAppPhotos: Filter = { source: 'whatsapp', kind: 'image', since: '', until: '2024-12-31' }
 const states: Record<string, string> = {
   verifying: 'Preparo il confronto con le importazioni completate…',
-  finding: 'Apri Regista sul telefono per controllare i file originali.',
+  finding: 'Verifica degli originali sul telefono',
   matched: 'Anteprima pronta',
   approved: 'Apri Regista sul telefono e conferma la rimozione anche lì.',
+  reviewed: 'Revisione del lotto conclusa',
   finished: 'Rimozione conclusa',
   cancelled: 'Rimozione interrotta',
   error: 'Verifica non riuscita',
 }
-const activeStates = ['verifying', 'finding', 'matched', 'approved']
+const activeStates = ['verifying', 'finding', 'matched', 'approved', 'reviewed']
 const dateSources: Record<string, string> = { file: 'Data del file', whatsapp_name: 'Data nel nome WhatsApp', capture: 'Data di scatto' }
 const origins: Record<string, string> = { all: 'Tutte le provenienze', whatsapp: 'WhatsApp', telegram: 'Telegram', normal: 'Fotocamera e altre cartelle' }
 const kinds: Record<string, string> = { all: 'Foto e video', image: 'Solo foto', video: 'Solo video' }
 const formatDate = (day: string) => day.split('-').reverse().join('/')
+const number = new Intl.NumberFormat('it-IT')
+const emptySelection = new Set<string>()
 
 export default function ArchiveCleanupDialog({ request, archive, onClose }: {
   request: CatalogRequest; archive: { id: string; device: string } | null; onClose: () => void
@@ -38,8 +43,7 @@ export default function ArchiveCleanupDialog({ request, archive, onClose }: {
   const [jobId, setJobId] = useState('')
   const [job, setJob] = useState<Cleanup | null>(null)
   const [offset, setOffset] = useState(0)
-  const [allSelected, setAllSelected] = useState(false)
-  const [exceptions, setExceptions] = useState<Set<string>>(new Set())
+  const [selection, setSelection] = useState<Selection>({ key: '', all: false, exceptions: emptySelection })
   const [busy, setBusy] = useState('')
   const [problem, setProblem] = useState('')
   const [loadingPrevious, setLoadingPrevious] = useState(true)
@@ -81,6 +85,11 @@ export default function ArchiveCleanupDialog({ request, archive, onClose }: {
     return () => { active = false; clearInterval(timer) }
   }, [jobId, offset, request, activeJob])
 
+  const selectionKey = job ? `${job.id}:${job.review}` : ''
+  const allSelected = selection.key === selectionKey && selection.all
+  const exceptions = selection.key === selectionKey ? selection.exceptions : emptySelection
+  useEffect(() => { setOffset(0) }, [selectionKey])
+
   async function act(path: string, body: unknown, action: string) {
     setBusy(action); setProblem('')
     try {
@@ -88,8 +97,7 @@ export default function ArchiveCleanupDialog({ request, archive, onClose }: {
       setJobId(value.id)
       setJob(value)
       setOffset(0)
-      setAllSelected(action === 'prepare')
-      setExceptions(new Set())
+      setSelection({ key: '', all: false, exceptions: emptySelection })
     } catch (error) {
       setProblem(error instanceof Error ? error.message : String(error))
     } finally { setBusy('') }
@@ -100,14 +108,20 @@ export default function ArchiveCleanupDialog({ request, archive, onClose }: {
       { device, ...filter, since: filter.since || null, until: filter.until || null }, 'prepare')
   }
   function toggle(media: string) {
-    setExceptions(current => {
-      const next = new Set(current)
+    setSelection(current => {
+      const currentSelection = current.key === selectionKey ? current : { key: selectionKey, all: false, exceptions: emptySelection }
+      const next = new Set(currentSelection.exceptions)
       if (next.has(media)) next.delete(media)
       else next.add(media)
-      return next
+      return { ...currentSelection, exceptions: next }
     })
   }
   const selected = job ? (allSelected ? job.count - exceptions.size : exceptions.size) : 0
+  const hasMore = !!job && job.scanned < job.scan_total
+  const canContinue = hasMore && (job.state === 'matched' || job.state === 'reviewed')
+  const part = job?.scan_total
+    ? Math.min(job.parts, Math.floor(Math.max(0, job.scanned - (job.state === 'finding' ? 0 : 1)) * job.parts / job.scan_total) + 1)
+    : 1
   const invalidRange = !!(filter.since && filter.until && filter.since > filter.until)
   const deviceAvailable = devices.some(item => item.id === device)
   const loading = loadingPrevious || (!!jobId && !job)
@@ -141,19 +155,29 @@ export default function ArchiveCleanupDialog({ request, archive, onClose }: {
     </>}
     {loading && <p role="status">Carico la selezione…</p>}
     {job && <section className="catalog-preview" aria-label="Anteprima rimozione">
-      <h3>{states[job.state] || job.state}</h3>
+      <h3>{job.state === 'matched' && hasMore ? 'Lotto pronto da rivedere' : states[job.state] || job.state}</h3>
       {job.policy.source && <p className="catalog-muted">{origins[job.policy.source]} · {kinds[job.policy.kind]}
         {job.policy.since && ` · dal ${formatDate(job.policy.since)}`}{job.policy.until && ` · fino al ${formatDate(job.policy.until)} incluso`}</p>}
-      <p role="status">{job.count} corrispondenze · {job.images} foto · {job.videos} video
-        {job.selected > 0 && ` · ${job.selected} confermati · ${job.removed} rimossi`}</p>
-      {job.state === 'finding' && <p className="catalog-muted">Per questa verifica serve Regista 0.10 o successivo sul telefono. Tienilo aperto mentre prepara l’anteprima.</p>}
+      {job.scan_total > 0 && <div>
+        <label>Lotto {part} di {Math.min(job.parts, job.scan_total)} · {number.format(job.scanned)} di {number.format(job.scan_total)} originali controllati
+          {' '}<progress value={job.scanned} max={job.scan_total} /></label>
+      </div>}
+      <p role="status">{number.format(job.count)} corrispondenze nel lotto · {number.format(job.images)} foto · {number.format(job.videos)} video
+        {job.selected > 0 && ` · ${number.format(job.selected)} confermati`}
+        {job.removed > 0 && ` · ${number.format(job.removed)} rimossi in tutto`}</p>
+      {job.state === 'finding' && <>
+        <p className="catalog-muted">Tieni Regista aperto sul telefono. Regista salva il punto di ripresa man mano che controlla gli originali.</p>
+        <button type="button" disabled={!!busy} onClick={() => void act(`/api/import-cleanup/${job.id}/pause`, { review: job.review }, 'pause')}>
+          {job.count ? 'Rivedi i file trovati finora' : 'Metti in pausa'}
+        </button>
+      </>}
       {job.error && <p role="alert">{job.error}</p>}
-      {job.state === 'matched' && !job.count && <p>Non ho trovato file che corrispondono alla selezione tra i media di questo telefono già importati.</p>}
+      {job.state === 'matched' && !job.count && <p>Nessun file in questo lotto corrisponde al filtro.</p>}
       {job.state === 'matched' && job.count > 0 && <>
         <p>Lascia la spunta sulle foto e sui video da togliere. Regista verifica lo ZIP e la copia normale prima di chiederti conferma sul telefono.</p>
         <div className="catalog-toolbar">
-          <button type="button" disabled={!!busy} onClick={() => { setAllSelected(true); setExceptions(new Set()) }}>Seleziona tutti</button>
-          <button type="button" disabled={!!busy} onClick={() => { setAllSelected(false); setExceptions(new Set()) }}>Deseleziona tutti</button>
+          <button type="button" disabled={!!busy} onClick={() => setSelection({ key: selectionKey, all: true, exceptions: emptySelection })}>Seleziona tutti</button>
+          <button type="button" disabled={!!busy} onClick={() => setSelection({ key: selectionKey, all: false, exceptions: emptySelection })}>Deseleziona tutti</button>
           <span>{selected} selezionati su {job.count}</span>
         </div>
         {job.offset === offset && <div className="archive-file-list"><table>
@@ -174,12 +198,15 @@ export default function ArchiveCleanupDialog({ request, archive, onClose }: {
         </div>}
         {job.folder_files > 0 && <p className="catalog-muted">Per i file nelle cartelle autorizzate il telefono può chiederti di scegliere la cartella e confermare la rimozione diretta.</p>}
         <button disabled={!!busy || !selected} onClick={() => void act(`/api/import-cleanup/${job.id}/confirm`,
-          { yes: true, [allSelected ? 'keep' : 'only']: [...exceptions] }, 'confirm')}>
+          { yes: true, review: job.review, [allSelected ? 'keep' : 'only']: [...exceptions] }, 'confirm')}>
           {busy === 'confirm' ? 'Verifico ZIP e copie sul PC…' : `Conferma rimozione di ${selected} file dal telefono`}
         </button>
       </>}
-      {activeJob && <button disabled={!!busy} onClick={() => void act(`/api/import-cleanup/${job.id}/confirm`, { yes: false }, 'cancel')}>
-        {job.state === 'approved' ? 'Interrompi la richiesta' : 'Annulla selezione'}</button>}
+      {canContinue && <button type="button" disabled={!!busy} onClick={() => void act(`/api/import-cleanup/${job.id}/continue`, { review: job.review }, 'continue')}>
+        {job.state === 'matched' && job.count > 0 ? 'Conserva i file del lotto e continua' : 'Continua la verifica'}
+      </button>}
+      {activeJob && <button disabled={!!busy} onClick={() => void act(`/api/import-cleanup/${job.id}/confirm`, { yes: false, review: job.review }, 'cancel')}>
+        {job.state === 'approved' ? 'Interrompi la richiesta' : 'Annulla verifica'}</button>}
       {job.state === 'approved' && <p className="catalog-muted">Se la conferma Android è già aperta, puoi scegliere «Conserva» o «Annulla» sul telefono.</p>}
     </section>}
     {problem && <p role="alert" className="catalog-alert">{problem}</p>}

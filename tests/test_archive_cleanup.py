@@ -4,6 +4,7 @@ from datetime import date
 from fastapi import HTTPException
 import pytest
 
+import archive_cleanup
 from archive_cleanup import ArchiveCleanup, Candidate, CleanupChunk, CleanupResult, CleanupTarget, Matched
 from import_batches import ImportManifest, StartImport
 from test_import_batches import batches,sample,begin,send
@@ -157,3 +158,87 @@ def test_only_selected_files_and_current_pc_copies_allow_authorization(batches, 
     batches.zip_path(batch).write_bytes(b'changed after confirmation')
     with pytest.raises(HTTPException, match='ZIP'):
         cleanup.authorize('phone-1', CleanupChunk(job_id=job, media=[item.media]))
+
+
+def many_candidates(batches, tmp_path, total):
+    batch = begin(batches, total=total)
+    photo, first = sample(tmp_path, media='image:external:00')
+    send(batches, batch, photo, first)
+    others = [first.model_copy(update={'media': f'image:external:{i:02}', 'name': f'{i:02}.png'})
+              for i in range(1, total)]
+    batches.manifest('phone-1', ImportManifest(batch_id=batch, files=others))
+    assert batches.finalize_sync(batch)['zip_ready']
+    cleanup = ArchiveCleanup(batches)
+    job = cleanup.prepare('', 'phone-1')['id']
+    batches.pool.submit(lambda: None).result(timeout=5)
+    return cleanup, job
+
+
+def test_cleanup_checkpoints_empty_pages_and_stops_at_each_quarter(batches, tmp_path, monkeypatch):
+    monkeypatch.setattr(archive_cleanup, 'PAGE', 2)
+    cleanup, job = many_candidates(batches, tmp_path, 12)
+    pending = cleanup.pending('phone-1')['job']
+    assert (pending['scanned'], pending['scan_total']) == (0, 12)
+    page = cleanup.candidates('phone-1', job, 0, checkpoint=True)['files']
+    assert len(page) == 2
+    with pytest.raises(HTTPException, match='ripresa'):
+        cleanup.matched('phone-1', Matched(job_id=job, files=[], offset=2))
+    first = cleanup.matched('phone-1', Matched(job_id=job, files=[], offset=0))
+    assert first['scanned'] == 2 and not first['finished']
+    cleanup = ArchiveCleanup(batches)
+    assert cleanup.pending('phone-1')['job']['scanned'] == 2
+    assert cleanup.matched('phone-1', Matched(job_id=job, files=[], offset=0))['scanned'] == 2
+    page = cleanup.candidates('phone-1', job, 2, checkpoint=True)['files']
+    assert len(page) == 1
+    item = Candidate(**page[0])
+    assert cleanup.matched('phone-1', Matched(job_id=job, files=[item], offset=2))['finished']
+    assert cleanup.status(job)['scanned'] == 3
+    for review, boundary in enumerate((6, 9, 12)):
+        current = cleanup.continue_review(job, review)
+        assert current['count'] == 0
+        assert current['scanned'] == boundary - 3
+        cleanup.matched('phone-1', Matched(job_id=job, files=[], offset=boundary-3))
+        cleanup.matched('phone-1', Matched(job_id=job, files=[], offset=boundary-1))
+        assert cleanup.status(job)['state'] == 'matched'
+        assert cleanup.status(job)['scanned'] == boundary
+    with pytest.raises(HTTPException, match='altri file'):
+        cleanup.continue_review(job, 3)
+
+
+def test_cleanup_can_review_partial_results_without_reusing_removal_consent(batches, tmp_path, monkeypatch):
+    monkeypatch.setattr(archive_cleanup, 'PAGE', 2)
+    cleanup, job = many_candidates(batches, tmp_path, 12)
+    page = cleanup.candidates('phone-1', job, 0, checkpoint=True)['files']
+    keep, remove = [Candidate(**item, original=str(i + 1) * 64) for i, item in enumerate(page)]
+    cleanup.matched('phone-1', Matched(job_id=job, files=[keep, remove], offset=0))
+    assert cleanup.pause_review(job, 0)['count'] == 2
+    assert cleanup.confirm(job, True, keep=[keep.media])['selected'] == 1
+    cleanup.authorize('phone-1', CleanupChunk(job_id=job, media=[remove.media]))
+    result = CleanupResult(job_id=job, media=[remove.media])
+    assert cleanup.result('phone-1', result)['state'] == 'reviewed'
+    assert cleanup.continue_review(job, 0)['scanned'] == 2
+    assert cleanup.result('phone-1', result)['removed'] == 1
+    page = cleanup.candidates('phone-1', job, 2, checkpoint=True)['files']
+    duplicate = Candidate(**page[0], original=keep.original)
+    cleanup.matched('phone-1', Matched(job_id=job, files=[duplicate], offset=2))
+    current = cleanup.status(job)
+    assert current['state'] == 'matched' and current['count'] == 0 and current['removed'] == 1
+    with pytest.raises(HTTPException, match='altro lotto'):
+        cleanup.confirm(job, True, review=0)
+
+
+def test_existing_legacy_review_recovers_the_last_saved_page(batches, tmp_path, monkeypatch):
+    monkeypatch.setattr(archive_cleanup, 'PAGE', 2)
+    cleanup, job = many_candidates(batches, tmp_path, 12)
+    photo = Candidate(**cleanup.candidates('phone-1', job, 0)['files'][0])
+    cleanup.matched('phone-1', Matched(job_id=job, files=[photo], finished=False))
+    with batches.connect() as db:
+        db.execute('DROP INDEX cleanup_originals')
+        for column in ('scanned', 'scan_total', 'review'):
+            db.execute(f'ALTER TABLE cleanup_jobs DROP COLUMN {column}')
+        for column in ('reviewed', 'original'):
+            db.execute(f'ALTER TABLE cleanup_files DROP COLUMN {column}')
+    cleanup = ArchiveCleanup(batches)
+    recovered = cleanup.status(job)
+    assert (recovered['state'], recovered['count'], recovered['scanned'], recovered['scan_total']) == ('finding', 1, 2, 12)
+    assert cleanup.pause_review(job, 0)['files'][0]['media'] == photo.media
