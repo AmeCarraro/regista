@@ -129,11 +129,14 @@ def plan(sources):
 
 
 class Phone:
-    def __init__(self, adb):
+    def __init__(self, adb, serial=None):
         self.adb = str(adb)
-        self.serial = self.run('-d', 'get-serialno').strip()
+        self.serial = serial or self.run('-d', 'get-serialno').strip()
         if not self.serial or self.serial == 'unknown':
             raise ValueError('Collega un solo Android via USB e autorizza il debug.')
+        if serial and self.run('-s', serial, 'get-state').strip() != 'device':
+            raise ValueError('Il dispositivo indicato non è connesso ad ADB.')
+        self.transport = 'ADB' if serial else 'USB'
         self.model = self.shell('getprop ro.product.model').strip()
 
     def run(self, *args, script=None):
@@ -224,6 +227,7 @@ def main():
     source.add_argument('--cleanup', help='ID della rimozione Regista, oppure latest')
     parser.add_argument('--regista-dir', type=Path, default=Path(os.getenv('LOCALAPPDATA') or Path.home()) / 'Programs' / 'Regista')
     parser.add_argument('--adb', type=Path, default=ROOT / 'android' / '.tools' / 'platform-tools' / 'adb.exe')
+    parser.add_argument('--adb-serial', help='Dispositivo ADB già connesso, anche tramite debug wireless')
     parser.add_argument('--apply', action='store_true', help='Consente la copia dopo la conferma interattiva')
     args = parser.parse_args()
     try:
@@ -232,9 +236,9 @@ def main():
         if not originals:
             print(f'Nessun file ripristinabile. Percorsi sconosciuti {unknown}, ambigui {ambiguous}.')
             return int(bool(unknown or ambiguous))
-        phone = Phone(args.adb)
+        phone = Phone(args.adb, args.adb_serial)
         missing = list(phone.missing(originals))
-        print(f'{phone.model} via USB. Mancanti {len(missing)}, già presenti {len(originals)-len(missing)}, '
+        print(f'{phone.model} via {phone.transport}. Mancanti {len(missing)}, già presenti {len(originals)-len(missing)}, '
               f'percorsi sconosciuti {unknown}, ambigui {ambiguous}.')
         if args.apply and missing and input('Scrivi RIPRISTINA per copiare i file mancanti: ') == 'RIPRISTINA':
             totals = restore(phone, missing)
@@ -242,7 +246,7 @@ def main():
             return int(bool(totals['errori']))
         return 0
     except (OSError, ValueError, sqlite3.Error, subprocess.CalledProcessError, zipfile.BadZipFile, KeyError) as error:
-        print(f'Ripristino interrotto ({type(error).__name__}). Controlla il cavo, il debug USB e lo ZIP selezionato. '
+        print(f'Ripristino interrotto ({type(error).__name__}). Controlla il collegamento ADB e lo ZIP selezionato. '
               'Puoi rilanciare il comando dai file ancora mancanti.')
         return 1
 

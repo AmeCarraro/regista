@@ -166,7 +166,8 @@ class ArchiveCleanup:
                 coalesce(sum(kind='video' AND reviewed=0),0) AS videos,
                 coalesce(sum(method='folder' AND reviewed=0),0) AS folder_files,
                 coalesce(sum(CASE WHEN reviewed=0 THEN size ELSE 0 END),0) AS bytes,
-                coalesce(sum(selected AND reviewed=0),0) AS selected,coalesce(sum(removed),0) AS removed
+                coalesce(sum(selected AND reviewed=0),0) AS selected,coalesce(sum(removed),0) AS removed,
+                coalesce(sum(selected AND removed=0 AND reviewed=0),0) AS selected_remaining
                 FROM cleanup_files WHERE job=? AND method!='' ''', (identifier,)).fetchone())
             files = [dict(item) for item in db.execute('''SELECT media,sha256,name,folder,kind,day,date_source,method,size,selected,removed
                 FROM cleanup_files WHERE job=? AND method!='' AND reviewed=0
@@ -369,6 +370,26 @@ class ArchiveCleanup:
                        (target.model_copy(update={'kind': 'all'}).model_dump_json(), count, time.time(), identifier))
         return self.status(identifier)
 
+    def resume_removal(self, identifier, review):
+        # A retry keeps the original PC selection. The phone must still get new
+        # authorization for each page, and the page rechecks both backup copies.
+        with self.batches.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            value = db.execute('SELECT state,review,error FROM cleanup_jobs WHERE id=?', (identifier,)).fetchone()
+            if value is None or value['review'] != review or value['state'] not in ('reviewed', 'cancelled') or not value['error']:
+                raise HTTPException(409, 'La rimozione non è in pausa a causa di un errore.')
+            remains = db.execute('''SELECT 1 FROM cleanup_files
+                WHERE job=? AND selected=1 AND removed=0 AND reviewed=0 LIMIT 1''', (identifier,)).fetchone()
+            if remains is None:
+                raise HTTPException(409, 'Tutti i file selezionati risultano rimossi.')
+            active = db.execute("""SELECT 1 FROM cleanup_jobs WHERE id<>?
+                AND device=(SELECT device FROM cleanup_jobs WHERE id=?)
+                AND state IN ('verifying','finding','matched','approved','reviewed')""", (identifier, identifier)).fetchone()
+            if active:
+                raise HTTPException(409, 'Concludi prima l’altra richiesta aperta per questo telefono.')
+            db.execute("UPDATE cleanup_jobs SET state='approved',error='',updated=? WHERE id=?", (time.time(), identifier))
+        return self.status(identifier)
+
     def verify_copies(self, job, files, *, check_archive_digest=False):
         by_archive = {}
         for item in files:
@@ -557,6 +578,13 @@ def routes(batches, phones=None, *, read_only=False):
         if read_only:
             raise HTTPException(409, 'Pulizia non disponibile in sola lettura.')
         return await asyncio.to_thread(cleanup.include_videos, job, body.review)
+
+    @router.post('/api/import-cleanup/{job}/resume-removal')
+    def resume_removal(request: Request, job: str, body: ReviewStep):
+        local(request)
+        if read_only:
+            raise HTTPException(409, 'Pulizia non disponibile in sola lettura.')
+        return cleanup.resume_removal(job, body.review)
 
     @router.get('/phone/import-cleanup')
     def pending(request: Request, protocol: int = 0):

@@ -8,9 +8,11 @@ Apri **Foto e video → Importazioni e archivi → Rivedi cosa togliere dal tele
 
 Apri Regista sul telefono per avviare il lotto. Con la notifica di verifica attiva, puoi spegnere lo schermo. La verifica può usare il Wi-Fi quando il PC rimane raggiungibile. Regista salva la posizione dopo ogni pagina e si ferma per la revisione del lotto. Per la rimozione, apri la lista sul PC e conferma poi anche sul telefono.
 
+Per una cartella autorizzata, la conferma sul Redmi vale per il lotto selezionato. Quando appare la notifica **Rimozione confermata di Regista**, puoi spegnere lo schermo. Via Wi-Fi Regista attende il PC se perde la connessione e riprende dalla pagina salvata. Se Android ferma il processo, riapri Regista per riprendere con lo stesso consenso e un permesso cartella ancora valido. Dopo un errore che chiude il lotto, **Riprendi la rimozione** recupera i file rimasti. Per i file gestiti dal Cestino Android continuano a valere le sue conferme.
+
 ## Controllare cosa manca
 
-Collega un solo Android via USB, autorizza il debug e apri PowerShell nella cartella del repository. Controlla prima il modello del telefono e il numero di file riportati dallo script.
+Apri PowerShell nella cartella del repository. Puoi usare un Android collegato via USB, oppure il debug wireless Android. Per il Wi-Fi, associa prima PC e telefono dalla schermata **Debug wireless** e aggiungi `--adb-serial 'indirizzo:porta'` al comando usando l'identificativo mostrato da `adb devices`. Controlla il modello del telefono e il numero di file riportati dallo script. [Guida Android al debug wireless](https://developer.android.com/tools/adb#connect-to-a-device-over-wi-fi)
 
 Per rimettere i file dell'ultima rimozione registrata da Regista:
 

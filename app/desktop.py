@@ -299,6 +299,12 @@ def show(url: str) -> None:
     """The page in a window of its own, until it is closed. With no way to make one (Edge's WebView2 is missing),
     the page opens in the browser, and a small window of Windows stays until the user says to stop."""
     try:
+        # Scope the default to Regista's WebView2 and preserve explicit GPU preferences.
+        webview_arguments = "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"
+        arguments = os.environ.get(webview_arguments, "")
+        gpu_preferences = {"--force-high-performance-gpu", "--force-low-power-gpu"}
+        if gpu_preferences.isdisjoint(arguments.split()):
+            os.environ[webview_arguments] = f"{arguments} --force-high-performance-gpu".strip()
         import webview
         webview.settings['ALLOW_DOWNLOADS'] = True
 

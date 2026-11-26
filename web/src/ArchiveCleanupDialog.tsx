@@ -6,7 +6,7 @@ type Device = { id: string; name: string }
 type Filter = { source: string; kind: string; since: string; until: string }
 type CleanupFile = { media: string; name: string; folder: string; kind: string; day: string; sha256: string; date_source: string }
 type Cleanup = { id: string; state: string; updated: number; count: number; images: number; videos: number;
-  folder_files: number; selected: number; removed: number; error: string; files: CleanupFile[]; offset: number; limit: number;
+  folder_files: number; selected: number; removed: number; selected_remaining: number; error: string; files: CleanupFile[]; offset: number; limit: number;
   scanned: number; scan_total: number; parts: number; review: number;
   policy: { source: string; kind: string; since: string | null; until: string | null } }
 type Selection = { key: string; all: boolean; exceptions: Set<string> }
@@ -119,6 +119,8 @@ export default function ArchiveCleanupDialog({ request, archive, onClose }: {
   const selected = job ? (allSelected ? job.count - exceptions.size : exceptions.size) : 0
   const hasMore = !!job && job.scanned < job.scan_total
   const canContinue = hasMore && (job.state === 'matched' || job.state === 'reviewed')
+  const canResume = !!job && !!job.error && job.selected_remaining > 0
+    && (job.state === 'reviewed' || job.state === 'cancelled')
   const canIncludeVideos = !!job && job.policy.source === 'whatsapp' && job.policy.kind === 'image'
     && (job.state === 'matched' || job.state === 'reviewed')
   const part = job?.scan_total
@@ -174,6 +176,10 @@ export default function ArchiveCleanupDialog({ request, archive, onClose }: {
         </button>
       </>}
       {job.error && <p role="alert">{job.error}</p>}
+      {canResume && <button type="button" disabled={!!busy} onClick={() => void act(
+        `/api/import-cleanup/${job.id}/resume-removal`, { review: job.review }, 'resume-removal')}>
+        Riprendi la rimozione di {number.format(job.selected_remaining)} file
+      </button>}
       {job.state === 'matched' && !job.count && <p>Nessun file in questo lotto corrisponde al filtro.</p>}
       {job.state === 'matched' && job.count > 0 && <>
         <p>Lascia la spunta sulle foto e sui video da togliere. Regista verifica lo ZIP e la copia normale prima di chiederti conferma sul telefono.</p>

@@ -270,3 +270,22 @@ def test_add_whatsapp_videos_keeps_existing_photo_progress_and_excludes_other_me
     cleanup.matched('phone-1', Matched(job_id=job, files=[], offset=1))
     cleanup.continue_review(job, 1)
     assert [row['media'] for row in cleanup.candidates('phone-1', job, 2, checkpoint=True)['files']] == ['tree:a']
+
+
+def test_resume_removal_preserves_selected_remaining_and_rechecks_backup(batches, tmp_path):
+    cleanup, job = many_candidates(batches, tmp_path, 12)
+    receipts = [Candidate(**item) for item in cleanup.candidates('phone-1', job, 0, checkpoint=True)['files']]
+    first, remaining, keep = receipts
+    cleanup.matched('phone-1', Matched(job_id=job, files=receipts, offset=0))
+    cleanup.confirm(job, True, only=[first.media, remaining.media])
+    cleanup.authorize('phone-1', CleanupChunk(job_id=job, media=[first.media]))
+    interrupted = cleanup.result('phone-1', CleanupResult(job_id=job, media=[first.media], cancelled=True, error='Interrotto'))
+    assert interrupted['state'] == 'reviewed' and interrupted['selected_remaining'] == 1
+    resumed = cleanup.resume_removal(job, 0)
+    assert resumed['state'] == 'approved' and resumed['scanned'] == 3 and resumed['removed'] == 1
+    assert [item['media'] for item in cleanup.pending('phone-1')['job']['files']] == [remaining.media]
+    with pytest.raises(HTTPException, match='confermata'):
+        cleanup.authorize('phone-1', CleanupChunk(job_id=job, media=[keep.media]))
+    batches.normal_path(remaining.sha256).unlink()
+    with pytest.raises(HTTPException, match='copia normale'):
+        cleanup.authorize('phone-1', CleanupChunk(job_id=job, media=[remaining.media]))
